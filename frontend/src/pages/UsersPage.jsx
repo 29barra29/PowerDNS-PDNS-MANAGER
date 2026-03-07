@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, RotateCcw, Loader2, Shield, User, Globe, X, Check } from 'lucide-react'
+import { Plus, Trash2, Key, Loader2, Shield, User, Globe, X, Check } from 'lucide-react'
 import api from '../api'
 
 export default function UsersPage() {
@@ -7,10 +7,13 @@ export default function UsersPage() {
     const [allZones, setAllZones] = useState([])
     const [loading, setLoading] = useState(true)
     const [showCreate, setShowCreate] = useState(false)
-    const [editZonesUser, setEditZonesUser] = useState(null) // User whose zones we're editing
+    const [editZonesUser, setEditZonesUser] = useState(null)
+    const [editPasswordUser, setEditPasswordUser] = useState(null)
+    const [newPassword, setNewPassword] = useState('')
     const [selectedZones, setSelectedZones] = useState([])
     const [form, setForm] = useState({ username: '', password: '', display_name: '', role: 'user' })
     const [error, setError] = useState('')
+    const [success, setSuccess] = useState('')
     const [saving, setSaving] = useState(false)
 
     useEffect(() => { loadData() }, [])
@@ -70,13 +73,20 @@ export default function UsersPage() {
         }
     }
 
-    async function handleResetPassword(id) {
-        if (!confirm('Passwort wirklich zurücksetzen?')) return
+    async function handleSetPassword(e) {
+        e.preventDefault()
+        setSaving(true)
+        setError('')
+        setSuccess('')
         try {
-            const result = await api.resetUserPassword(id)
-            alert(result.message)
+            await api.updateUser(editPasswordUser.id, { password: newPassword })
+            setSuccess(`Passwort für ${editPasswordUser.username} erfolgreich geändert!`)
+            setEditPasswordUser(null)
+            setNewPassword('')
         } catch (err) {
             setError(err.message)
+        } finally {
+            setSaving(false)
         }
     }
 
@@ -135,9 +145,15 @@ export default function UsersPage() {
             </div>
 
             {error && (
-                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm">
-                    {error}
-                    <button onClick={() => setError('')} className="ml-3 text-xs hover:underline">×</button>
+                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger text-sm flex justify-between items-center">
+                    <span>{error}</span>
+                    <button onClick={() => setError('')} className="text-xs hover:underline">×</button>
+                </div>
+            )}
+            {success && (
+                <div className="p-4 rounded-xl bg-success/10 border border-success/30 text-success text-sm flex justify-between items-center">
+                    <span>{success}</span>
+                    <button onClick={() => setSuccess('')} className="text-xs hover:underline">×</button>
                 </div>
             )}
 
@@ -156,8 +172,8 @@ export default function UsersPage() {
                                 <div className="flex items-center gap-2 flex-wrap">
                                     <h3 className="font-semibold text-text-primary">{u.display_name || u.username}</h3>
                                     <span className={`text-xs px-2 py-0.5 rounded-full border ${u.role === 'admin'
-                                            ? 'bg-accent/10 text-accent-light border-accent/30'
-                                            : 'bg-bg-hover text-text-muted border-border'
+                                        ? 'bg-accent/10 text-accent-light border-accent/30'
+                                        : 'bg-bg-hover text-text-muted border-border'
                                         }`}>
                                         {u.role === 'admin' ? 'Admin' : 'Benutzer'}
                                     </span>
@@ -211,11 +227,11 @@ export default function UsersPage() {
                                     <Shield className="w-4 h-4" />
                                 </button>
                                 <button
-                                    onClick={() => handleResetPassword(u.id)}
+                                    onClick={() => { setEditPasswordUser(u); setNewPassword(''); setError(''); setSuccess(''); }}
                                     className="p-2 rounded-lg text-text-muted hover:text-warning hover:bg-warning/10 transition-colors"
-                                    title="Passwort zurücksetzen"
+                                    title="Passwort ändern"
                                 >
-                                    <RotateCcw className="w-4 h-4" />
+                                    <Key className="w-4 h-4" />
                                 </button>
                                 <button
                                     onClick={() => handleDelete(u.id, u.username)}
@@ -298,8 +314,8 @@ export default function UsersPage() {
                                             key={z.name}
                                             onClick={() => toggleZone(z.name)}
                                             className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${active
-                                                    ? 'bg-accent/10 border-accent/40 text-text-primary'
-                                                    : 'bg-bg-primary border-border text-text-secondary hover:border-border hover:bg-bg-hover'
+                                                ? 'bg-accent/10 border-accent/40 text-text-primary'
+                                                : 'bg-bg-primary border-border text-text-secondary hover:border-border hover:bg-bg-hover'
                                                 }`}
                                         >
                                             <div className={`w-5 h-5 rounded shrink-0 flex items-center justify-center border ${active ? 'bg-accent border-accent' : 'border-border'
@@ -328,6 +344,37 @@ export default function UsersPage() {
                                 </button>
                             </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ===== Change Password Modal ===== */}
+            {editPasswordUser && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditPasswordUser(null)}>
+                    <div className="glass-card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                        <h2 className="text-lg font-bold text-text-primary mb-4">Passwort ändern</h2>
+                        <p className="text-sm text-text-muted mb-4">Neues Passwort für <span className="text-text-primary font-medium">{editPasswordUser.display_name || editPasswordUser.username}</span> festlegen.</p>
+
+                        <form onSubmit={handleSetPassword} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">Neues Passwort</label>
+                                <input
+                                    type="password"
+                                    value={newPassword}
+                                    onChange={e => setNewPassword(e.target.value)}
+                                    placeholder="••••••"
+                                    className="w-full px-3 py-2 text-sm"
+                                    required
+                                    minLength={4}
+                                />
+                            </div>
+                            <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-border">
+                                <button type="button" onClick={() => setEditPasswordUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">Abbrechen</button>
+                                <button type="submit" disabled={saving || !newPassword} className="px-4 py-2 bg-gradient-to-r from-warning/80 to-orange-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} Speichern
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}

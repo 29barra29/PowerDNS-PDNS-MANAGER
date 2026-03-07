@@ -42,6 +42,7 @@ class UserUpdate(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    password: Optional[str] = Field(None, min_length=4)
 
 
 class ProfileUpdate(BaseModel):
@@ -242,6 +243,8 @@ async def update_user(
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
+    if data.password is not None:
+        user.hashed_password = hash_password(data.password)
 
     await db.flush()
     return await _user_to_dict(user, db)
