@@ -1,0 +1,226 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Globe, Plus, Upload, Trash2, Loader2, Shield, AlertCircle } from 'lucide-react'
+import api from '../api'
+
+export default function ZonesPage() {
+    const navigate = useNavigate()
+    const [zones, setZones] = useState([])
+    const [servers, setServers] = useState([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState('')
+    const [showCreate, setShowCreate] = useState(false)
+    const [createForm, setCreateForm] = useState({ name: '', kind: 'Native', nameservers: [], soa_edit_api: 'DEFAULT', enable_dnssec: false })
+    const [creating, setCreating] = useState(false)
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    const isAdmin = user?.role === 'admin'
+
+    useEffect(() => { loadZones() }, [])
+
+    async function loadZones() {
+        try {
+            const sData = await api.getServers()
+            setServers(sData.servers || [])
+            const allZones = []
+            for (const s of (sData.servers || [])) {
+                if (!s.is_reachable) continue
+                try {
+                    const zData = await api.listZones(s.name)
+                        ; (zData.zones || []).forEach(z => allZones.push({ ...z, _server: s.name }))
+                } catch { }
+            }
+            // Deduplicate
+            const seen = new Set()
+            setZones(allZones.filter(z => { if (seen.has(z.name)) return false; seen.add(z.name); return true }))
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    async function handleCreate(e) {
+        e.preventDefault()
+        setCreating(true)
+        try {
+            await api.createZone({
+                ...createForm,
+                nameservers: createForm.nameservers.length ? createForm.nameservers : ['ns3.gemtecgames.com.', 'ns1.gemtecgames.com.'],
+            })
+            setShowCreate(false)
+            setCreateForm({ name: '', kind: 'Native', nameservers: [], soa_edit_api: 'DEFAULT', enable_dnssec: false })
+            loadZones()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setCreating(false)
+        }
+    }
+
+    async function handleDelete(server, zone) {
+        if (!confirm(`Zone "${zone}" wirklich löschen?`)) return
+        try {
+            await api.deleteZone(server, zone)
+            loadZones()
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-2xl font-bold text-text-primary">{isAdmin ? 'DNS-Zonen' : 'Meine Zonen'}</h1>
+                    <p className="text-text-muted text-sm mt-1">{zones.length} Zone(n)</p>
+                </div>
+                {isAdmin && (
+                    <button
+                        onClick={() => setShowCreate(true)}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
+                    >
+                        <Plus className="w-4 h-4" /> Neue Zone
+                    </button>
+                )}
+            </div>
+
+            {error && (
+                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    <p className="text-sm">{error}</p>
+                    <button onClick={() => setError('')} className="ml-auto text-xs hover:underline">Schließen</button>
+                </div>
+            )}
+
+            {/* Zone table */}
+            <div className="glass-card overflow-hidden">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b border-border">
+                            <th className="text-left p-4 text-text-muted font-medium">Zone</th>
+                            <th className="text-left p-4 text-text-muted font-medium">Typ</th>
+                            <th className="text-left p-4 text-text-muted font-medium">Serial</th>
+                            <th className="text-left p-4 text-text-muted font-medium">DNSSEC</th>
+                            <th className="text-left p-4 text-text-muted font-medium">Server</th>
+                            <th className="text-right p-4 text-text-muted font-medium">Aktionen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {zones.map(z => (
+                            <tr
+                                key={z.name}
+                                className="border-b border-border/50 hover:bg-bg-hover/50 cursor-pointer transition-colors"
+                                onClick={() => navigate(`/zones/${z._server}/${z.name}`)}
+                            >
+                                <td className="p-4">
+                                    <div className="flex items-center gap-2">
+                                        <Globe className="w-4 h-4 text-accent-light" />
+                                        <span className="font-medium text-text-primary">{z.name.replace(/\.$/, '')}</span>
+                                    </div>
+                                </td>
+                                <td className="p-4 text-text-secondary">{z.kind}</td>
+                                <td className="p-4 text-text-secondary font-mono text-xs">{z.serial}</td>
+                                <td className="p-4">
+                                    {z.dnssec
+                                        ? <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-success/10 text-success rounded-full border border-success/30"><Shield className="w-3 h-3" /> Aktiv</span>
+                                        : <span className="text-xs text-text-muted">Aus</span>
+                                    }
+                                </td>
+                                <td className="p-4 text-text-secondary">{z._server}</td>
+                                <td className="p-4 text-right">
+                                    {isAdmin && (
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); handleDelete(z._server, z.name) }}
+                                            className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                                            title="Zone löschen"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                        {zones.length === 0 && (
+                            <tr><td colSpan={6} className="p-12 text-center text-text-muted">
+                                <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                                <p>Noch keine Zonen vorhanden</p>
+                            </td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Create Zone Modal */}
+            {showCreate && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
+                    <div className="glass-card p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                        <h2 className="text-lg font-bold text-text-primary mb-4">Neue Zone erstellen</h2>
+                        <form onSubmit={handleCreate} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">Domain</label>
+                                <input
+                                    type="text"
+                                    value={createForm.name}
+                                    onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                                    placeholder="example.com"
+                                    className="w-full px-3 py-2 text-sm"
+                                    required
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Typ</label>
+                                    <select
+                                        value={createForm.kind}
+                                        onChange={(e) => setCreateForm({ ...createForm, kind: e.target.value })}
+                                        className="w-full px-3 py-2 text-sm"
+                                    >
+                                        <option value="Native">Native (empfohlen)</option>
+                                        <option value="Master">Master</option>
+                                        <option value="Slave">Slave</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">SOA-EDIT-API</label>
+                                    <select
+                                        value={createForm.soa_edit_api}
+                                        onChange={(e) => setCreateForm({ ...createForm, soa_edit_api: e.target.value })}
+                                        className="w-full px-3 py-2 text-sm"
+                                    >
+                                        <option value="DEFAULT">DEFAULT</option>
+                                        <option value="INCEPTION-INCREMENT">INCEPTION-INCREMENT</option>
+                                        <option value="EPOCH">EPOCH</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={createForm.enable_dnssec}
+                                    onChange={(e) => setCreateForm({ ...createForm, enable_dnssec: e.target.checked })}
+                                    className="w-4 h-4 rounded"
+                                />
+                                <span className="text-sm text-text-secondary">DNSSEC sofort aktivieren</span>
+                            </label>
+                            <div className="flex justify-end gap-3 pt-2">
+                                <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+                                    Abbrechen
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={creating}
+                                    className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {creating && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Erstellen
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}

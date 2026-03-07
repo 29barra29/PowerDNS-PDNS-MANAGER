@@ -1,0 +1,61 @@
+services:
+  # ============================================
+  # MariaDB - Datenbank für DNS Manager
+  # ============================================
+  mariadb:
+    image: mariadb:11
+    container_name: dns-manager-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme-root}
+      MARIADB_DATABASE: ${DB_NAME:-dns_manager}
+      MARIADB_USER: ${DB_USER:-dns_admin}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-changeme-password}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dns-manager-net
+
+  # ============================================
+  # FastAPI Backend + React Frontend
+  # ============================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: dns-manager-api
+    restart: unless-stopped
+    ports:
+      - "5380:8000"
+    environment:
+      # Datenbank-Verbindung
+      DATABASE_URL: mysql+aiomysql://${DB_USER:-dns_admin}:${DB_PASSWORD:-changeme-password}@mariadb:3306/${DB_NAME:-dns_manager}
+
+      # PowerDNS Server (optional - kann auch über Admin-Panel eingerichtet werden)
+      # Format: name|url|api_key,name|url|api_key
+      PDNS_SERVERS: ${PDNS_SERVERS:-}
+
+      # App Settings
+      APP_NAME: ${APP_NAME:-DNS Manager}
+      APP_VERSION: "2.0.0"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - dns-manager-net
+
+volumes:
+  mariadb_data:
+    driver: local
+
+networks:
+  dns-manager-net:
+    driver: bridge

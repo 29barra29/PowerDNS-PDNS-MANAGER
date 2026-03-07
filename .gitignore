@@ -1,0 +1,47 @@
+# ========================
+# Node / Frontend
+# ========================
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+
+# ========================
+# Python / Backend
+# ========================
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# ========================
+# Built frontend (served by backend)
+# ========================
+backend/app/static_new/
+
+# ========================
+# IDE
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========================
+# Docker
+# ========================
+mariadb_data/
+
+# ========================
+# OS
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Old static files (legacy)
+# ========================
+backend/app/static/
