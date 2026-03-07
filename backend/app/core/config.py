@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "info"
     
     # Database
-    DATABASE_URL: str = "mysql+aiomysql://dns_admin:dns-admin-secure-2026@mariadb:3306/dns_manager"
+    DATABASE_URL: str = "mysql+aiomysql://dns_admin:changeme-password@mariadb:3306/dns_manager"
     
     # JWT Auth
     JWT_SECRET_KEY: str = "dns-manager-super-secret-key-change-me-2026"
