@@ -35,7 +35,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ### 1. Repository klonen
 
 ```bash
-git clone https://github.com/DEIN-USERNAME/dns-manager.git
+git clone https://github.com/29barra29/dns-manager.git
 cd dns-manager
 ```
 
