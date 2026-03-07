@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code } from 'lucide-react'
 import api from '../api'
 
 export default function SettingsPage() {
@@ -20,6 +20,11 @@ export default function SettingsPage() {
     const [showCurrentPw, setShowCurrentPw] = useState(false)
     const [showNewPw, setShowNewPw] = useState(false)
 
+    // Updates
+    const [commits, setCommits] = useState([])
+    const [loadingCommits, setLoadingCommits] = useState(false)
+    const [commitError, setCommitError] = useState('')
+
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
     const [editId, setEditId] = useState(null)
@@ -35,6 +40,27 @@ export default function SettingsPage() {
         loadProfile()
         loadServers()
     }, [])
+
+    useEffect(() => {
+        if (activeTab === 'updates' && commits.length === 0) {
+            loadCommits()
+        }
+    }, [activeTab])
+
+    async function loadCommits() {
+        setLoadingCommits(true)
+        setCommitError('')
+        try {
+            const res = await fetch('https://api.github.com/repos/29barra29/dns-manager/commits?per_page=5')
+            if (!res.ok) throw new Error('Repository ist privat (Änderungen können nicht abgerufen werden)')
+            const data = await res.json()
+            setCommits(data)
+        } catch (err) {
+            setCommitError(err.message)
+        } finally {
+            setLoadingCommits(false)
+        }
+    }
 
     async function loadProfile() {
         try {
@@ -204,6 +230,7 @@ export default function SettingsPage() {
 
     const tabs = [
         { id: 'profile', label: 'Profil', icon: UserCog },
+        { id: 'updates', label: 'Updates', icon: Download },
         { id: 'servers', label: 'DNS-Server', icon: Server },
         { id: 'about', label: 'Über', icon: Database },
     ]
@@ -420,6 +447,88 @@ export default function SettingsPage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* =================== UPDATES TAB =================== */}
+            {activeTab === 'updates' && (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
+                                <Download className="w-5 h-5 text-success" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">System aktualisieren</h2>
+                                <p className="text-sm text-text-muted">Hol dir die neuesten Funktionen von GitHub</p>
+                            </div>
+                        </div>
+
+                        <div className="p-5 rounded-xl bg-bg-primary border border-border mb-8">
+                            <h3 className="text-sm font-semibold text-text-primary mb-3 text-accent-light">Wie aktualisiere ich das System?</h3>
+                            <p className="text-sm text-text-secondary mb-5 leading-relaxed">
+                                Aus Sicherheitsgründen (Docker-Isolierung) kann sich die Anwendung nicht durch einen Klick auf einen Button selbst neu installieren.
+                                Das wäre ein Sicherheitsrisiko.
+                                <br /><br />
+                                Du kannst das System aber jederzeit ganz einfach über dein Server-Terminal aktualisieren:
+                            </p>
+
+                            <div className="relative group">
+                                <div className="absolute inset-y-0 left-0 bg-accent w-1 rounded-l-lg"></div>
+                                <pre className="bg-bg-hover text-text-primary p-4 rounded-r-lg rounded-l-sm text-sm font-mono overflow-x-auto pl-6 border border-border/50 border-l-0">
+                                    <span className="text-text-muted"># 1. In den Ordner wechseln</span>{'\n'}
+                                    <span className="text-accent-light font-medium">cd</span> /pfad/zu/deinem/dns-manager{'\n\n'}
+                                    <span className="text-text-muted"># 2. Das Skript ausführen</span>{'\n'}
+                                    <span className="text-accent-light font-medium">./update.sh</span>
+                                </pre>
+                            </div>
+
+                            <p className="text-xs text-text-muted mt-4">
+                                💡 Das Skript lädt automatisch die neuesten Updates herunter, baut das System komprimiert neu und startet es <strong className="text-text-secondary">ohne Datenverlust</strong>.
+                            </p>
+                        </div>
+
+                        {/* Commits von GitHub */}
+                        <div>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                                    <Github className="w-4 h-4" /> Letzte Änderungen (GitHub)
+                                </h3>
+                                <button onClick={loadCommits} disabled={loadingCommits} className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1">
+                                    <RefreshCw className={`w-3 h-3 ${loadingCommits ? 'animate-spin' : ''}`} /> {loadingCommits ? 'Lade...' : 'Neu laden'}
+                                </button>
+                            </div>
+
+                            {commitError ? (
+                                <div className="p-4 rounded-lg bg-bg-hover border border-border text-text-muted text-sm text-center flex flex-col items-center gap-2">
+                                    <Lock className="w-5 h-5 opacity-50" />
+                                    Dein Repository ist auf <strong>Privat</strong> gestellt. Die öffentlichen Updates können hier nicht eingeblendet werden. Das ist aber <strong>gut für die Sicherheit!</strong>
+                                </div>
+                            ) : commits.length === 0 && !loadingCommits ? (
+                                <p className="text-sm text-text-muted">Keine Änderungen gefunden.</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {commits.map((c, i) => (
+                                        <div key={c.sha} className="p-4 rounded-lg bg-bg-primary border border-border flex gap-4 items-start">
+                                            <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0 mt-1">
+                                                <Code className="w-4 h-4 text-accent-light" />
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="text-sm font-medium text-text-primary truncate">{c.commit.message.split('\n')[0]}</span>
+                                                </div>
+                                                <div className="flex items-center gap-3 text-xs text-text-muted">
+                                                    <span>{new Date(c.commit.author.date).toLocaleString('de-DE')}</span>
+                                                    <span className="font-mono bg-bg-hover px-1.5 py-0.5 rounded border border-border">{c.sha.substring(0, 7)}</span>
+                                                    <span>von <strong className="text-text-secondary">{c.commit.author.name}</strong></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
