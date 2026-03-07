@@ -1,13 +1,24 @@
 import { useState, useEffect } from 'react'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User } from 'lucide-react'
 import api from '../api'
 
 export default function SettingsPage() {
-    const [activeTab, setActiveTab] = useState('servers')
+    const [activeTab, setActiveTab] = useState('profile')
     const [servers, setServers] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [success, setSuccess] = useState('')
+
+    // Profile
+    const [profile, setProfile] = useState(null)
+    const [profileForm, setProfileForm] = useState({ username: '', display_name: '', email: '' })
+    const [savingProfile, setSavingProfile] = useState(false)
+
+    // Password change
+    const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '', confirm_password: '' })
+    const [savingPassword, setSavingPassword] = useState(false)
+    const [showCurrentPw, setShowCurrentPw] = useState(false)
+    const [showNewPw, setShowNewPw] = useState(false)
 
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
@@ -20,7 +31,24 @@ export default function SettingsPage() {
     const [testing, setTesting] = useState(false)
     const [testResult, setTestResult] = useState(null)
 
-    useEffect(() => { loadServers() }, [])
+    useEffect(() => {
+        loadProfile()
+        loadServers()
+    }, [])
+
+    async function loadProfile() {
+        try {
+            const data = await api.getMe()
+            setProfile(data)
+            setProfileForm({
+                username: data.username || '',
+                display_name: data.display_name || '',
+                email: data.email || '',
+            })
+        } catch (err) {
+            setError(err.message)
+        }
+    }
 
     async function loadServers() {
         setLoading(true)
@@ -34,6 +62,61 @@ export default function SettingsPage() {
         }
     }
 
+    // ===== Profile functions =====
+    async function handleSaveProfile(e) {
+        e.preventDefault()
+        setSavingProfile(true)
+        setError('')
+        setSuccess('')
+        try {
+            const result = await api.updateProfile({
+                username: profileForm.username,
+                display_name: profileForm.display_name,
+                email: profileForm.email,
+            })
+            setSuccess('Profil erfolgreich aktualisiert!')
+            // Update local storage with new user data
+            if (result.user) {
+                localStorage.setItem('user', JSON.stringify(result.user))
+                setProfile(result.user)
+            }
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setSavingProfile(false)
+        }
+    }
+
+    async function handleChangePassword(e) {
+        e.preventDefault()
+        if (passwordForm.new_password !== passwordForm.confirm_password) {
+            setError('Die neuen Passwörter stimmen nicht überein!')
+            return
+        }
+        if (passwordForm.new_password.length < 4) {
+            setError('Das neue Passwort muss mindestens 4 Zeichen lang sein!')
+            return
+        }
+        setSavingPassword(true)
+        setError('')
+        setSuccess('')
+        try {
+            await api.changePassword({
+                current_password: passwordForm.current_password,
+                new_password: passwordForm.new_password,
+            })
+            setSuccess('Passwort erfolgreich geändert!')
+            setPasswordForm({ current_password: '', new_password: '', confirm_password: '' })
+            setShowCurrentPw(false)
+            setShowNewPw(false)
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setSavingPassword(false)
+        }
+    }
+
+    // ===== Server functions =====
     function openAdd() {
         setEditId(null)
         setForm({ name: '', display_name: '', url: '', api_key: '', description: '' })
@@ -120,6 +203,7 @@ export default function SettingsPage() {
     }
 
     const tabs = [
+        { id: 'profile', label: 'Profil', icon: UserCog },
         { id: 'servers', label: 'DNS-Server', icon: Server },
         { id: 'about', label: 'Über', icon: Database },
     ]
@@ -130,7 +214,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
             <div>
                 <h1 className="text-2xl font-bold text-text-primary">Einstellungen</h1>
-                <p className="text-text-muted text-sm mt-1">Systemkonfiguration und Server-Verwaltung</p>
+                <p className="text-text-muted text-sm mt-1">Profil, Systemkonfiguration und Server-Verwaltung</p>
             </div>
 
             {error && (
@@ -155,8 +239,8 @@ export default function SettingsPage() {
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
-                                ? 'bg-accent/20 text-accent-light'
-                                : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
+                            ? 'bg-accent/20 text-accent-light'
+                            : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
                             }`}
                     >
                         <tab.icon className="w-4 h-4" />
@@ -164,6 +248,181 @@ export default function SettingsPage() {
                     </button>
                 ))}
             </div>
+
+            {/* =================== PROFILE TAB =================== */}
+            {activeTab === 'profile' && (
+                <div className="space-y-6">
+                    {/* Profile Info */}
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
+                                <User className="w-5 h-5 text-accent-light" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">Profil bearbeiten</h2>
+                                <p className="text-sm text-text-muted">Ändere deinen Benutzernamen, Anzeigenamen und E-Mail</p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleSaveProfile} className="space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">
+                                        Benutzername
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={profileForm.username}
+                                        onChange={e => setProfileForm({ ...profileForm, username: e.target.value })}
+                                        placeholder="admin"
+                                        className="w-full px-3 py-2 text-sm"
+                                        required
+                                        minLength={3}
+                                    />
+                                    <p className="text-xs text-text-muted mt-1">Wird für den Login verwendet</p>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">
+                                        Anzeigename
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={profileForm.display_name}
+                                        onChange={e => setProfileForm({ ...profileForm, display_name: e.target.value })}
+                                        placeholder="Administrator"
+                                        className="w-full px-3 py-2 text-sm"
+                                    />
+                                    <p className="text-xs text-text-muted mt-1">Wird in der Oberfläche angezeigt</p>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">
+                                    E-Mail
+                                </label>
+                                <div className="relative">
+                                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                                    <input
+                                        type="email"
+                                        value={profileForm.email}
+                                        onChange={e => setProfileForm({ ...profileForm, email: e.target.value })}
+                                        placeholder="admin@example.com"
+                                        className="w-full pl-10 pr-3 py-2 text-sm"
+                                    />
+                                </div>
+                            </div>
+
+                            {profile && (
+                                <div className="flex items-center gap-4 pt-2 text-xs text-text-muted">
+                                    <span>Rolle: <span className="text-accent-light font-medium">{profile.role === 'admin' ? 'Administrator' : 'Benutzer'}</span></span>
+                                    {profile.created_at && <span>Erstellt: {new Date(profile.created_at).toLocaleDateString('de-DE')}</span>}
+                                    {profile.last_login && <span>Letzter Login: {new Date(profile.last_login).toLocaleString('de-DE')}</span>}
+                                </div>
+                            )}
+
+                            <div className="flex justify-end pt-2 border-t border-border">
+                                <button
+                                    type="submit"
+                                    disabled={savingProfile}
+                                    className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
+                                >
+                                    {savingProfile && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Profil speichern
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    {/* Password Change */}
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center">
+                                <Lock className="w-5 h-5 text-warning" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">Passwort ändern</h2>
+                                <p className="text-sm text-text-muted">Ändere dein Passwort für den Login</p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleChangePassword} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">
+                                    Aktuelles Passwort
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        type={showCurrentPw ? 'text' : 'password'}
+                                        value={passwordForm.current_password}
+                                        onChange={e => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
+                                        placeholder="••••••••"
+                                        className="w-full px-3 py-2 pr-10 text-sm"
+                                        required
+                                    />
+                                    <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                        {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">
+                                        Neues Passwort
+                                    </label>
+                                    <div className="relative">
+                                        <input
+                                            type={showNewPw ? 'text' : 'password'}
+                                            value={passwordForm.new_password}
+                                            onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                                            placeholder="••••••••"
+                                            className="w-full px-3 py-2 pr-10 text-sm"
+                                            required
+                                            minLength={4}
+                                        />
+                                        <button type="button" onClick={() => setShowNewPw(!showNewPw)}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                            {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">
+                                        Neues Passwort bestätigen
+                                    </label>
+                                    <input
+                                        type={showNewPw ? 'text' : 'password'}
+                                        value={passwordForm.confirm_password}
+                                        onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
+                                        placeholder="••••••••"
+                                        className="w-full px-3 py-2 text-sm"
+                                        required
+                                        minLength={4}
+                                    />
+                                </div>
+                            </div>
+
+                            {passwordForm.new_password && passwordForm.confirm_password && passwordForm.new_password !== passwordForm.confirm_password && (
+                                <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-center gap-2">
+                                    <AlertCircle className="w-4 h-4 shrink-0" />
+                                    Die Passwörter stimmen nicht überein
+                                </div>
+                            )}
+
+                            <div className="flex justify-end pt-2 border-t border-border">
+                                <button
+                                    type="submit"
+                                    disabled={savingPassword || (passwordForm.new_password !== passwordForm.confirm_password)}
+                                    className="px-5 py-2 bg-gradient-to-r from-warning/80 to-orange-600 hover:from-warning hover:to-orange-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
+                                >
+                                    {savingPassword && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Passwort ändern
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
 
             {/* =================== SERVERS TAB =================== */}
             {activeTab === 'servers' && (
@@ -178,6 +437,15 @@ export default function SettingsPage() {
                                 <Plus className="w-4 h-4" /> Server hinzufügen
                             </button>
                         </div>
+                    </div>
+
+                    {/* Info-Box: DNS Server werden in der Datenbank gespeichert */}
+                    <div className="p-4 rounded-xl bg-accent/5 border border-accent/20">
+                        <p className="text-sm text-text-secondary">
+                            <strong className="text-accent-light">💡 Hinweis:</strong> Server-Konfigurationen werden in der <strong>Datenbank</strong> gespeichert, nicht in der .env Datei.
+                            Die .env-Variable <code className="px-1.5 py-0.5 bg-bg-hover rounded text-xs font-mono">PDNS_SERVERS</code> wird nur beim ersten Start importiert.
+                            Danach werden alle Änderungen hier über die Weboberfläche verwaltet.
+                        </p>
                     </div>
 
                     {servers.length === 0 ? (
@@ -209,8 +477,8 @@ export default function SettingsPage() {
                                                 <h3 className="font-semibold text-text-primary">{s.display_name || s.name}</h3>
                                                 <span className="text-xs px-2 py-0.5 rounded-full bg-bg-hover text-text-muted border border-border font-mono">{s.name}</span>
                                                 <span className={`text-xs px-2 py-0.5 rounded-full ${s.is_online
-                                                        ? 'bg-success/10 text-success border border-success/30'
-                                                        : 'bg-danger/10 text-danger border border-danger/30'
+                                                    ? 'bg-success/10 text-success border border-success/30'
+                                                    : 'bg-danger/10 text-danger border border-danger/30'
                                                     }`}>
                                                     {s.is_online ? 'Online' : 'Offline'}
                                                 </span>
@@ -359,8 +627,8 @@ export default function SettingsPage() {
 
                                 {testResult && (
                                     <div className={`mt-3 p-3 rounded-lg text-sm ${testResult.success
-                                            ? 'bg-success/10 border border-success/30 text-success'
-                                            : 'bg-danger/10 border border-danger/30 text-danger'
+                                        ? 'bg-success/10 border border-success/30 text-success'
+                                        : 'bg-danger/10 border border-danger/30 text-danger'
                                         }`}>
                                         {testResult.success ? (
                                             <div>

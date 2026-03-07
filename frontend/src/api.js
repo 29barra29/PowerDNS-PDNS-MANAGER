@@ -82,6 +82,7 @@ class APIClient {
     }
 
     getMe() { return this.request('GET', '/auth/me'); }
+    updateProfile(data) { return this.request('PUT', '/auth/me', data); }
     changePassword(data) { return this.request('PUT', '/auth/me/password', data); }
     listUsers() { return this.request('GET', '/auth/users'); }
     createUser(data) { return this.request('POST', '/auth/users', data); }

@@ -44,6 +44,12 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class ProfileUpdate(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+
+
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=4)
@@ -118,6 +124,40 @@ async def get_me(
 ):
     """Get current user info."""
     return await _user_to_dict(current_user, db)
+
+
+@router.put("/me")
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update own profile (username, email, display_name)."""
+    if data.username is not None and data.username != current_user.username:
+        # Check if new username is already taken
+        result = await db.execute(select(User).where(User.username == data.username))
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Benutzername ist bereits vergeben")
+        current_user.username = data.username
+    
+    if data.email is not None:
+        if data.email and data.email != current_user.email:
+            # Check if email is already taken
+            result = await db.execute(select(User).where(User.email == data.email))
+            existing = result.scalar_one_or_none()
+            if existing and existing.id != current_user.id:
+                raise HTTPException(status_code=400, detail="E-Mail ist bereits vergeben")
+        current_user.email = data.email or None
+    
+    if data.display_name is not None:
+        current_user.display_name = data.display_name or None
+    
+    await db.flush()
+    logger.info(f"User '{current_user.username}' updated their profile")
+    return {
+        "message": "Profil aktualisiert",
+        "user": await _user_to_dict(current_user, db),
+    }
 
 
 @router.put("/me/password")
