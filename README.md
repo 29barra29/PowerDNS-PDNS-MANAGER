@@ -41,7 +41,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 #### Option 1: One-Click Installation (Empfohlen) 🎯
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/29barra29/dns-manager/main/install.sh | bash
+curl -sSLO https://raw.githubusercontent.com/29barra29/dns-manager/main/install.sh && bash install.sh
 ```
 
 #### Option 2: Interaktives Setup 🔧

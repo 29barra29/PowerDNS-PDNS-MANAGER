@@ -4,6 +4,14 @@
 
 set -e
 
+# Prevent execution via curl | bash (breaks interactive prompts)
+if [ ! -t 0 ]; then
+    echo -e "\033[0;31m✗ Fehler: Dieses Skript benötigt Benutzereingaben und darf nicht per Pipe (| bash) ausgeführt werden.\033[0m"
+    echo -e "Bitte nutze stattdessen diesen Befehl:"
+    echo -e "\033[1;33mcurl -sSLO https://raw.githubusercontent.com/29barra29/dns-manager/main/install.sh && bash install.sh\033[0m"
+    exit 1
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
