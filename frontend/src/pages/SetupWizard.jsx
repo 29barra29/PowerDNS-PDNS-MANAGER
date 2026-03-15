@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  UserIcon,
-  EnvelopeIcon,
-  KeyIcon,
-  ServerIcon,
-  CheckCircleIcon,
-  ExclamationTriangleIcon
-} from '@heroicons/react/24/outline';
+  User,
+  Mail,
+  Key,
+  Server,
+  CheckCircle,
+  AlertTriangle
+} from 'lucide-react';
 
 export default function SetupWizard() {
   const navigate = useNavigate();
@@ -178,7 +178,7 @@ export default function SetupWizard() {
           <div className="bg-gray-800 rounded-lg shadow-xl p-8">
             {error && (
               <div className="mb-6 p-4 bg-red-900/50 border border-red-500 rounded-lg flex items-center gap-2">
-                <ExclamationTriangleIcon className="w-5 h-5 text-red-400" />
+                <AlertTriangle className="w-5 h-5 text-red-400" />
                 <span className="text-red-200">{error}</span>
               </div>
             )}
@@ -187,7 +187,7 @@ export default function SetupWizard() {
             {step === 1 && (
               <div>
                 <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <UserIcon className="w-6 h-6" />
+                  <User className="w-6 h-6" />
                   Administrator Account
                 </h2>
 
@@ -268,7 +268,7 @@ export default function SetupWizard() {
             {step === 2 && (
               <div>
                 <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <EnvelopeIcon className="w-6 h-6" />
+                  <Mail className="w-6 h-6" />
                   E-Mail Konfiguration (Optional)
                 </h2>
 
@@ -363,7 +363,7 @@ export default function SetupWizard() {
             {step === 3 && (
               <div>
                 <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <KeyIcon className="w-6 h-6" />
+                  <Key className="w-6 h-6" />
                   Setup abschließen
                 </h2>
 
@@ -411,7 +411,7 @@ export default function SetupWizard() {
             {/* Step 4: Success */}
             {step === 4 && (
               <div className="text-center py-8">
-                <CheckCircleIcon className="w-16 h-16 text-green-500 mx-auto mb-4" />
+                <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
                 <h2 className="text-2xl font-bold text-white mb-4">
                   Setup erfolgreich!
                 </h2>
