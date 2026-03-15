@@ -132,7 +132,7 @@ print_success "Download abgeschlossen"
 if [ -f "setup.sh" ]; then
     print_info "Starte Setup-Assistenten..."
     chmod +x setup.sh
-    ./setup.sh
+    ./setup.sh --from-install
 else
     print_info "Setup-Script nicht gefunden, erstelle Standard .env..."
     cp .env.example .env
@@ -156,14 +156,14 @@ print_info "Warte auf Services..."
 sleep 10
 
 # Check if services are running
-if $COMPOSE_CMD ps | grep -q "dns-manager-api.*running"; then
+if $COMPOSE_CMD ps | grep "dns-manager-api" | grep -qi "Up"; then
     print_success "Backend läuft"
 else
     print_error "Backend startet nicht!"
     echo "Prüfe Logs mit: $COMPOSE_CMD logs backend"
 fi
 
-if $COMPOSE_CMD ps | grep -q "dns-manager-db.*running"; then
+if $COMPOSE_CMD ps | grep "dns-manager-db" | grep -qi "Up"; then
     print_success "Datenbank läuft"
 else
     print_error "Datenbank startet nicht!"

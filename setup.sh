@@ -209,19 +209,21 @@ elif [ "$ENABLE_REGISTRATION" = "true" ]; then
     echo "   Der erste Benutzer, der sich registriert, wird automatisch Admin."
 fi
 
-echo ""
-echo "🚀 Nächste Schritte:"
-echo "   1. Falls nicht gestartet: cd $(basename $(pwd)) && docker compose up -d"
-echo "   2. Öffne im Browser:   http://localhost:5380"
-
-if [ "$ENABLE_REGISTRATION" = "true" ]; then
-    echo "   3. Registriere dich als erster Benutzer (= Admin)"
-else
-    echo "   3. Login mit den oben angezeigten Zugangsdaten"
+if [ "$1" != "--from-install" ]; then
+    echo ""
+    echo "🚀 Nächste Schritte:"
+    echo "   1. Falls nicht gestartet: cd $(basename $(pwd)) && docker compose up -d"
+    echo "   2. Öffne im Browser:   http://localhost:5380"
+    
+    if [ "$ENABLE_REGISTRATION" = "true" ]; then
+        echo "   3. Registriere dich als erster Benutzer (= Admin)"
+    else
+        echo "   3. Login mit den oben angezeigten Zugangsdaten"
+    fi
+    
+    echo ""
+    echo "📚 Weitere Hilfe:"
+    echo "   GitHub: https://github.com/29barra29/dns-manager"
+    echo "   Docs:   https://github.com/29barra29/dns-manager/wiki"
+    echo ""
 fi
-
-echo ""
-echo "📚 Weitere Hilfe:"
-echo "   GitHub: https://github.com/29barra29/dns-manager"
-echo "   Docs:   https://github.com/29barra29/dns-manager/wiki"
-echo ""

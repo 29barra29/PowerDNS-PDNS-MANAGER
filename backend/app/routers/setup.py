@@ -49,7 +49,7 @@ async def get_setup_status(db: AsyncSession = Depends(get_db)):
     has_users = user_count > 0
 
     # Check if registration is enabled
-    registration_enabled = os.getenv("ENABLE_REGISTRATION", "false").lower() == "true"
+    registration_enabled = settings.ENABLE_REGISTRATION
 
     # If no users and registration not enabled, setup is not complete
     is_setup_complete = has_users or not registration_enabled
@@ -71,7 +71,7 @@ async def register_first_user(
     """Register the first user as admin (only works if no users exist)."""
 
     # Check if registration is enabled
-    if os.getenv("ENABLE_REGISTRATION", "false").lower() != "true":
+    if not settings.ENABLE_REGISTRATION:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registrierung ist deaktiviert",
