@@ -1,0 +1,99 @@
+name: Installation Help
+description: Hilfe bei der Installation oder Konfiguration
+title: "[HILFE] "
+labels: ["help wanted", "installation"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Brauchst du Hilfe bei der Installation oder Konfiguration?
+        Wir helfen gerne! Bitte gib uns so viele Details wie möglich.
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Art des Problems
+      options:
+        - Erstinstallation schlägt fehl
+        - Update-Probleme
+        - Docker-Probleme
+        - PowerDNS-Verbindung
+        - Datenbank-Probleme
+        - Netzwerk/Proxy-Konfiguration
+        - Cloudflare Integration
+        - Anderes
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problembeschreibung
+      description: Was funktioniert nicht wie erwartet?
+      placeholder: |
+        Beschreibe dein Problem...
+        Was hast du bereits versucht?
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Dein Setup
+      description: Beschreibe deine Umgebung
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Docker Version: 24.0.7
+        - Installation: Setup-Script / Manuell
+        - Reverse Proxy: nginx / traefik / cloudflare
+    validations:
+      required: true
+
+  - type: textarea
+    id: env_config
+    attributes:
+      label: Konfiguration
+      description: Relevante Teile deiner .env (OHNE Passwörter!)
+      render: shell
+      placeholder: |
+        APP_NAME=DNS Manager
+        ENABLE_REGISTRATION=true
+        # Bitte keine Passwörter oder API-Keys posten!
+
+  - type: textarea
+    id: docker_compose
+    attributes:
+      label: Docker Compose Logs
+      description: Output von `docker compose logs`
+      render: shell
+      placeholder: |
+        ```
+        docker compose logs ausgabe hier...
+        ```
+
+  - type: textarea
+    id: commands
+    attributes:
+      label: Ausgeführte Befehle
+      description: Welche Befehle hast du ausgeführt?
+      render: shell
+      placeholder: |
+        ```bash
+        git clone ...
+        ./setup.sh
+        docker compose up -d
+        ```
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checkliste
+      options:
+        - label: Ich habe die INSTALL.md gelesen
+          required: true
+        - label: Ich habe die Voraussetzungen geprüft (Docker, Ports, etc.)
+          required: true
+        - label: Ich habe die Troubleshooting-Sektion gecheckt
+          required: true

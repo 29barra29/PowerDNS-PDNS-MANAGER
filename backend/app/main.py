@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_db
 from app.services.pdns_client import PowerDNSAPIError, pdns_manager
-from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router
+from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router, setup
 from app.core.auth import create_initial_admin
 from app.core.database import get_db, async_session
 
@@ -150,6 +150,8 @@ async def value_error_handler(request: Request, exc: ValueError):
 # ========================
 API_PREFIX = "/api/v1"
 
+# Setup router (muss vor auth router sein für öffentlichen Zugriff)
+app.include_router(setup.router, prefix=API_PREFIX)
 app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(servers.router, prefix=API_PREFIX)
 app.include_router(zones.router, prefix=API_PREFIX)

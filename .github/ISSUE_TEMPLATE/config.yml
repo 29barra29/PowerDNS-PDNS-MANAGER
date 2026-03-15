@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Sicherheitsprobleme
+    url: mailto:security@dns-manager.example
+    about: Bitte melde Sicherheitsprobleme NICHT öffentlich, sondern per E-Mail
+  - name: Discord Community
+    url: https://discord.gg/dns-manager
+    about: Stelle Fragen und diskutiere mit der Community
+  - name: Dokumentation
+    url: https://github.com/29barra29/dns-manager/wiki
+    about: Schaue zuerst in die Dokumentation
+  - name: Diskussionen
+    url: https://github.com/29barra29/dns-manager/discussions
+    about: Für allgemeine Fragen und Diskussionen

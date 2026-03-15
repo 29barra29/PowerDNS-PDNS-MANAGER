@@ -1,0 +1,130 @@
+name: Bug Report
+description: Melde einen Fehler im DNS Manager
+title: "[BUG] "
+labels: ["bug", "triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke, dass du dir Zeit nimmst, einen Bug zu melden!
+        Bitte fülle das Formular so detailliert wie möglich aus.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Beschreibung
+      description: Eine klare Beschreibung des Problems
+      placeholder: Beschreibe den Fehler...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Reproduzieren
+      description: Wie kann man den Fehler nachstellen?
+      placeholder: |
+        1. Gehe zu '...'
+        2. Klicke auf '...'
+        3. Scrolle zu '...'
+        4. Fehler tritt auf
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten
+      description: Was sollte eigentlich passieren?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Tatsächliches Verhalten
+      description: Was passiert stattdessen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Betroffene Komponente
+      multiple: true
+      options:
+        - Frontend (React)
+        - Backend (FastAPI)
+        - Docker Setup
+        - PowerDNS Integration
+        - Authentifizierung
+        - Datenbank
+        - Setup/Installation
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DNS Manager Version
+      description: Welche Version verwendest du? (siehe Dashboard oder docker images)
+      placeholder: "v2.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installationsart
+      options:
+        - Docker Compose
+        - Docker (manuell)
+        - Kubernetes
+        - Andere
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Betriebssystem
+      placeholder: "z.B. Ubuntu 22.04, Windows 11 mit WSL2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevante Log-Ausgaben (docker compose logs)
+      render: shell
+      placeholder: |
+        ```
+        Füge hier relevante Logs ein
+        ```
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Falls hilfreich, füge Screenshots hinzu
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Zusätzliche Informationen
+      description: Weitere relevante Informationen zum Problem
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checkliste
+      options:
+        - label: Ich habe die Dokumentation gelesen
+          required: true
+        - label: Ich habe nach ähnlichen Issues gesucht
+          required: true
+        - label: Dies ist kein Sicherheitsproblem (Sicherheitsprobleme bitte privat melden!)
+          required: true

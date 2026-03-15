@@ -1,0 +1,88 @@
+name: Feature Request
+description: Schlage eine neue Funktion für DNS Manager vor
+title: "[FEATURE] "
+labels: ["enhancement", "triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für deinen Vorschlag zur Verbesserung des DNS Managers!
+        Bitte beschreibe deine Idee so detailliert wie möglich.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem/Motivation
+      description: Welches Problem möchtest du lösen?
+      placeholder: |
+        Ich möchte gerne...
+        Es wäre hilfreich wenn...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Lösungsvorschlag
+      description: Wie stellst du dir die Lösung vor?
+      placeholder: Beschreibe deine Idee...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Lösungen
+      description: Hast du andere Ansätze in Betracht gezogen?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorität
+      description: Wie wichtig ist diese Funktion für dich?
+      options:
+        - Nice to have
+        - Wichtig
+        - Kritisch für meine Nutzung
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Bereich
+      multiple: true
+      options:
+        - Zone Management
+        - Record Management
+        - DNSSEC
+        - Benutzerverwaltung
+        - Dashboard
+        - API
+        - Setup/Installation
+        - Dokumentation
+        - Performance
+        - Sicherheit
+        - UI/UX
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Beispiele
+      description: Kennst du andere Tools mit ähnlichen Features?
+      placeholder: |
+        - PowerDNS-Admin hat...
+        - Cloudflare macht das so...
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Mitarbeit
+      options:
+        - label: Ich würde gerne bei der Implementierung helfen
+        - label: Ich kann beim Testen helfen
+        - label: Ich kann Dokumentation beisteuern

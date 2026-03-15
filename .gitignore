@@ -13,8 +13,12 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.backup
+.env.production
+.env.local
 .venv/
 venv/
+env/
 
 # ========================
 # Built frontend (served by backend)

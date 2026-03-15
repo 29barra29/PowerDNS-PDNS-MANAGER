@@ -103,17 +103,32 @@ async def get_admin_user(
 
 
 async def create_initial_admin(db: AsyncSession):
-    """Create the initial admin user if no users exist."""
+    """Create the initial admin user if no users exist and registration is disabled."""
     result = await db.execute(select(User).limit(1))
     if result.scalar_one_or_none() is None:
+        # Prüfe ob Registrierung aktiviert ist
+        if settings.ENABLE_REGISTRATION:
+            logger.info("Registration enabled - waiting for first user to register as admin")
+            return
+
+        # Verwende konfiguriertes Passwort oder generiere eines
+        if settings.INITIAL_ADMIN_PASSWORD:
+            password = settings.INITIAL_ADMIN_PASSWORD
+            logger.info(f"Creating admin user with configured password")
+        else:
+            import secrets
+            password = secrets.token_urlsafe(16)
+            logger.warning(f"Creating admin user with generated password: {password}")
+            logger.warning("SAVE THIS PASSWORD! It will not be shown again.")
+
         admin = User(
             username="admin",
             email="admin@dns-manager.local",
-            hashed_password=hash_password("admin"),
+            hashed_password=hash_password(password),
             display_name="Administrator",
             role="admin",
             is_active=True,
         )
         db.add(admin)
         await db.commit()
-        logger.info("Initial admin user created (username: admin, password: admin)")
+        logger.info(f"Initial admin user created (username: admin)")

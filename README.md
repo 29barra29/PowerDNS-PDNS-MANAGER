@@ -1,11 +1,13 @@
 # 🌐 DNS Manager
 
-Ein modernes, selbst gehostetes Admin-Panel für **PowerDNS Authoritative Server**.  
+Ein modernes, selbst gehostetes Admin-Panel für **PowerDNS Authoritative Server**.
 Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
+![Version](https://img.shields.io/github/v/release/29barra29/dns-manager?label=version)
+![Docker Pulls](https://img.shields.io/docker/pulls/29barra29/dns-manager)
 
 ---
 
@@ -22,6 +24,8 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - 🧪 **Verbindungstest** – Live-Test ob ein PowerDNS-Server erreichbar ist
 - 📋 **Audit-Log** – Alle Änderungen nachvollziehbar protokolliert
 - 🎨 **Dark Mode** – Modernes, dunkles Design
+- 🚀 **Setup-Wizard** – Einfache Ersteinrichtung mit interaktivem Assistenten
+- 🔐 **Sichere Defaults** – Automatische Generierung von Secrets und Passwörtern
 
 ---
 
@@ -30,59 +34,51 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ### Voraussetzungen
 
 - [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/install/)
-- Mindestens ein laufender PowerDNS Authoritative Server mit aktivierter API
+- Linux, MacOS oder Windows mit WSL2
+- Port 5380 frei
 
-### 1. Repository klonen
+### Installation
+
+#### Option 1: One-Click Installation (Empfohlen) 🎯
+
+```bash
+curl -sSL https://raw.githubusercontent.com/29barra29/dns-manager/main/install.sh | bash
+```
+
+#### Option 2: Interaktives Setup 🔧
 
 ```bash
 git clone https://github.com/29barra29/dns-manager.git
 cd dns-manager
-```
-
-### 2. Umgebungsvariablen konfigurieren
-
-```bash
-cp .env.example .env
-nano .env  # Passwörter anpassen!
-```
-
-### 3. Starten
-
-```bash
+./setup.sh   # Interaktiver Setup-Assistent
 docker compose up -d
 ```
 
-### 4. Öffnen
+#### Option 3: Manuelle Installation 📝
 
-Öffne **http://localhost:5380** im Browser.
+```bash
+git clone https://github.com/29barra29/dns-manager.git
+cd dns-manager
+cp .env.example .env
+nano .env  # Konfiguration anpassen
+docker compose up -d
+```
 
-**Standard-Login:**
-- Benutzername: `admin`
-- Passwort: `admin`
+### Erster Zugriff
 
-> ⚠️ **Wichtig:** Ändere das Admin-Passwort nach dem ersten Login!
+1. Öffne **http://localhost:5380** im Browser
+2. **Bei aktivierter Registrierung:** Der Setup-Wizard führt dich durch die Einrichtung
+3. **Ohne Registrierung:** Login mit deinen konfigurierten Credentials
 
-### 5. PowerDNS-Server einrichten
+### PowerDNS-Server einrichten
 
-Du hast **zwei Möglichkeiten**:
-
-**Option A – Über das Admin-Panel (empfohlen):**
+**Über das Admin-Panel (empfohlen):**
 1. Einloggen als Admin
 2. Gehe zu **Einstellungen** → **DNS-Server**
 3. Klicke **Server hinzufügen**
 4. Trage Name, URL und API-Key ein
 5. Nutze **Verbindung testen** zum prüfen
 6. Speichern!
-
-**Option B – Über Umgebungsvariable:**
-```env
-PDNS_SERVERS=ns1|http://192.168.1.10:8081|dein-api-key
-```
-
-Mehrere Server:
-```env
-PDNS_SERVERS=ns1|http://10.0.0.1:8081|key1,ns2|http://10.0.0.2:8081|key2
-```
 
 ---
 
@@ -153,6 +149,52 @@ dns-manager/
 
 ---
 
+## 🔄 Updates
+
+### Automatisches Update
+
+```bash
+cd dns-manager
+./update.sh
+```
+
+Das Update-Script macht folgendes:
+1. Holt die neueste Version von GitHub
+2. Baut die Container neu
+3. Startet die Anwendung neu
+4. Behält deine Datenbank und Einstellungen
+
+### Manuelles Update
+
+```bash
+cd dns-manager
+git pull origin main
+docker compose build --no-cache backend
+docker compose up -d
+```
+
+### Update von einer bestimmten Version
+
+```bash
+cd dns-manager
+git fetch --tags
+git checkout v2.1.0  # Oder gewünschte Version
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Backup vor Update (Empfohlen)
+
+```bash
+# Datenbank sichern
+docker exec dns-manager-db mysqldump -u root -p dns_manager > backup_$(date +%Y%m%d).sql
+
+# Update durchführen
+./update.sh
+```
+
+---
+
 ## 🔧 PowerDNS vorbereiten
 
 Stelle sicher, dass dein PowerDNS-Server die API aktiviert hat.
@@ -185,11 +227,36 @@ systemctl restart pdns
 
 ## 🔒 Sicherheitshinweise
 
-- Ändere das Standard-Admin-Passwort nach dem ersten Login
-- Verwende starke Passwörter in der `.env` Datei
-- Beschränke den Zugriff auf Port 5380 (z.B. per Firewall oder Reverse Proxy)
-- Nutze HTTPS über einen Reverse Proxy (z.B. nginx, Traefik, Caddy)
-- Die `.env` Datei wird **niemals** in Git hochgeladen
+### Basis-Absicherung (Pflicht)
+- ✅ JWT-Secret wird automatisch generiert
+- ✅ Sichere Passwörter werden beim Setup erstellt
+- ⚠️ Ändere das Admin-Passwort nach dem ersten Login
+- ⚠️ Aktiviere HTTPS über einen Reverse Proxy
+
+### Empfohlene Maßnahmen
+- Nutze Cloudflare Tunnel oder anderen Reverse Proxy
+- Aktiviere Fail2Ban für Brute-Force Schutz
+- Beschränke Ports mit Firewall-Regeln
+- Regelmäßige Backups einrichten
+- Updates zeitnah installieren
+
+### Für öffentlichen Zugriff
+```nginx
+# Beispiel nginx Reverse Proxy mit SSL
+server {
+    listen 443 ssl http2;
+    server_name dns.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:5380;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
 
 ---
 
@@ -199,9 +266,67 @@ MIT License – Frei nutzbar, auch kommerziell.
 
 ---
 
+## 📚 Dokumentation
+
+- [Installations-Anleitung](INSTALL.md)
+- [Wiki](https://github.com/29barra29/dns-manager/wiki)
+- [API-Dokumentation](http://localhost:5380/docs)
+- [Issue Tracker](https://github.com/29barra29/dns-manager/issues)
+
 ## 🤝 Mitwirken
 
 Pull Requests sind willkommen! Bei größeren Änderungen bitte zuerst ein Issue erstellen.
+
+### Entwicklung
+
+```bash
+# Backend entwickeln
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+
+# Frontend entwickeln
+cd frontend
+npm install
+npm run dev
+```
+
+## 🐛 Fehlerbehebung
+
+### Container startet nicht
+```bash
+docker compose logs -f
+docker compose down
+docker compose up -d
+```
+
+### Admin-Passwort vergessen
+```bash
+# Neues Passwort setzen
+docker compose exec backend python -c "
+from app.core.database import async_session
+from app.models.models import User
+from app.core.auth import hash_password
+import asyncio
+
+async def reset():
+    async with async_session() as db:
+        # Admin user holen (ID 1)
+        admin = await db.get(User, 1)
+        admin.hashed_password = hash_password('neues-passwort')
+        await db.commit()
+        print('Passwort zurückgesetzt!')
+
+asyncio.run(reset())
+"
+```
+
+---
+
+## 🌟 Credits
+
+Entwickelt von der Community für die Community.
+Besonderer Dank an alle Contributors!
 
 ---
 
