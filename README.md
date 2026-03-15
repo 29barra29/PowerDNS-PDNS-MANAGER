@@ -6,8 +6,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/github/v/release/29barra29/dns-manager?label=version)
-![Docker Pulls](https://img.shields.io/docker/pulls/29barra29/dns-manager)
+![Version](https://img.shields.io/badge/version-v2.1.0-blue.svg)
 
 ---
 
