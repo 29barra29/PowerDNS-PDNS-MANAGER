@@ -37,7 +37,8 @@ echo "📋 Basis-Konfiguration"
 echo "----------------------"
 
 # App Name
-read -p "App Name [DNS Manager]: " APP_NAME
+echo "Wie soll das Panel heißen? (Dieser Name wird später oben links im Panel angezeigt)"
+read -p "Eingabe (z.B. Firmenname oder Eigenname) [DNS Manager]: " APP_NAME
 APP_NAME=${APP_NAME:-DNS Manager}
 
 # Installation Mode
@@ -210,7 +211,7 @@ fi
 
 echo ""
 echo "🚀 Nächste Schritte:"
-echo "   1. Container starten:  docker compose up -d"
+echo "   1. Falls nicht gestartet: cd $(basename $(pwd)) && docker compose up -d"
 echo "   2. Öffne im Browser:   http://localhost:5380"
 
 if [ "$ENABLE_REGISTRATION" = "true" ]; then

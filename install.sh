@@ -67,6 +67,20 @@ else
 fi
 print_success "Docker Compose gefunden"
 
+# Check Docker permissions
+if ! docker ps &> /dev/null; then
+    if sudo docker ps &> /dev/null; then
+        print_info "Docker erfordert root-Rechte. Verwende 'sudo'."
+        COMPOSE_CMD="sudo $COMPOSE_CMD"
+    else
+        print_error "Dein Benutzer hat keine Rechte, um Docker auszuführen."
+        print_info "Bitte führe 'sudo usermod -aG docker $USER' aus und logge dich neu ein."
+        exit 1
+    fi
+else
+    print_success "Docker Berechtigungen geprüft ok"
+fi
+
 # Check if port 5380 is free
 if lsof -Pi :5380 -sTCP:LISTEN -t >/dev/null 2>&1; then
     print_error "Port 5380 ist bereits belegt!"
