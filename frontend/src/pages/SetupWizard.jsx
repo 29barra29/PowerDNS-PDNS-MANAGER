@@ -6,7 +6,9 @@ import {
   Key,
   Server,
   CheckCircle,
-  AlertTriangle
+  AlertTriangle,
+  Shield,
+  Loader2
 } from 'lucide-react';
 
 export default function SetupWizard() {
@@ -149,15 +151,22 @@ export default function SetupWizard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
-      <div className="container mx-auto px-4 py-16">
+    <div className="min-h-screen flex items-center justify-center bg-bg-primary relative overflow-hidden py-16">
+      {/* Background glow effects to match LoginPage */}
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl" />
+
+      <div className="container mx-auto px-4 relative z-10">
         <div className="max-w-2xl mx-auto">
           {/* Header */}
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-white mb-2">
-              🌐 DNS Manager Setup
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
+                <Shield className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold text-text-primary mb-2">
+              DNS Manager Setup
             </h1>
-            <p className="text-gray-300">
+            <p className="text-text-muted text-sm">
               Willkommen! Lass uns deinen DNS Manager einrichten.
             </p>
           </div>
@@ -168,35 +177,37 @@ export default function SetupWizard() {
               <div
                 key={s}
                 className={`flex-1 h-2 mx-1 rounded-full transition-all ${
-                  s <= step ? 'bg-blue-500' : 'bg-gray-700'
+                  s <= step ? 'bg-gradient-to-r from-accent to-purple-600' : 'bg-surface border border-border'
                 }`}
               />
             ))}
           </div>
 
           {/* Card */}
-          <div className="bg-gray-800 rounded-lg shadow-xl p-8">
+          <div className="glass-card p-8">
             {error && (
-              <div className="mb-6 p-4 bg-red-900/50 border border-red-500 rounded-lg flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-red-400" />
-                <span className="text-red-200">{error}</span>
+              <div className="mb-6 p-4 bg-danger/10 border border-danger/30 rounded-lg flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-danger" />
+                <span className="text-danger text-sm">{error}</span>
               </div>
-            )}
+             )}
 
             {/* Step 1: Admin Account */}
             {step === 1 && (
-              <div>
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <User className="w-6 h-6" />
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-3">
+                  <div className="p-2 bg-surface rounded-lg border border-border">
+                    <User className="w-5 h-5 text-accent" />
+                  </div>
                   Administrator Account
                 </h2>
 
-                <div className="space-y-4">
+                <div className="space-y-5">
                   <div>
-                    <label className="block text-gray-300 mb-2">Benutzername</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Benutzername</label>
                     <input
                       type="text"
-                      className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-4 py-2.5 text-sm"
                       value={userData.username}
                       onChange={(e) => setUserData({...userData, username: e.target.value})}
                       placeholder="admin"
@@ -205,10 +216,10 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-gray-300 mb-2">E-Mail</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">E-Mail</label>
                     <input
                       type="email"
-                      className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-4 py-2.5 text-sm"
                       value={userData.email}
                       onChange={(e) => setUserData({...userData, email: e.target.value})}
                       placeholder="admin@example.com"
@@ -217,10 +228,10 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-gray-300 mb-2">Anzeigename</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Anzeigename</label>
                     <input
                       type="text"
-                      className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-4 py-2.5 text-sm"
                       value={userData.displayName}
                       onChange={(e) => setUserData({...userData, displayName: e.target.value})}
                       placeholder="Administrator"
@@ -228,10 +239,10 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-gray-300 mb-2">Passwort</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Passwort</label>
                     <input
                       type="password"
-                      className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-4 py-2.5 text-sm"
                       value={userData.password}
                       onChange={(e) => setUserData({...userData, password: e.target.value})}
                       placeholder="Mindestens 8 Zeichen"
@@ -240,10 +251,10 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-gray-300 mb-2">Passwort wiederholen</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Passwort wiederholen</label>
                     <input
                       type="password"
-                      className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-4 py-2.5 text-sm"
                       value={userData.passwordConfirm}
                       onChange={(e) => setUserData({...userData, passwordConfirm: e.target.value})}
                       placeholder="Passwort bestätigen"
@@ -256,7 +267,7 @@ export default function SetupWizard() {
                   <button
                     onClick={() => setStep(2)}
                     disabled={!userData.username || !userData.email || !userData.password}
-                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Weiter →
                   </button>
@@ -266,41 +277,43 @@ export default function SetupWizard() {
 
             {/* Step 2: Email (Optional) */}
             {step === 2 && (
-              <div>
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <Mail className="w-6 h-6" />
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-3">
+                  <div className="p-2 bg-surface rounded-lg border border-border">
+                    <Mail className="w-5 h-5 text-accent" />
+                  </div>
                   E-Mail Konfiguration (Optional)
                 </h2>
 
-                <div className="mb-6">
+                <div className="mb-6 p-4 bg-surface border border-border rounded-lg">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input
                       type="checkbox"
-                      className="w-5 h-5 rounded text-blue-600"
+                      className="w-5 h-5 rounded border-border bg-bg-primary text-accent focus:ring-accent"
                       checked={emailConfig.enabled}
                       onChange={(e) => setEmailConfig({...emailConfig, enabled: e.target.checked})}
                     />
-                    <span className="text-white">E-Mail-Benachrichtigungen aktivieren</span>
+                    <span className="text-sm font-medium text-text-primary">E-Mail-Benachrichtigungen aktivieren</span>
                   </label>
                 </div>
 
                 {emailConfig.enabled && (
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-gray-300 mb-2">SMTP Server</label>
+                        <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Server</label>
                         <input
                           type="text"
-                          className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg"
+                          className="w-full px-4 py-2.5 text-sm"
                           value={emailConfig.smtp_host}
                           onChange={(e) => setEmailConfig({...emailConfig, smtp_host: e.target.value})}
                         />
                       </div>
                       <div>
-                        <label className="block text-gray-300 mb-2">Port</label>
+                        <label className="block text-sm font-medium text-text-secondary mb-1.5">Port</label>
                         <input
                           type="number"
-                          className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg"
+                          className="w-full px-4 py-2.5 text-sm"
                           value={emailConfig.smtp_port}
                           onChange={(e) => setEmailConfig({...emailConfig, smtp_port: parseInt(e.target.value)})}
                         />
@@ -308,10 +321,10 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-gray-300 mb-2">SMTP Benutzer</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Benutzer</label>
                       <input
                         type="email"
-                        className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg"
+                        className="w-full px-4 py-2.5 text-sm"
                         value={emailConfig.smtp_user}
                         onChange={(e) => setEmailConfig({...emailConfig, smtp_user: e.target.value})}
                         placeholder="deine-email@gmail.com"
@@ -319,10 +332,10 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-gray-300 mb-2">SMTP Passwort</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Passwort</label>
                       <input
                         type="password"
-                        className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg"
+                        className="w-full px-4 py-2.5 text-sm"
                         value={emailConfig.smtp_password}
                         onChange={(e) => setEmailConfig({...emailConfig, smtp_password: e.target.value})}
                         placeholder="App-spezifisches Passwort"
@@ -330,10 +343,10 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-gray-300 mb-2">Absender E-Mail</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">Absender E-Mail</label>
                       <input
                         type="email"
-                        className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg"
+                        className="w-full px-4 py-2.5 text-sm"
                         value={emailConfig.smtp_from}
                         onChange={(e) => setEmailConfig({...emailConfig, smtp_from: e.target.value})}
                         placeholder={emailConfig.smtp_user || 'noreply@example.com'}
@@ -345,13 +358,13 @@ export default function SetupWizard() {
                 <div className="mt-8 flex justify-between">
                   <button
                     onClick={() => setStep(1)}
-                    className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                    className="px-6 py-2.5 bg-surface text-text-primary border border-border rounded-lg hover:bg-surface-hover font-medium text-sm transition-all duration-200"
                   >
                     ← Zurück
                   </button>
                   <button
                     onClick={() => setStep(3)}
-                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200"
                   >
                     Weiter →
                   </button>
@@ -361,38 +374,44 @@ export default function SetupWizard() {
 
             {/* Step 3: Review & Complete */}
             {step === 3 && (
-              <div>
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <Key className="w-6 h-6" />
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <h2 className="text-xl font-bold text-text-primary mb-6 flex items-center gap-3">
+                  <div className="p-2 bg-surface rounded-lg border border-border">
+                    <Key className="w-5 h-5 text-accent" />
+                  </div>
                   Setup abschließen
                 </h2>
 
                 <div className="space-y-4 mb-8">
-                  <div className="p-4 bg-gray-700 rounded-lg">
-                    <h3 className="font-semibold text-white mb-2">Administrator</h3>
-                    <p className="text-gray-300">Benutzername: {userData.username}</p>
-                    <p className="text-gray-300">E-Mail: {userData.email}</p>
+                  <div className="p-5 bg-surface border border-border rounded-lg">
+                    <h3 className="font-semibold text-text-primary mb-3">Administrator</h3>
+                    <div className="space-y-2 text-sm text-text-secondary">
+                        <p><span className="text-text-muted">Benutzername:</span> {userData.username}</p>
+                        <p><span className="text-text-muted">E-Mail:</span> {userData.email}</p>
+                    </div>
                   </div>
 
                   {emailConfig.enabled && (
-                    <div className="p-4 bg-gray-700 rounded-lg">
-                      <h3 className="font-semibold text-white mb-2">E-Mail</h3>
-                      <p className="text-gray-300">SMTP: {emailConfig.smtp_host}:{emailConfig.smtp_port}</p>
-                      <p className="text-gray-300">Benutzer: {emailConfig.smtp_user}</p>
+                    <div className="p-5 bg-surface border border-border rounded-lg">
+                      <h3 className="font-semibold text-text-primary mb-3">E-Mail</h3>
+                      <div className="space-y-2 text-sm text-text-secondary">
+                          <p><span className="text-text-muted">SMTP:</span> {emailConfig.smtp_host}:{emailConfig.smtp_port}</p>
+                          <p><span className="text-text-muted">Benutzer:</span> {emailConfig.smtp_user}</p>
+                      </div>
                     </div>
                   )}
 
-                  <div className="p-4 bg-blue-900/50 border border-blue-500 rounded-lg">
-                    <p className="text-blue-200">
-                      PowerDNS Server können nach der Installation über das Admin-Panel hinzugefügt werden.
+                  <div className="p-5 bg-accent/10 border border-accent/20 rounded-lg">
+                    <p className="text-accent text-sm">
+                      PowerDNS Server können bequem nach der Installation über das Admin-Panel im Browser hinzugefügt werden.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex justify-between">
+                <div className="mt-8 flex justify-between">
                   <button
                     onClick={() => setStep(2)}
-                    className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                    className="px-6 py-2.5 bg-surface text-text-primary border border-border rounded-lg hover:bg-surface-hover font-medium text-sm transition-all duration-200"
                     disabled={loading}
                   >
                     ← Zurück
@@ -400,9 +419,16 @@ export default function SetupWizard() {
                   <button
                     onClick={handleRegister}
                     disabled={loading}
-                    className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                    className="px-6 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 flex items-center gap-2"
                   >
-                    {loading ? 'Wird eingerichtet...' : '✓ Setup abschließen'}
+                    {loading ? (
+                        <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Wird eingerichtet...
+                        </>
+                    ) : (
+                        '✓ Setup abschließen'
+                    )}
                   </button>
                 </div>
               </div>
@@ -410,24 +436,26 @@ export default function SetupWizard() {
 
             {/* Step 4: Success */}
             {step === 4 && (
-              <div className="text-center py-8">
-                <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-                <h2 className="text-2xl font-bold text-white mb-4">
+              <div className="text-center py-12 animate-in zoom-in duration-500">
+                <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle className="w-10 h-10 text-green-500" />
+                </div>
+                <h2 className="text-2xl font-bold text-text-primary mb-4">
                   Setup erfolgreich!
                 </h2>
-                <p className="text-gray-300 mb-8">
-                  Dein DNS Manager ist bereit. Du wirst gleich zum Dashboard weitergeleitet...
+                <p className="text-text-muted text-sm mb-8 max-w-sm mx-auto">
+                  Dein DNS Manager ist bereit. Du wirst in wenigen Sekunden zum Dashboard weitergeleitet...
                 </p>
-                <div className="animate-pulse">
-                  <div className="w-16 h-1 bg-blue-500 mx-auto rounded-full"></div>
+                <div className="w-48 h-1.5 bg-surface border border-border mx-auto rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-accent to-purple-600 animate-pulse/2"></div>
                 </div>
               </div>
             )}
           </div>
 
           {/* Help text */}
-          <div className="mt-8 text-center text-gray-400">
-            <p>Brauchst du Hilfe? Schau in die <a href="https://github.com/29barra29/dns-manager/wiki" className="text-blue-400 hover:underline">Dokumentation</a></p>
+          <div className="mt-8 text-center text-xs text-text-muted">
+            <p>Brauchst du Hilfe? Schau in die <a href="https://github.com/29barra29/dns-manager/wiki" className="text-accent hover:text-accent-hover transition-colors">Dokumentation</a></p>
           </div>
         </div>
       </div>
