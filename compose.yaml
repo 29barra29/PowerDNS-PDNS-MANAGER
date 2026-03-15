@@ -44,8 +44,13 @@ services:
 
       # App Settings
       APP_NAME: ${APP_NAME:-DNS Manager}
-      APP_VERSION: "2.0.0"
+      APP_VERSION: "2.1.0"
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      
+      # Generierte Passwörter / Secrets aus .env durchreichen
+      ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
     depends_on:
       mariadb:
         condition: service_healthy
