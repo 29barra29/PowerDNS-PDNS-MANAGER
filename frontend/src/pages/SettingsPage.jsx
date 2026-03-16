@@ -1160,8 +1160,8 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-semibold text-text-primary mb-4">Über DNS Manager</h2>
                     <div className="space-y-3">
                         {[
-                            ['Version', '2.0.0'],
-                            ['Frontend', 'React + Tailwind CSS'],
+                            ['Version', '2.2.0'],
+                            ['Frontend', 'React + Vite + Tailwind CSS'],
                             ['Backend', 'Python FastAPI'],
                             ['Datenbank', 'MariaDB 11'],
                             ['DNS-Engine', 'PowerDNS Authoritative'],
