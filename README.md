@@ -6,7 +6,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.2.0-blue.svg)
 
 ---
 
@@ -14,7 +14,10 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 
 - 🖥️ **Modernes Dashboard** – Server-Status, Zonen-Übersicht auf einen Blick
 - 🌍 **Multi-Server Support** – Mehrere PowerDNS-Server von einem Panel verwalten
-- 📝 **DNS-Record Management** – Alle Record-Typen (A, AAAA, CNAME, MX, TXT, SRV, ...)
+- 📝 **DNS-Record Management** – Alle Record-Typen (A, AAAA, CNAME, MX, TXT, SRV, ...) erstellen, bearbeiten und löschen
+- 📋 **Zonen-Vorlagen (Templates)** – Eigene Vorlagen mit Standard-Nameservern, SOA-Einstellungen und DNS-Records definieren. Beim Erstellen neuer Zonen einfach eine Vorlage auswählen – alles wird automatisch übernommen
+- 📧 **E-Mail (SMTP)** – SMTP-Server konfigurieren für E-Mail-Versand (Benachrichtigungen, Passwort-Reset). Mit Verbindungstest und Test-E-Mail
+- ✅ **Eingabe-Validierung** – Domain-Namen, IP-Adressen und andere Felder werden automatisch auf Gültigkeit geprüft
 - 🔒 **DNSSEC** – Aktivieren/Deaktivieren direkt im Panel
 - 🔍 **Suche** – Server-übergreifende Suche nach Zonen und Records
 - 👥 **Benutzerverwaltung** – Rollenbasiert (Admin / Benutzer)
@@ -85,7 +88,7 @@ docker compose up -d
 
 | Komponente | Technologie |
 |---|---|
-| **Frontend** | React 19 + Tailwind CSS |
+| **Frontend** | React 19 + Vite |
 | **Backend** | Python FastAPI |
 | **Datenbank** | MariaDB 11 |
 | **Auth** | JWT (Bearer Token) |
@@ -120,11 +123,13 @@ dns-manager/
 │       │   ├── records.py    # Record-Verwaltung
 │       │   ├── dnssec.py     # DNSSEC
 │       │   ├── search.py     # Suche + Audit-Log
-│       │   └── settings.py   # Server-Konfiguration
+│       │   ├── settings.py   # Server-Konfiguration + SMTP
+│       │   └── templates.py  # Zonen-Vorlagen (CRUD)
 │       ├── schemas/
-│       │   └── dns.py        # Pydantic-Schemas
+│       │   └── dns.py        # Pydantic-Schemas + Validierung
 │       └── services/
-│           └── pdns_client.py # PowerDNS API Client
+│           ├── pdns_client.py # PowerDNS API Client
+│           └── email_service.py # SMTP E-Mail-Versand
 │
 └── frontend/             # React Frontend
     ├── package.json
@@ -137,13 +142,14 @@ dns-manager/
         │   └── Layout.jsx    # Sidebar + Navigation
         └── pages/
             ├── LoginPage.jsx
+            ├── SetupWizard.jsx
             ├── DashboardPage.jsx
-            ├── ZonesPage.jsx
-            ├── ZoneDetailPage.jsx
+            ├── ZonesPage.jsx      # + Vorlagen-Auswahl
+            ├── ZoneDetailPage.jsx # Records bearbeiten
             ├── SearchPage.jsx
             ├── AuditLogPage.jsx
             ├── UsersPage.jsx
-            └── SettingsPage.jsx
+            └── SettingsPage.jsx   # Server, Vorlagen, SMTP
 ```
 
 ---
@@ -177,7 +183,7 @@ docker compose up -d
 ```bash
 cd dns-manager
 git fetch --tags
-git checkout v2.1.0  # Oder gewünschte Version
+git checkout v2.2.0  # Oder gewünschte Version
 docker compose build --no-cache
 docker compose up -d
 ```
