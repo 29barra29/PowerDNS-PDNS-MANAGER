@@ -10,12 +10,65 @@ export default function ZonesPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [showCreate, setShowCreate] = useState(false)
-    const [createForm, setCreateForm] = useState({ name: '', kind: 'Native', nameservers: [], soa_edit_api: 'DEFAULT', enable_dnssec: false })
+    const defaultNS = (localStorage.getItem('defaultNameservers') || 'ns1.example.com.,ns2.example.com.').split(',').map(n => n.trim()).filter(Boolean)
+    const [createForm, setCreateForm] = useState({ 
+        name: '', 
+        kind: 'Native', 
+        nameservers: defaultNS.join(',\n'), 
+        soa_edit_api: 'DEFAULT', 
+        enable_dnssec: false 
+    })
     const [creating, setCreating] = useState(false)
     const user = JSON.parse(localStorage.getItem('user') || '{}')
     const isAdmin = user?.role === 'admin'
 
-    useEffect(() => { loadZones() }, [])
+    // Templates
+    const [templates, setTemplates] = useState([])
+    const [selectedTemplateId, setSelectedTemplateId] = useState('')
+
+    useEffect(() => { loadZones(); loadTemplates() }, [])
+
+    async function loadTemplates() {
+        try {
+            const data = await api.getTemplates()
+            const list = data.templates || []
+            setTemplates(list)
+            // Auto-select default template
+            const def = list.find(t => t.is_default)
+            if (def) {
+                setSelectedTemplateId(String(def.id))
+                applyTemplate(def)
+            }
+        } catch (err) { /* ignore */ }
+    }
+
+    function applyTemplate(t) {
+        if (!t) return
+        setCreateForm(prev => ({
+            ...prev,
+            nameservers: (t.nameservers || []).join(', '),
+            kind: t.kind || 'Native',
+            soa_edit_api: t.soa_edit_api || 'DEFAULT',
+            enable_dnssec: false,
+        }))
+    }
+
+    function handleTemplateChange(e) {
+        const id = e.target.value
+        setSelectedTemplateId(id)
+        if (id === '') {
+            // Keine Vorlage
+            setCreateForm(prev => ({
+                ...prev,
+                nameservers: defaultNS.join(',\n'),
+                kind: 'Native',
+                soa_edit_api: 'DEFAULT',
+            }))
+            return
+        }
+        const t = templates.find(t => String(t.id) === id)
+        if (t) applyTemplate(t)
+    }
 
     async function loadZones() {
         try {
@@ -42,13 +95,65 @@ export default function ZonesPage() {
     async function handleCreate(e) {
         e.preventDefault()
         setCreating(true)
+        setError('')
+        
+        // Validate domain name
+        const domainName = createForm.name.trim().toLowerCase().replace(/\.$/, '')
+        const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
+        if (!domainRegex.test(domainName)) {
+            setError(`"${createForm.name.trim()}" ist kein gültiger Domainname. Beispiel: meinedomain.de`)
+            setCreating(false)
+            return
+        }
+        
         try {
+            const rawNsArray = createForm.nameservers.split(/[\n,]+/).map(n => n.trim()).filter(Boolean)
+            const nsArray = rawNsArray.map(ns => ns.endsWith('.') ? ns : `${ns}.`);
+
             await api.createZone({
                 ...createForm,
-                nameservers: createForm.nameservers.length ? createForm.nameservers : ['ns3.gemtecgames.com.', 'ns1.gemtecgames.com.'],
+                nameservers: nsArray.length ? nsArray : defaultNS,
             })
+
+            // Apply template records if a template is selected
+            const selectedTemplate = templates.find(t => String(t.id) === selectedTemplateId)
+            if (selectedTemplate && (selectedTemplate.records || []).length > 0) {
+                const zoneName = createForm.name.trim().toLowerCase()
+                const zoneNameDot = zoneName.endsWith('.') ? zoneName : `${zoneName}.`
+                // Find the server that has this zone
+                const sData = await api.getServers()
+                const srv = (sData.servers || []).find(s => s.is_reachable)
+                if (srv) {
+                    for (const rec of selectedTemplate.records) {
+                        try {
+                            const recName = rec.name === '@' ? zoneNameDot : `${rec.name}.${zoneNameDot}`
+                            let content = rec.content
+                            // For MX with prio, prepend prio
+                            if (rec.type === 'MX' && rec.prio != null) {
+                                content = `${rec.prio} ${content}`
+                            }
+                            await api.createRecord(srv.name, zoneNameDot, {
+                                name: recName,
+                                type: rec.type,
+                                ttl: rec.ttl || selectedTemplate.default_ttl || 3600,
+                                records: [{ content, disabled: false }],
+                            })
+                        } catch (recErr) {
+                            console.warn('Template record failed:', recErr)
+                        }
+                    }
+                }
+            }
+
             setShowCreate(false)
-            setCreateForm({ name: '', kind: 'Native', nameservers: [], soa_edit_api: 'DEFAULT', enable_dnssec: false })
+            const defTemplate = templates.find(t => t.is_default)
+            setCreateForm({ 
+                name: '', 
+                kind: defTemplate?.kind || 'Native', 
+                nameservers: (defTemplate?.nameservers || defaultNS).join(',\n'), 
+                soa_edit_api: defTemplate?.soa_edit_api || 'DEFAULT', 
+                enable_dnssec: false 
+            })
             loadZones()
         } catch (err) {
             setError(err.message)
@@ -158,6 +263,29 @@ export default function ZonesPage() {
                     <div className="glass-card p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
                         <h2 className="text-lg font-bold text-text-primary mb-4">Neue Zone erstellen</h2>
                         <form onSubmit={handleCreate} className="space-y-4">
+                            {/* Template Selector */}
+                            {templates.length > 0 && (
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Vorlage</label>
+                                    <select
+                                        value={selectedTemplateId}
+                                        onChange={handleTemplateChange}
+                                        className="w-full px-3 py-2 text-sm"
+                                    >
+                                        <option value="">— Keine Vorlage —</option>
+                                        {templates.map(t => (
+                                            <option key={t.id} value={t.id}>
+                                                {t.name} {t.is_default ? '⭐' : ''} {(t.records || []).length > 0 ? `(${(t.records || []).length} Records)` : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-text-muted mt-1">
+                                        Wähle eine Vorlage, um Nameserver, SOA-Einstellungen und DNS-Einträge automatisch zu übernehmen.{' '}
+                                        <a href="/settings" className="text-accent hover:underline">Vorlagen verwalten</a>
+                                    </p>
+                                </div>
+                            )}
+
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">Domain</label>
                                 <input
@@ -167,9 +295,10 @@ export default function ZonesPage() {
                                     placeholder="example.com"
                                     className="w-full px-3 py-2 text-sm"
                                     required
+                                    autoFocus
                                 />
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">Typ</label>
                                     <select
@@ -181,6 +310,10 @@ export default function ZonesPage() {
                                         <option value="Master">Master</option>
                                         <option value="Slave">Slave</option>
                                     </select>
+                                    <p className="text-xs text-text-muted mt-1 leading-relaxed">
+                                        <strong className="text-text-secondary">Native:</strong> Standard für alleinstehende oder datenbank-replizierte Server.<br/>
+                                        <strong className="text-text-secondary">Master/Slave:</strong> Für traditionelle DNS Zonentransfers (AXFR).
+                                    </p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">SOA-EDIT-API</label>
@@ -193,7 +326,23 @@ export default function ZonesPage() {
                                         <option value="INCEPTION-INCREMENT">INCEPTION-INCREMENT</option>
                                         <option value="EPOCH">EPOCH</option>
                                     </select>
+                                    <p className="text-xs text-text-muted mt-1 leading-relaxed">
+                                        Wie soll die Seriennummer (Serial) bei Änderungen hochgezählt werden?<br/>
+                                        <strong className="text-text-secondary">DEFAULT:</strong> Meist im Format YYYYMMDD01 – gut für die meisten Setups.<br/>
+                                        <strong className="text-text-secondary">INCEPTION-INCREMENT:</strong> Empfohlen wenn du <strong>DNSSEC</strong> nutzt.<br/>
+                                        <strong className="text-text-secondary">EPOCH:</strong> Unix-Zeitstempel als Serial – nützlich für sehr häufige Updates.
+                                    </p>
                                 </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">Nameserver</label>
+                                <textarea
+                                    value={createForm.nameservers}
+                                    onChange={(e) => setCreateForm({ ...createForm, nameservers: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm min-h-[60px]"
+                                    placeholder="ns1.example.com., ns2.example.com."
+                                ></textarea>
+                                <p className="text-xs text-text-muted mt-1">Getrennt durch Komma oder Zeilenumbruch. <a href="/settings" className="text-accent hover:underline">Standard in Einstellungen änderbar</a>.</p>
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input

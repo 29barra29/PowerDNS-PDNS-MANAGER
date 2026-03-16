@@ -253,3 +253,98 @@ async def test_connection(
             "success": False,
             "error": f"Unbekannter Fehler: {str(e)}",
         }
+
+
+# ========================
+# SMTP Settings
+# ========================
+class SmtpSettings(BaseModel):
+    host: str = Field(default="", description="SMTP Server Hostname")
+    port: int = Field(default=587, description="SMTP Port")
+    username: str = Field(default="", description="SMTP Benutzername")
+    password: str = Field(default="", description="SMTP Passwort")
+    from_email: str = Field(default="", description="Absender E-Mail")
+    from_name: str = Field(default="DNS Manager", description="Absender Name")
+    encryption: str = Field(default="starttls", description="Verschlüsselung: none, starttls, ssl")
+    enabled: bool = Field(default=False, description="SMTP aktiviert")
+
+
+@router.get("/smtp")
+async def get_smtp_settings(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current SMTP configuration."""
+    from app.services.email_service import get_smtp_settings as _get
+    settings = await _get(db)
+    # Mask password for security
+    if settings.get("password"):
+        settings["password_set"] = True
+        settings["password"] = "••••••••"
+    else:
+        settings["password_set"] = False
+    return settings
+
+
+@router.put("/smtp")
+async def update_smtp_settings(
+    data: SmtpSettings,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update SMTP configuration."""
+    from app.services.email_service import save_smtp_settings, get_smtp_settings as _get
+    
+    save_data = data.model_dump()
+    
+    # If password is masked (not changed), keep the old one
+    if save_data["password"] == "••••••••":
+        old = await _get(db)
+        save_data["password"] = old.get("password", "")
+    
+    save_data["enabled"] = str(save_data["enabled"]).lower()
+    await save_smtp_settings(db, save_data)
+    
+    return {"message": "SMTP-Einstellungen gespeichert"}
+
+
+@router.post("/smtp/test")
+async def test_smtp(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test the current SMTP connection."""
+    from app.services.email_service import get_smtp_settings as _get, test_smtp_connection
+    
+    settings = await _get(db)
+    result = await test_smtp_connection(settings)
+    return result
+
+
+class TestEmailRequest(BaseModel):
+    to_email: str = Field(..., description="E-Mail-Adresse für Test")
+
+
+@router.post("/smtp/test-email")
+async def send_test_email(
+    data: TestEmailRequest,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test email to verify SMTP works end-to-end."""
+    from app.services.email_service import get_smtp_settings as _get, send_email
+    
+    settings = await _get(db)
+    
+    try:
+        send_email(
+            settings,
+            data.to_email,
+            "DNS Manager – Test-E-Mail",
+            "<h2>✅ Test erfolgreich!</h2><p>Diese E-Mail wurde vom DNS Manager gesendet.</p><p>Dein SMTP ist korrekt konfiguriert.</p>",
+            "Test erfolgreich! Diese E-Mail wurde vom DNS Manager gesendet."
+        )
+        return {"success": True, "message": f"Test-E-Mail an {data.to_email} gesendet!"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+

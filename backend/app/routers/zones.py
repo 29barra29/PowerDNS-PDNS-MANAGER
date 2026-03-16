@@ -131,6 +131,45 @@ async def create_zone(zone_data: ZoneCreate, db: AsyncSession = Depends(get_db))
                 result = await client.create_zone(payload)
                 created = True
                 
+                # Fetch zone details to get current SOA and update it correctly
+                try:
+                    from datetime import datetime as dt
+                    
+                    zone_details = await client.get_zone(zone_name)
+                    soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr["type"] == "SOA"), None)
+                    
+                    if soa_rrset and len(zone_data.nameservers) > 0:
+                        # Use first nameserver as primary NS in SOA
+                        primary_ns = zone_data.nameservers[0]
+                        if not primary_ns.endswith('.'):
+                            primary_ns = primary_ns + '.'
+                        
+                        # Use second NS as rname if available, else hostmaster.zone.
+                        if len(zone_data.nameservers) > 1:
+                            rname = zone_data.nameservers[1]
+                            if not rname.endswith('.'):
+                                rname = rname + '.'
+                        else:
+                            clean_zone = zone_name.rstrip('.')
+                            rname = f"hostmaster.{clean_zone}."
+                        
+                        # Generate a proper serial in YYYYMMDD01 format
+                        # Don't use the auto-generated one since PowerDNS may set it to 0
+                        serial = dt.now().strftime("%Y%m%d") + "01"
+                        
+                        # Build SOA: primary_ns rname serial refresh retry expire minimum
+                        new_soa_content = f"{primary_ns} {rname} {serial} 10800 3600 604800 3600"
+                        
+                        await client.add_record(
+                            zone_id=zone_name,
+                            name=zone_name,
+                            record_type="SOA",
+                            content=[new_soa_content],
+                            ttl=3600
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to update default SOA for {zone_name}: {e}")
+
                 # Enable DNSSEC if requested
                 if zone_data.enable_dnssec:
                     try:

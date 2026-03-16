@@ -31,11 +31,25 @@ class ZoneCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_zone_name(cls, v: str) -> str:
-        """Ensure zone name ends with a dot."""
-        v = v.strip().lower()
-        if not v.endswith("."):
-            v += "."
-        return v
+        """Ensure zone name is a valid domain and ends with a dot."""
+        v = v.strip().lower().rstrip(".")
+        
+        # Must contain at least one dot (e.g. example.com, not just "test")
+        if "." not in v:
+            raise ValueError(
+                f"'{v}' ist kein gültiger Domainname. "
+                "Ein Domainname muss mindestens eine TLD haben (z.B. example.com, test.de)"
+            )
+        
+        # Check for valid DNS characters
+        domain_regex = re.compile(r'^([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$')
+        if not domain_regex.match(v):
+            raise ValueError(
+                f"'{v}' enthält ungültige Zeichen oder ist kein gültiger Domainname. "
+                "Erlaubt sind: Buchstaben (a-z), Zahlen (0-9) und Bindestriche (-)"
+            )
+        
+        return v + "."
 
     @field_validator("nameservers")
     @classmethod
@@ -127,6 +141,29 @@ class RecordDelete(BaseModel):
     """Schema for deleting a record set."""
     name: str
     type: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v.endswith("."):
+            v += "."
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        return v.strip().upper()
+
+
+class RecordUpdate(BaseModel):
+    """Schema for updating a specific record."""
+    name: str = Field(..., description="Fully qualified record name")
+    type: str = Field(..., description="Record type")
+    ttl: int = Field(default=3600, ge=60, le=604800, description="TTL in seconds")
+    old_content: str = Field(..., description="Previous content to identify the record")
+    new_content: str = Field(..., description="New record content")
+    disabled: bool = Field(default=False)
 
     @field_validator("name")
     @classmethod

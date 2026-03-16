@@ -80,3 +80,13 @@ class ZoneTemplate(Base):
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
+
+class SystemSetting(Base):
+    """Key-value store for system-wide settings like SMTP configuration."""
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), unique=True, nullable=False, index=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+

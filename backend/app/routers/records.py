@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
 from app.schemas.dns import (
-    RecordCreate, RecordDelete, BulkRecordUpdate, MessageResponse,
+    RecordCreate, RecordDelete, BulkRecordUpdate, MessageResponse, RecordUpdate
 )
 from app.models.models import AuditLog
 
@@ -160,6 +160,76 @@ async def delete_record(
             status="error", error_message=e.detail,
         )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.put("/{server_name}/{zone_id:path}", response_model=MessageResponse)
+async def update_record(
+    server_name: str,
+    zone_id: str,
+    update: RecordUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a specific record's content or TTL."""
+    try:
+        client = pdns_manager.get_client(server_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    
+    try:
+        zone = await client.get_zone(zone_id)
+        existing_records = []
+        for rr in zone.get("rrsets", []):
+            if rr.get("name") == update.name and rr.get("type") == update.type:
+                existing_records = rr.get("records", [])
+                break
+                
+        # Find the record to update
+        updated_records = []
+        found = False
+        for ex in existing_records:
+            if ex.get("content") == update.old_content:
+                updated_records.append({"content": update.new_content, "disabled": update.disabled})
+                found = True
+            else:
+                updated_records.append({"content": ex.get("content"), "disabled": ex.get("disabled", False)})
+                
+        if update.type == "SOA" and existing_records and not found:
+            # Für SOA überschreiben wir es einfach, da es nur einen geben sollte
+            updated_records = [{"content": update.new_content, "disabled": update.disabled}]
+            found = True
+
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Original record content not found in {update.name}")
+
+        rrsets = [
+            {
+                "name": update.name,
+                "type": update.type,
+                "ttl": update.ttl,
+                "changetype": "REPLACE",
+                "records": updated_records,
+            }
+        ]
+        
+        await client.update_records(zone_id, rrsets)
+        
+        await _log_action(db, "UPDATE", update.name, server_name, {
+            "zone": zone_id,
+            "type": update.type,
+            "old": update.old_content,
+            "new": update.new_content,
+        })
+        
+        return MessageResponse(
+            message=f"Record '{update.name}' ({update.type}) updated in zone '{zone_id}'"
+        )
+    except PowerDNSAPIError as e:
+        await _log_action(
+            db, "UPDATE", update.name, server_name,
+            status="error", error_message=e.detail,
+        )
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
 
 
 @router.post("/{server_name}/{zone_id:path}/bulk", response_model=MessageResponse)

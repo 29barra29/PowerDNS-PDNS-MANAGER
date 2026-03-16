@@ -4,47 +4,64 @@ import { ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, Shield } from 'l
 import api from '../api'
 
 const RECORD_TYPES = {
-    A: { label: 'A – IPv4', fields: [{ id: 'ipv4', label: 'IPv4-Adresse', placeholder: '93.184.216.34' }], build: f => f.ipv4 },
-    AAAA: { label: 'AAAA – IPv6', fields: [{ id: 'ipv6', label: 'IPv6-Adresse', placeholder: '2001:db8::1' }], build: f => f.ipv6 },
-    CNAME: { label: 'CNAME – Weiterleitung', fields: [{ id: 'target', label: 'Ziel-Domain', placeholder: 'example.com.' }], build: f => f.target.endsWith('.') ? f.target : f.target + '.' },
+    A: { label: 'A – IPv4', fields: [{ id: 'ipv4', label: 'IPv4-Adresse', placeholder: '93.184.216.34' }], build: f => f.ipv4, parse: c => ({ ipv4: c }) },
+    AAAA: { label: 'AAAA – IPv6', fields: [{ id: 'ipv6', label: 'IPv6-Adresse', placeholder: '2001:db8::1' }], build: f => f.ipv6, parse: c => ({ ipv6: c }) },
+    CNAME: { label: 'CNAME – Weiterleitung', fields: [{ id: 'target', label: 'Ziel-Domain', placeholder: 'example.com.' }], build: f => f.target.endsWith('.') ? f.target : f.target + '.', parse: c => ({ target: c }) },
     MX: {
         label: 'MX – Mailserver', fields: [
             { id: 'priority', label: 'Priorität', placeholder: '10', type: 'number' },
             { id: 'mailserver', label: 'Mail-Server', placeholder: 'mail.example.com.' },
-        ], build: f => `${f.priority} ${f.mailserver.endsWith('.') ? f.mailserver : f.mailserver + '.'}`
+        ], build: f => `${f.priority} ${f.mailserver.endsWith('.') ? f.mailserver : f.mailserver + '.'}`,
+        parse: c => { const s = c.split(' '); return { priority: s[0], mailserver: s[1] } }
     },
-    TXT: { label: 'TXT – Text', fields: [{ id: 'text', label: 'Text', placeholder: 'v=spf1 ...', textarea: true }], build: f => f.text.startsWith('"') ? f.text : `"${f.text}"` },
-    NS: { label: 'NS – Nameserver', fields: [{ id: 'ns', label: 'Nameserver', placeholder: 'ns1.example.com.' }], build: f => f.ns.endsWith('.') ? f.ns : f.ns + '.' },
+    TXT: { label: 'TXT – Text', fields: [{ id: 'text', label: 'Text', placeholder: 'v=spf1 ...', textarea: true }], build: f => f.text.startsWith('"') ? f.text : `"${f.text}"`, parse: c => { let t = c; if (t.startsWith('"') && t.endsWith('"')) t = t.substring(1, t.length - 1); return { text: t } } },
+    NS: { label: 'NS – Nameserver', fields: [{ id: 'ns', label: 'Nameserver', placeholder: 'ns1.example.com.' }], build: f => f.ns.endsWith('.') ? f.ns : f.ns + '.', parse: c => ({ ns: c }) },
+    SOA: {
+        label: 'SOA – Start of Authority', fields: [
+            { id: 'mname', label: 'Primary NS', placeholder: 'ns1.example.com.' },
+            { id: 'rname', label: 'Hostmaster Email', placeholder: 'hostmaster.example.com.' },
+            { id: 'serial', label: 'Serial', type: 'number' },
+            { id: 'refresh', label: 'Refresh', type: 'number' },
+            { id: 'retry', label: 'Retry', type: 'number' },
+            { id: 'expire', label: 'Expire', type: 'number' },
+            { id: 'minimum', label: 'Minimum TTL', type: 'number' },
+        ], build: f => `${f.mname.endsWith('.') ? f.mname : f.mname + '.'} ${f.rname.endsWith('.') ? f.rname : f.rname + '.'} ${f.serial} ${f.refresh} ${f.retry} ${f.expire} ${f.minimum}`,
+        parse: c => { const s = c.split(' '); return { mname: s[0], rname: s[1], serial: s[2], refresh: s[3], retry: s[4], expire: s[5], minimum: s[6] } }
+    },
     SRV: {
         label: 'SRV – Dienst', fields: [
             { id: 'pri', label: 'Priorität', placeholder: '10', type: 'number' },
             { id: 'weight', label: 'Gewicht', placeholder: '5', type: 'number' },
             { id: 'port', label: 'Port', placeholder: '443', type: 'number' },
             { id: 'target', label: 'Ziel', placeholder: 'server.example.com.' },
-        ], build: f => `${f.pri} ${f.weight} ${f.port} ${f.target.endsWith('.') ? f.target : f.target + '.'}`
+        ], build: f => `${f.pri} ${f.weight} ${f.port} ${f.target.endsWith('.') ? f.target : f.target + '.'}`,
+        parse: c => { const s = c.split(' '); return { pri: s[0], weight: s[1], port: s[2], target: s[3] } }
     },
     CAA: {
         label: 'CAA – Zertifikat', fields: [
             { id: 'flag', label: 'Flag', placeholder: '0', type: 'number' },
             { id: 'tag', label: 'Tag', placeholder: 'issue', select: ['issue', 'issuewild', 'iodef'] },
             { id: 'val', label: 'Wert', placeholder: 'letsencrypt.org' },
-        ], build: f => `${f.flag} ${f.tag} "${f.val}"`
+        ], build: f => `${f.flag} ${f.tag} "${f.val}"`,
+        parse: c => { const s = c.split(' '); return { flag: s[0], tag: s[1], val: s.slice(2).join(' ').replace(/"/g, '') } }
     },
-    PTR: { label: 'PTR – Reverse', fields: [{ id: 'host', label: 'Hostname', placeholder: 'host.example.com.' }], build: f => f.host.endsWith('.') ? f.host : f.host + '.' },
+    PTR: { label: 'PTR – Reverse', fields: [{ id: 'host', label: 'Hostname', placeholder: 'host.example.com.' }], build: f => f.host.endsWith('.') ? f.host : f.host + '.', parse: c => ({ host: c }) },
     TLSA: {
         label: 'TLSA – DANE', fields: [
             { id: 'usage', label: 'Usage', placeholder: '3', type: 'number' },
             { id: 'sel', label: 'Selector', placeholder: '1', type: 'number' },
             { id: 'match', label: 'Matching', placeholder: '1', type: 'number' },
             { id: 'hash', label: 'Hash', placeholder: 'abc123...' },
-        ], build: f => `${f.usage} ${f.sel} ${f.match} ${f.hash}`
+        ], build: f => `${f.usage} ${f.sel} ${f.match} ${f.hash}`,
+        parse: c => { const s = c.split(' '); return { usage: s[0], sel: s[1], match: s[2], hash: s[3] } }
     },
     SSHFP: {
         label: 'SSHFP – SSH', fields: [
             { id: 'algo', label: 'Algo', placeholder: '4', type: 'number' },
             { id: 'fptype', label: 'Hash-Typ', placeholder: '2', type: 'number' },
             { id: 'fp', label: 'Fingerprint', placeholder: 'abc...' },
-        ], build: f => `${f.algo} ${f.fptype} ${f.fp}`
+        ], build: f => `${f.algo} ${f.fptype} ${f.fp}`,
+        parse: c => { const s = c.split(' '); return { algo: s[0], fptype: s[1], fp: s[2] } }
     },
 }
 
@@ -56,6 +73,8 @@ export default function ZoneDetailPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [showAdd, setShowAdd] = useState(false)
+    const [isEdit, setIsEdit] = useState(false)
+    const [oldContent, setOldContent] = useState('')
     const [addType, setAddType] = useState('A')
     const [addName, setAddName] = useState('@')
     const [addTTL, setAddTTL] = useState('3600')
@@ -80,9 +99,34 @@ export default function ZoneDetailPage() {
     }
 
     function resolveName(name) {
-        if (name === '@') return zoneName
-        if (!name.includes(zoneName)) return `${name}.${zoneName}`
-        return name
+        let fqdn;
+        if (name === '@') fqdn = zoneName;
+        else if (!name.includes(zoneName)) fqdn = `${name}.${zoneName}`;
+        else fqdn = name;
+        // PowerDNS requires trailing dot for FQDN
+        if (!fqdn.endsWith('.')) fqdn = fqdn + '.';
+        return fqdn;
+    }
+
+    function openEdit(record) {
+        setIsEdit(true);
+        setAddType(record.type);
+        setOldContent(record.content);
+        setAddTTL(record.ttl.toString());
+        
+        let name = record.name.replace(/\.$/, '');
+        if (name === zoneName) name = '@';
+        else if (name.endsWith(`.${zoneName}`)) name = name.substring(0, name.length - zoneName.length - 1);
+        setAddName(name);
+        
+        const def = RECORD_TYPES[record.type] || { parse: () => ({}) };
+        try {
+            setDynFields(def.parse ? def.parse(record.content) : {});
+        } catch (e) {
+            console.warn('Could not parse record content:', e);
+            setDynFields({});
+        }
+        setShowAdd(true);
     }
 
     async function handleAddRecord(e) {
@@ -90,11 +134,14 @@ export default function ZoneDetailPage() {
         setSaving(true)
         setError('')
         const def = RECORD_TYPES[addType]
-        if (!def) return
+        if (!def) {
+            setSaving(false);
+            return;
+        }
 
         // Validate fields
         for (const f of def.fields) {
-            if (!dynFields[f.id]?.trim()) {
+            if (dynFields[f.id] === undefined || dynFields[f.id].toString().trim() === '') {
                 setError(`Bitte "${f.label}" ausfüllen`)
                 setSaving(false)
                 return
@@ -105,15 +152,27 @@ export default function ZoneDetailPage() {
         const fqdn = resolveName(addName)
 
         try {
-            await api.createRecord(server, zoneId, {
-                name: fqdn,
-                type: addType,
-                ttl: parseInt(addTTL),
-                records: [{ content, disabled: false }],
-            })
+            if (isEdit) {
+                await api.updateRecord(server, zoneId, {
+                    name: fqdn,
+                    type: addType,
+                    ttl: parseInt(addTTL),
+                    old_content: oldContent,
+                    new_content: content,
+                    disabled: false
+                });
+            } else {
+                await api.createRecord(server, zoneId, {
+                    name: fqdn,
+                    type: addType,
+                    ttl: parseInt(addTTL),
+                    records: [{ content, disabled: false }],
+                });
+            }
             setShowAdd(false)
             setDynFields({})
             setAddName('@')
+            setIsEdit(false)
             loadZone()
         } catch (err) {
             setError(err.message)
@@ -160,7 +219,7 @@ export default function ZoneDetailPage() {
                     </div>
                 </div>
                 <button
-                    onClick={() => { setShowAdd(true); setAddType('A'); setDynFields({}) }}
+                    onClick={() => { setShowAdd(true); setIsEdit(false); setAddType('A'); setAddName('@'); setAddTTL('3600'); setDynFields({}) }}
                     className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
                 >
                     <Plus className="w-4 h-4" /> Eintrag hinzufügen
@@ -198,6 +257,13 @@ export default function ZoneDetailPage() {
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{r.content}</td>
                                     <td className="p-3 text-text-muted text-xs">{r.ttl}</td>
                                     <td className="p-3 text-right">
+                                        <button
+                                            onClick={() => openEdit(r)}
+                                            className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1"
+                                            title="Bearbeiten"
+                                        >
+                                            <Pencil className="w-3.5 h-3.5" />
+                                        </button>
                                         {type !== 'SOA' && type !== 'NS' && (
                                             <button
                                                 onClick={() => handleDelete(r.name, r.type)}
@@ -219,20 +285,20 @@ export default function ZoneDetailPage() {
             {showAdd && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
                     <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-lg font-bold text-text-primary mb-4">DNS-Eintrag hinzufügen</h2>
+                        <h2 className="text-lg font-bold text-text-primary mb-4">{isEdit ? 'DNS-Eintrag bearbeiten' : 'DNS-Eintrag hinzufügen'}</h2>
                         <form onSubmit={handleAddRecord} className="space-y-4">
                             {/* Type, Name, TTL */}
                             <div className="grid grid-cols-3 gap-4">
                                 <div>
                                     <label className="block text-xs font-medium text-text-secondary mb-1">Eintragstyp</label>
-                                    <select value={addType} onChange={e => { setAddType(e.target.value); setDynFields({}) }} className="w-full px-3 py-2 text-sm">
+                                    <select value={addType} disabled={isEdit} onChange={e => { setAddType(e.target.value); setDynFields({}) }} className="w-full px-3 py-2 text-sm disabled:opacity-50">
                                         {Object.entries(RECORD_TYPES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-medium text-text-secondary mb-1">Name</label>
                                     <div className="flex items-center gap-1">
-                                        <input value={addName} onChange={e => setAddName(e.target.value)} className="flex-1 px-3 py-2 text-sm" placeholder="@" />
+                                        <input value={addName} disabled={isEdit} onChange={e => setAddName(e.target.value)} className="flex-1 px-3 py-2 text-sm disabled:opacity-50" placeholder="@" />
                                         <span className="text-xs text-text-muted whitespace-nowrap">.{zoneName}</span>
                                     </div>
                                     <p className="text-xs text-text-muted mt-0.5">@ = Hauptdomain</p>

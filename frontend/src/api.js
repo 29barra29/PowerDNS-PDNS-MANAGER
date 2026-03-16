@@ -106,6 +106,7 @@ class APIClient {
     // ========== Records ==========
     listRecords(server, zone) { return this.request('GET', `/records/${server}/${zone}`); }
     createRecord(server, zone, data) { return this.request('POST', `/records/${server}/${zone}`, data); }
+    updateRecord(server, zone, data) { return this.request('PUT', `/records/${server}/${zone}`, data); }
     deleteRecord(server, zone, data) { return this.request('DELETE', `/records/${server}/${zone}/delete`, data); }
 
     // ========== DNSSEC ==========
@@ -119,12 +120,24 @@ class APIClient {
     // ========== Audit Log ==========
     getAuditLog(limit = 100) { return this.request('GET', `/audit-log?limit=${limit}`); }
 
+    // ========== Templates ==========
+    getTemplates() { return this.request('GET', '/templates'); }
+    createTemplate(data) { return this.request('POST', '/templates', data); }
+    updateTemplate(id, data) { return this.request('PUT', `/templates/${id}`, data); }
+    deleteTemplate(id) { return this.request('DELETE', `/templates/${id}`); }
+
     // ========== Settings / Server Config ==========
     getServerConfigs() { return this.request('GET', '/settings/servers'); }
     addServerConfig(data) { return this.request('POST', '/settings/servers', data); }
     updateServerConfig(id, data) { return this.request('PUT', `/settings/servers/${id}`, data); }
     deleteServerConfig(id) { return this.request('DELETE', `/settings/servers/${id}`); }
     testConnection(data) { return this.request('POST', '/settings/servers/test', data); }
+
+    // ========== SMTP ==========
+    getSmtpSettings() { return this.request('GET', '/settings/smtp'); }
+    updateSmtpSettings(data) { return this.request('PUT', '/settings/smtp', data); }
+    testSmtpConnection() { return this.request('POST', '/settings/smtp/test'); }
+    sendTestEmail(data) { return this.request('POST', '/settings/smtp/test-email', data); }
 }
 const api = new APIClient();
 export default api;

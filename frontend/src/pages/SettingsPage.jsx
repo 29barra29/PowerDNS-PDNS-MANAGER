@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code, Sliders, Copy, Star, Send } from 'lucide-react'
 import api from '../api'
 
 export default function SettingsPage() {
@@ -36,14 +36,33 @@ export default function SettingsPage() {
     const [testing, setTesting] = useState(false)
     const [testResult, setTestResult] = useState(null)
 
+    // Templates
+    const [templates, setTemplates] = useState([])
+    const [loadingTemplates, setLoadingTemplates] = useState(false)
+    const [showTemplateForm, setShowTemplateForm] = useState(false)
+    const [editTemplateId, setEditTemplateId] = useState(null)
+    const emptyTemplate = {
+        name: '', description: '', nameservers: '',
+        kind: 'Native', soa_edit_api: 'DEFAULT', default_ttl: 3600,
+        records: [], is_default: false,
+    }
+    const [templateForm, setTemplateForm] = useState({ ...emptyTemplate })
+    const [savingTemplate, setSavingTemplate] = useState(false)
+    const emptyRecord = { name: '@', type: 'A', content: '', ttl: 3600, prio: null }
+    const [newRecord, setNewRecord] = useState({ ...emptyRecord })
+
     useEffect(() => {
         loadProfile()
         loadServers()
+        loadTemplates()
     }, [])
 
     useEffect(() => {
         if (activeTab === 'updates' && commits.length === 0) {
             loadCommits()
+        }
+        if (activeTab === 'smtp') {
+            loadSmtp()
         }
     }, [activeTab])
 
@@ -142,6 +161,159 @@ export default function SettingsPage() {
         }
     }
 
+    function handleSaveDefaults(e) {
+        // kept for backwards compat, no-op now
+    }
+
+    async function loadTemplates() {
+        setLoadingTemplates(true)
+        try {
+            const data = await api.getTemplates()
+            setTemplates(data.templates || [])
+        } catch (err) { /* ignore */ }
+        finally { setLoadingTemplates(false) }
+    }
+
+    function openTemplateAdd() {
+        setEditTemplateId(null)
+        setTemplateForm({ ...emptyTemplate })
+        setNewRecord({ ...emptyRecord })
+        setShowTemplateForm(true)
+    }
+
+    function openTemplateEdit(t) {
+        setEditTemplateId(t.id)
+        setTemplateForm({
+            name: t.name,
+            description: t.description || '',
+            nameservers: (t.nameservers || []).join(', '),
+            kind: t.kind || 'Native',
+            soa_edit_api: t.soa_edit_api || 'DEFAULT',
+            default_ttl: t.default_ttl || 3600,
+            records: t.records || [],
+            is_default: t.is_default || false,
+        })
+        setNewRecord({ ...emptyRecord })
+        setShowTemplateForm(true)
+    }
+
+    function addRecordToTemplate() {
+        if (!newRecord.content.trim()) return
+        const rec = { ...newRecord }
+        if (rec.type !== 'MX' && rec.type !== 'SRV') rec.prio = null
+        setTemplateForm({
+            ...templateForm,
+            records: [...templateForm.records, rec],
+        })
+        setNewRecord({ ...emptyRecord })
+    }
+
+    function removeRecordFromTemplate(idx) {
+        setTemplateForm({
+            ...templateForm,
+            records: templateForm.records.filter((_, i) => i !== idx),
+        })
+    }
+
+    async function handleSaveTemplate(e) {
+        e.preventDefault()
+        setSavingTemplate(true)
+        setError('')
+        try {
+            const nsArray = templateForm.nameservers.split(/[\n,]+/).map(n => n.trim()).filter(Boolean)
+            const payload = {
+                name: templateForm.name,
+                description: templateForm.description,
+                nameservers: nsArray,
+                kind: templateForm.kind,
+                soa_edit_api: templateForm.soa_edit_api,
+                default_ttl: parseInt(templateForm.default_ttl),
+                records: templateForm.records,
+                is_default: templateForm.is_default,
+            }
+            if (editTemplateId) {
+                await api.updateTemplate(editTemplateId, payload)
+                setSuccess('Vorlage aktualisiert!')
+            } else {
+                await api.createTemplate(payload)
+                setSuccess('Vorlage erstellt!')
+            }
+            setShowTemplateForm(false)
+            loadTemplates()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setSavingTemplate(false)
+        }
+    }
+
+    async function handleDeleteTemplate(id, name) {
+        if (!confirm(`Vorlage "${name}" wirklich löschen?`)) return
+        try {
+            await api.deleteTemplate(id)
+            setSuccess(`Vorlage "${name}" gelöscht`)
+            loadTemplates()
+        } catch (err) { setError(err.message) }
+    }
+
+    // ===== SMTP =====
+    const [smtpForm, setSmtpForm] = useState({
+        host: '', port: 587, username: '', password: '', from_email: '', from_name: 'DNS Manager', encryption: 'starttls', enabled: false
+    })
+    const [loadingSmtp, setLoadingSmtp] = useState(false)
+    const [savingSmtp, setSavingSmtp] = useState(false)
+    const [testingSmtp, setTestingSmtp] = useState(false)
+    const [smtpTestResult, setSmtpTestResult] = useState(null)
+    const [showSmtpPassword, setShowSmtpPassword] = useState(false)
+    const [testEmailAddr, setTestEmailAddr] = useState('')
+    const [sendingTest, setSendingTest] = useState(false)
+
+    async function loadSmtp() {
+        setLoadingSmtp(true)
+        try {
+            const data = await api.getSmtpSettings()
+            setSmtpForm({
+                host: data.host || '', port: data.port || 587, username: data.username || '',
+                password: data.password || '', from_email: data.from_email || '',
+                from_name: data.from_name || 'DNS Manager', encryption: data.encryption || 'starttls',
+                enabled: data.enabled || false,
+            })
+        } catch (err) { /* ignore */ }
+        finally { setLoadingSmtp(false) }
+    }
+
+    async function handleSaveSmtp(e) {
+        e.preventDefault()
+        setSavingSmtp(true)
+        setError('')
+        try {
+            await api.updateSmtpSettings(smtpForm)
+            setSuccess('SMTP-Einstellungen gespeichert!')
+        } catch (err) { setError(err.message) }
+        finally { setSavingSmtp(false) }
+    }
+
+    async function handleTestSmtp() {
+        setTestingSmtp(true)
+        setSmtpTestResult(null)
+        try {
+            const result = await api.testSmtpConnection()
+            setSmtpTestResult(result)
+        } catch (err) { setSmtpTestResult({ success: false, error: err.message }) }
+        finally { setTestingSmtp(false) }
+    }
+
+    async function handleSendTestEmail() {
+        if (!testEmailAddr.trim()) return
+        setSendingTest(true)
+        try {
+            const result = await api.sendTestEmail({ to_email: testEmailAddr })
+            if (result.success) setSuccess(result.message)
+            else setError(result.error)
+        } catch (err) { setError(err.message) }
+        finally { setSendingTest(false) }
+    }
+
     // ===== Server functions =====
     function openAdd() {
         setEditId(null)
@@ -230,8 +402,10 @@ export default function SettingsPage() {
 
     const tabs = [
         { id: 'profile', label: 'Profil', icon: UserCog },
-        { id: 'updates', label: 'Updates', icon: Download },
         { id: 'servers', label: 'DNS-Server', icon: Server },
+        { id: 'templates', label: 'Vorlagen', icon: Copy },
+        { id: 'smtp', label: 'E-Mail (SMTP)', icon: Mail },
+        { id: 'updates', label: 'Updates', icon: Download },
         { id: 'about', label: 'Über', icon: Database },
     ]
 
@@ -451,6 +625,140 @@ export default function SettingsPage() {
                 </div>
             )}
 
+            {/* =================== SMTP TAB =================== */}
+            {activeTab === 'smtp' && (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
+                                <Mail className="w-5 h-5 text-accent-light" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">E-Mail-Versand (SMTP)</h2>
+                                <p className="text-sm text-text-muted">Konfiguriere den SMTP-Server für E-Mail-Versand (z.B. Benachrichtigungen, Passwort-Reset)</p>
+                            </div>
+                        </div>
+
+                        {loadingSmtp ? (
+                            <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 text-accent animate-spin" /></div>
+                        ) : (
+                            <form onSubmit={handleSaveSmtp} className="space-y-4">
+                                {/* Aktiviert */}
+                                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-bg-hover transition-colors">
+                                    <input type="checkbox" checked={smtpForm.enabled} onChange={e => setSmtpForm({ ...smtpForm, enabled: e.target.checked })} className="w-4 h-4 rounded" />
+                                    <div>
+                                        <span className="text-sm font-medium text-text-primary">SMTP aktivieren</span>
+                                        <p className="text-xs text-text-muted">E-Mails können nur gesendet werden, wenn SMTP aktiviert ist</p>
+                                    </div>
+                                </label>
+
+                                {/* Server & Port */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="md:col-span-2">
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">SMTP-Server</label>
+                                        <input type="text" value={smtpForm.host} onChange={e => setSmtpForm({ ...smtpForm, host: e.target.value })}
+                                            placeholder="smtp.gmail.com" className="w-full px-3 py-2 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">Port</label>
+                                        <input type="number" value={smtpForm.port} onChange={e => setSmtpForm({ ...smtpForm, port: parseInt(e.target.value) || 587 })}
+                                            placeholder="587" className="w-full px-3 py-2 text-sm" />
+                                    </div>
+                                </div>
+
+                                {/* Verschlüsselung */}
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Verschlüsselung</label>
+                                    <select value={smtpForm.encryption} onChange={e => setSmtpForm({ ...smtpForm, encryption: e.target.value })} className="w-full px-3 py-2 text-sm">
+                                        <option value="starttls">STARTTLS (Port 587 – empfohlen)</option>
+                                        <option value="ssl">SSL/TLS (Port 465)</option>
+                                        <option value="none">Keine Verschlüsselung (Port 25)</option>
+                                    </select>
+                                </div>
+
+                                {/* Zugangsdaten */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">Benutzername</label>
+                                        <input type="text" value={smtpForm.username} onChange={e => setSmtpForm({ ...smtpForm, username: e.target.value })}
+                                            placeholder="user@example.com" className="w-full px-3 py-2 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">Passwort</label>
+                                        <div className="relative">
+                                            <input type={showSmtpPassword ? 'text' : 'password'} value={smtpForm.password}
+                                                onChange={e => setSmtpForm({ ...smtpForm, password: e.target.value })}
+                                                placeholder="••••••••" className="w-full px-3 py-2 pr-10 text-sm" />
+                                            <button type="button" onClick={() => setShowSmtpPassword(!showSmtpPassword)}
+                                                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                                {showSmtpPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Absender */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">Absender E-Mail</label>
+                                        <input type="email" value={smtpForm.from_email} onChange={e => setSmtpForm({ ...smtpForm, from_email: e.target.value })}
+                                            placeholder="noreply@meinedomain.de" className="w-full px-3 py-2 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">Absender Name</label>
+                                        <input type="text" value={smtpForm.from_name} onChange={e => setSmtpForm({ ...smtpForm, from_name: e.target.value })}
+                                            placeholder="DNS Manager" className="w-full px-3 py-2 text-sm" />
+                                    </div>
+                                </div>
+
+                                {/* Buttons */}
+                                <div className="flex items-center justify-between pt-2 border-t border-border">
+                                    <div className="flex items-center gap-2">
+                                        <button type="button" onClick={handleTestSmtp} disabled={testingSmtp || !smtpForm.host}
+                                            className="px-4 py-2 text-sm font-medium border border-border rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 flex items-center gap-2">
+                                            {testingSmtp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+                                            Verbindung testen
+                                        </button>
+                                        {smtpTestResult && (
+                                            <span className={`text-xs ${smtpTestResult.success ? 'text-success' : 'text-danger'}`}>
+                                                {smtpTestResult.success ? `✅ ${smtpTestResult.message}` : `❌ ${smtpTestResult.error}`}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <button type="submit" disabled={savingSmtp}
+                                        className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all">
+                                        {savingSmtp && <Loader2 className="w-4 h-4 animate-spin" />}
+                                        Speichern
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                    </div>
+
+                    {/* Test-E-Mail senden */}
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
+                                <Send className="w-5 h-5 text-success" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">Test-E-Mail senden</h2>
+                                <p className="text-sm text-text-muted">Sende eine Test-E-Mail um sicherzustellen, dass alles funktioniert</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <input type="email" value={testEmailAddr} onChange={e => setTestEmailAddr(e.target.value)}
+                                placeholder="test@meinedomain.de" className="flex-1 px-3 py-2 text-sm" />
+                            <button onClick={handleSendTestEmail} disabled={sendingTest || !testEmailAddr.trim()}
+                                className="px-5 py-2 bg-gradient-to-r from-success/80 to-emerald-600 hover:from-success hover:to-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 shrink-0">
+                                {sendingTest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                Senden
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* =================== UPDATES TAB =================== */}
             {activeTab === 'updates' && (
                 <div className="space-y-6">
@@ -621,6 +929,228 @@ export default function SettingsPage() {
                             ))}
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* =================== TEMPLATES TAB =================== */}
+            {activeTab === 'templates' && (
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="text-lg font-semibold text-text-primary">Zonen-Vorlagen</h2>
+                            <p className="text-sm text-text-muted">Erstelle Vorlagen mit Nameservern, SOA-Einstellungen und Standard-DNS-Einträgen, die beim Anlegen neuer Domains automatisch übernommen werden.</p>
+                        </div>
+                        <button onClick={openTemplateAdd} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all shrink-0">
+                            <Plus className="w-4 h-4" /> Neue Vorlage
+                        </button>
+                    </div>
+
+                    {loadingTemplates ? (
+                        <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 text-accent animate-spin" /></div>
+                    ) : templates.length === 0 ? (
+                        <div className="glass-card p-12 text-center">
+                            <Copy className="w-16 h-16 mx-auto mb-4 text-text-muted opacity-30" />
+                            <h3 className="text-lg font-semibold text-text-primary mb-2">Keine Vorlagen vorhanden</h3>
+                            <p className="text-sm text-text-muted mb-4">Erstelle deine erste Vorlage, z.B. \"Standard\" mit deinen Nameservern und häufig genutzten DNS-Einträgen.</p>
+                            <button onClick={openTemplateAdd} className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg font-medium text-sm">
+                                <Plus className="w-4 h-4 inline mr-2" /> Erste Vorlage erstellen
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {templates.map(t => (
+                                <div key={t.id} className="glass-card p-5">
+                                    <div className="flex items-start gap-4">
+                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${t.is_default ? 'bg-warning/20' : 'bg-accent/20'}`}>
+                                            {t.is_default ? <Star className="w-6 h-6 text-warning" /> : <Copy className="w-6 h-6 text-accent-light" />}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <h3 className="font-semibold text-text-primary">{t.name}</h3>
+                                                {t.is_default && <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">Standard</span>}
+                                            </div>
+                                            {t.description && <p className="text-sm text-text-muted mt-0.5">{t.description}</p>}
+                                            <div className="flex items-center gap-4 mt-2 text-xs text-text-muted flex-wrap">
+                                                <span>NS: <span className="text-text-secondary">{(t.nameservers || []).join(', ') || '–'}</span></span>
+                                                <span>Typ: <span className="text-text-secondary">{t.kind}</span></span>
+                                                <span>TTL: <span className="text-text-secondary">{t.default_ttl}s</span></span>
+                                                <span>Records: <span className="text-text-secondary">{(t.records || []).length}</span></span>
+                                            </div>
+                                            {(t.records || []).length > 0 && (
+                                                <div className="mt-2 flex flex-wrap gap-1">
+                                                    {t.records.map((r, i) => (
+                                                        <span key={i} className="text-xs px-2 py-0.5 rounded bg-bg-hover border border-border text-text-secondary font-mono">
+                                                            {r.name} {r.type} {r.prio ? r.prio + ' ' : ''}{r.content}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <button onClick={() => openTemplateEdit(t)} className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors" title="Bearbeiten">
+                                                <Pencil className="w-4 h-4" />
+                                            </button>
+                                            <button onClick={() => handleDeleteTemplate(t.id, t.name)} className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors" title="Löschen">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* =================== TEMPLATE FORM MODAL =================== */}
+            {showTemplateForm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowTemplateForm(false)}>
+                    <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-5">
+                            <h2 className="text-lg font-bold text-text-primary">
+                                {editTemplateId ? 'Vorlage bearbeiten' : 'Neue Vorlage erstellen'}
+                            </h2>
+                            <button onClick={() => setShowTemplateForm(false)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveTemplate} className="space-y-4">
+                            {/* Name & Beschreibung */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Vorlagen-Name *</label>
+                                    <input type="text" value={templateForm.name} onChange={e => setTemplateForm({ ...templateForm, name: e.target.value })}
+                                        placeholder="z.B. Standard" className="w-full px-3 py-2 text-sm" required />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Beschreibung</label>
+                                    <input type="text" value={templateForm.description} onChange={e => setTemplateForm({ ...templateForm, description: e.target.value })}
+                                        placeholder="Mein Standard-Setup" className="w-full px-3 py-2 text-sm" />
+                                </div>
+                            </div>
+
+                            {/* Nameservers */}
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">Nameserver</label>
+                                <textarea value={templateForm.nameservers} onChange={e => setTemplateForm({ ...templateForm, nameservers: e.target.value })}
+                                    placeholder="ns1.example.com., ns2.example.com." className="w-full px-3 py-2 text-sm min-h-[60px]" />
+                                <p className="text-xs text-text-muted mt-1">Getrennt durch Komma. Achte auf den Punkt am Ende.</p>
+                            </div>
+
+                            {/* Kind, SOA-EDIT-API, TTL */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Typ</label>
+                                    <select value={templateForm.kind} onChange={e => setTemplateForm({ ...templateForm, kind: e.target.value })} className="w-full px-3 py-2 text-sm">
+                                        <option value="Native">Native</option>
+                                        <option value="Master">Master</option>
+                                        <option value="Slave">Slave</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">SOA-EDIT-API</label>
+                                    <select value={templateForm.soa_edit_api} onChange={e => setTemplateForm({ ...templateForm, soa_edit_api: e.target.value })} className="w-full px-3 py-2 text-sm">
+                                        <option value="DEFAULT">DEFAULT</option>
+                                        <option value="INCEPTION-INCREMENT">INCEPTION-INCREMENT</option>
+                                        <option value="EPOCH">EPOCH</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">Standard-TTL</label>
+                                    <select value={templateForm.default_ttl} onChange={e => setTemplateForm({ ...templateForm, default_ttl: parseInt(e.target.value) })} className="w-full px-3 py-2 text-sm">
+                                        <option value={60}>1 Min</option>
+                                        <option value={300}>5 Min</option>
+                                        <option value={3600}>1 Std</option>
+                                        <option value={14400}>4 Std</option>
+                                        <option value={86400}>1 Tag</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Standard-Vorlage Checkbox */}
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={templateForm.is_default} onChange={e => setTemplateForm({ ...templateForm, is_default: e.target.checked })} className="w-4 h-4 rounded" />
+                                <span className="text-sm text-text-secondary">Als <strong className="text-warning">Standard-Vorlage</strong> verwenden (wird automatisch vorausgewählt)</span>
+                            </label>
+
+                            {/* Records */}
+                            <div className="border-t border-border pt-4">
+                                <h3 className="text-sm font-semibold text-text-primary mb-3">Standard DNS-Einträge</h3>
+                                <p className="text-xs text-text-muted mb-3">Diese Einträge werden automatisch erstellt, wenn du eine neue Domain mit dieser Vorlage anlegst. Nutze <code className="px-1 py-0.5 bg-bg-hover rounded">@</code> als Platzhalter für den Domainnamen.</p>
+
+                                {/* Existing records */}
+                                {templateForm.records.length > 0 && (
+                                    <div className="space-y-1 mb-3">
+                                        {templateForm.records.map((r, i) => (
+                                            <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-bg-primary border border-border text-sm">
+                                                <span className="font-mono text-text-secondary flex-1">
+                                                    <span className="text-accent-light">{r.name}</span>{' '}
+                                                    <span className="text-text-muted">{r.type}</span>{' '}
+                                                    {r.prio != null && <span className="text-warning">{r.prio} </span>}
+                                                    <span className="text-text-primary">{r.content}</span>{' '}
+                                                    <span className="text-text-muted">TTL:{r.ttl}</span>
+                                                </span>
+                                                <button type="button" onClick={() => removeRecordFromTemplate(i)} className="p-1 rounded hover:bg-danger/10 text-text-muted hover:text-danger">
+                                                    <Trash2 className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Add new record row */}
+                                <div className="grid grid-cols-12 gap-2 items-end">
+                                    <div className="col-span-2">
+                                        <label className="block text-xs text-text-muted mb-1">Name</label>
+                                        <input type="text" value={newRecord.name} onChange={e => setNewRecord({ ...newRecord, name: e.target.value })}
+                                            placeholder="@" className="w-full px-2 py-1.5 text-xs" />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className="block text-xs text-text-muted mb-1">Typ</label>
+                                        <select value={newRecord.type} onChange={e => setNewRecord({ ...newRecord, type: e.target.value })} className="w-full px-2 py-1.5 text-xs">
+                                            {['A','AAAA','CNAME','MX','TXT','NS','SRV','CAA','PTR'].map(t => <option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="col-span-3">
+                                        <label className="block text-xs text-text-muted mb-1">
+                                            {{ A: 'IPv4-Adresse', AAAA: 'IPv6-Adresse', CNAME: 'Ziel-Domain', MX: 'Mailserver', TXT: 'Textinhalt', NS: 'Nameserver', SRV: 'Ziel', CAA: 'CA (z.B. letsencrypt.org)', PTR: 'Hostname' }[newRecord.type] || 'Inhalt'}
+                                        </label>
+                                        <input type="text" value={newRecord.content} onChange={e => setNewRecord({ ...newRecord, content: e.target.value })}
+                                            placeholder={{ A: '93.184.216.34', AAAA: '2001:db8::1', CNAME: 'example.com.', MX: 'mail.example.com.', TXT: 'v=spf1 include:... ~all', NS: 'ns1.example.com.', SRV: 'server.example.com.', CAA: '0 issue "letsencrypt.org"', PTR: 'host.example.com.' }[newRecord.type] || '...'} className="w-full px-2 py-1.5 text-xs" />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className="block text-xs text-text-muted mb-1">TTL</label>
+                                        <input type="number" value={newRecord.ttl} onChange={e => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 3600 })}
+                                            className="w-full px-2 py-1.5 text-xs" />
+                                    </div>
+                                    {(newRecord.type === 'MX' || newRecord.type === 'SRV') && (
+                                        <div className="col-span-1">
+                                            <label className="block text-xs text-text-muted mb-1">Prio</label>
+                                            <input type="number" value={newRecord.prio || ''} onChange={e => setNewRecord({ ...newRecord, prio: parseInt(e.target.value) || 0 })}
+                                                placeholder="10" className="w-full px-2 py-1.5 text-xs" />
+                                        </div>
+                                    )}
+                                    <div className={newRecord.type === 'MX' || newRecord.type === 'SRV' ? 'col-span-2' : 'col-span-3'}>
+                                        <button type="button" onClick={addRecordToTemplate}
+                                            className="w-full px-2 py-1.5 text-xs font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 flex items-center justify-center gap-1">
+                                            <Plus className="w-3 h-3" /> Hinzufügen
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end gap-3 pt-2 border-t border-border">
+                                <button type="button" onClick={() => setShowTemplateForm(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+                                    Abbrechen
+                                </button>
+                                <button type="submit" disabled={savingTemplate} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {savingTemplate && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    {editTemplateId ? 'Speichern' : 'Erstellen'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             )}
 
