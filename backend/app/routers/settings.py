@@ -18,6 +18,48 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
 # ========================
+# App Info
+# ========================
+class AppInfoUpdate(BaseModel):
+    app_name: str = Field(..., description="Name der Anwendung")
+
+@router.get("/app-info", include_in_schema=False)
+async def get_app_info(db: AsyncSession = Depends(get_db)):
+    """Get public app info like app name and version."""
+    from app.models.models import SystemSetting
+    from sqlalchemy import select
+    from app.core.config import settings
+    
+    result = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_name"))
+    custom_name = result.scalar_one_or_none()
+    
+    return {
+        "app_name": custom_name or settings.APP_NAME,
+        "app_version": settings.APP_VERSION
+    }
+
+@router.put("/app-info")
+async def update_app_info(
+    data: AppInfoUpdate,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update custom app name."""
+    from app.models.models import SystemSetting
+    from sqlalchemy import select
+    
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_name"))
+    setting = result.scalar_one_or_none()
+    
+    if setting:
+        setting.value = data.app_name
+    else:
+        db.add(SystemSetting(key="app_name", value=data.app_name))
+    
+    await db.commit()
+    return {"message": "Systemname aktualisiert"}
+
+# ========================
 # Schemas
 # ========================
 class ServerConfigCreate(BaseModel):

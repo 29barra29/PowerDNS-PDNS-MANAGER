@@ -6,7 +6,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.2.1-blue.svg)
 
 ---
 
@@ -183,7 +183,7 @@ docker compose up -d
 ```bash
 cd dns-manager
 git fetch --tags
-git checkout v2.2.0  # Oder gewünschte Version
+git checkout v2.2.1  # Oder gewünschte Version
 docker compose build --no-cache
 docker compose up -d
 ```

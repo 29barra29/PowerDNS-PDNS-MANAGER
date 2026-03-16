@@ -44,7 +44,7 @@ services:
 
       # App Settings
       APP_NAME: ${APP_NAME:-DNS Manager}
-      APP_VERSION: "2.1.0"
+      APP_VERSION: "2.2.1"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       
       # Generierte Passwörter / Secrets aus .env durchreichen

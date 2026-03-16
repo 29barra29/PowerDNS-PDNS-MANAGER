@@ -138,6 +138,9 @@ class APIClient {
     updateSmtpSettings(data) { return this.request('PUT', '/settings/smtp', data); }
     testSmtpConnection() { return this.request('POST', '/settings/smtp/test'); }
     sendTestEmail(data) { return this.request('POST', '/settings/smtp/test-email', data); }
+    // ========== App Info ==========
+    getAppInfo() { return this.request('GET', '/settings/app-info'); }
+    updateAppInfo(data) { return this.request('PUT', '/settings/app-info', data); }
 }
 const api = new APIClient();
 export default api;

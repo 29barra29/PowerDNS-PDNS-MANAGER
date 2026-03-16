@@ -84,11 +84,13 @@ export default function SettingsPage() {
     async function loadProfile() {
         try {
             const data = await api.getMe()
+            const app = await api.getAppInfo().catch(() => ({ app_name: 'DNS Manager' }))
             setProfile(data)
             setProfileForm({
                 username: data.username || '',
                 display_name: data.display_name || '',
                 email: data.email || '',
+                app_name: app.app_name || 'DNS Manager'
             })
         } catch (err) {
             setError(err.message)
@@ -119,12 +121,17 @@ export default function SettingsPage() {
                 display_name: profileForm.display_name,
                 email: profileForm.email,
             })
-            setSuccess('Profil erfolgreich aktualisiert!')
-            // Update local storage with new user data
+            if (profile?.role === 'admin' && profileForm.app_name) {
+                await api.updateAppInfo({ app_name: profileForm.app_name })
+            }
+            // Trigger a minor refresh on the layout without full reload, by delaying localstorage
+            setSuccess('Profil und Einstellungen erfolgreich aktualisiert! (Lädt neu...)')
+            
             if (result.user) {
                 localStorage.setItem('user', JSON.stringify(result.user))
                 setProfile(result.user)
             }
+            setTimeout(() => window.location.reload(), 1500)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -511,6 +518,23 @@ export default function SettingsPage() {
                                     />
                                 </div>
                             </div>
+                            
+                            {profile?.role === 'admin' && (
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">
+                                        System-Titel
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={profileForm.app_name}
+                                        onChange={e => setProfileForm({ ...profileForm, app_name: e.target.value })}
+                                        placeholder="DNS Manager"
+                                        className="w-full px-3 py-2 text-sm"
+                                        required
+                                    />
+                                    <p className="text-xs text-text-muted mt-1">Der Name der Anwendung (wird oben links im Menü angezeigt)</p>
+                                </div>
+                            )}
 
                             {profile && (
                                 <div className="flex items-center gap-4 pt-2 text-xs text-text-muted">
@@ -1160,7 +1184,7 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-semibold text-text-primary mb-4">Über DNS Manager</h2>
                     <div className="space-y-3">
                         {[
-                            ['Version', '2.2.0'],
+                            ['Version', '2.2.1'],
                             ['Frontend', 'React + Vite + Tailwind CSS'],
                             ['Backend', 'Python FastAPI'],
                             ['Datenbank', 'MariaDB 11'],

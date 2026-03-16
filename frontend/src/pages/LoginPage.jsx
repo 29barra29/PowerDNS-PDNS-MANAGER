@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react'
 import api from '../api'
@@ -10,6 +10,11 @@ export default function LoginPage() {
     const [showPw, setShowPw] = useState(false)
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '' })
+
+    React.useEffect(() => {
+        api.getAppInfo().then(setAppInfo).catch(console.error)
+    }, [])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -38,7 +43,7 @@ export default function LoginPage() {
                     <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
                         <Shield className="w-8 h-8 text-white" />
                     </div>
-                    <h1 className="text-2xl font-bold text-text-primary">DNS Manager</h1>
+                    <h1 className="text-2xl font-bold text-text-primary">{appInfo.app_name}</h1>
                     <p className="text-text-muted text-sm mt-1">Melde dich an, um fortzufahren</p>
                 </div>
 

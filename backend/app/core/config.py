@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     # App
     APP_NAME: str = "DNS Manager"
-    APP_VERSION: str = "2.2.0"
+    APP_VERSION: str = "2.2.1"
     LOG_LEVEL: str = "info"
 
     # Database

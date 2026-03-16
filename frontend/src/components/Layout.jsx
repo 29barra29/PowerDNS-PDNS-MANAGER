@@ -6,10 +6,13 @@ import api from '../api'
 export default function Layout() {
     const navigate = useNavigate()
     const [user, setUser] = useState(null)
+    const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '' })
 
     useEffect(() => {
         const stored = localStorage.getItem('user')
         if (stored) setUser(JSON.parse(stored))
+        
+        api.getAppInfo().then(setAppInfo).catch(console.error)
     }, [])
 
     const handleLogout = () => {
@@ -45,8 +48,8 @@ export default function Layout() {
                             <Shield className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                            <h1 className="text-sm font-bold text-text-primary">DNS Manager</h1>
-                            <p className="text-xs text-text-muted">v2.0</p>
+                            <h1 className="text-sm font-bold text-text-primary">{appInfo.app_name}</h1>
+                            {appInfo.app_version ? <p className="text-xs text-text-muted">v{appInfo.app_version}</p> : <p className="text-xs text-text-muted opacity-0">v0</p>}
                         </div>
                     </div>
                 </div>
