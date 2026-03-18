@@ -38,7 +38,7 @@ export default function SetupWizard() {
 
   const [pdnsConfig, setPdnsConfig] = useState({
     enabled: false,
-    name: 'ns1',
+    name: 'server1',
     url: 'http://localhost:8081',
     api_key: '',
   });

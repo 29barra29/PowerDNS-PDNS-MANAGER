@@ -63,7 +63,7 @@ async def update_app_info(
 # Schemas
 # ========================
 class ServerConfigCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100, description="Eindeutiger Servername, z.B. ns1")
+    name: str = Field(..., min_length=1, max_length=100, description="Eindeutiger Servername, z.B. server1")
     display_name: Optional[str] = Field(None, description="Anzeigename")
     url: str = Field(..., description="PowerDNS API URL, z.B. http://192.168.1.10:8081")
     api_key: str = Field(..., description="PowerDNS API Key")

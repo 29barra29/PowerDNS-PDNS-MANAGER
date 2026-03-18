@@ -1247,10 +1247,10 @@ export default function SettingsPage() {
                                     <input
                                         type="text" value={form.name}
                                         onChange={e => setForm({ ...form, name: e.target.value })}
-                                        placeholder="ns1" className="w-full px-3 py-2 text-sm"
+                                        placeholder="server1" className="w-full px-3 py-2 text-sm"
                                         required disabled={!!editId} minLength={1}
                                     />
-                                    <p className="text-xs text-text-muted mt-0.5">Eindeutig, z.B. ns1, ns2</p>
+                                    <p className="text-xs text-text-muted mt-0.5">Eindeutig, z.B. server1, server2</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">Anzeigename</label>
@@ -1308,7 +1308,7 @@ export default function SettingsPage() {
                                 />
                                 <div>
                                     <span className="text-sm font-medium text-text-primary">Auf diesem Server speichern</span>
-                                    <p className="text-xs text-text-muted mt-0.5">Zonen und Änderungen werden auf diesem Server geschrieben. Bei gemeinsamer Datenbank (z. B. ns1 und ns3 auf eine DB) nur bei einem Server aktivieren.</p>
+                                    <p className="text-xs text-text-muted mt-0.5">Zonen und Änderungen werden auf diesem Server geschrieben. Bei gemeinsamer Datenbank (z. B. zwei Server-Einträge auf eine DB) nur bei einem Server aktivieren.</p>
                                 </div>
                             </label>
 

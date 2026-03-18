@@ -32,7 +32,7 @@ class UserZoneAccess(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, nullable=False, index=True)
-    zone_name = Column(String(255), nullable=False, index=True)  # z.B. "mygtg.de."
+    zone_name = Column(String(255), nullable=False, index=True)  # z.B. "example.de."
     permission = Column(String(20), default="manage")  # manage, read
     created_at = Column(DateTime, default=func.now())
 
@@ -58,7 +58,7 @@ class ServerConfig(Base):
     __tablename__ = "server_configs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), unique=True, nullable=False)  # e.g., "ns1", "ns3"
+    name = Column(String(100), unique=True, nullable=False)  # e.g., "server1", "server2"
     display_name = Column(String(255), nullable=True)  # e.g., "Nameserver 1"
     url = Column(String(500), nullable=False)  # e.g., "http://87.106.117.76:8089"
     api_key = Column(String(500), nullable=False)  # PowerDNS API Key

@@ -135,8 +135,8 @@ echo ""
 read -p "Möchtest du jetzt einen PowerDNS Server konfigurieren? (j/n): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Jj]$ ]]; then
-    read -p "Server Name [ns1]: " PDNS_NAME
-    PDNS_NAME=${PDNS_NAME:-ns1}
+    read -p "Server Name [server1]: " PDNS_NAME
+    PDNS_NAME=${PDNS_NAME:-server1}
 
     read -p "Server URL [http://localhost:8081]: " PDNS_URL
     PDNS_URL=${PDNS_URL:-http://localhost:8081}

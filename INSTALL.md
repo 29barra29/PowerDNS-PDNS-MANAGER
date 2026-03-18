@@ -158,7 +158,7 @@ webserver-port=8081
 2. Einstellungen → DNS-Server
 3. "Server hinzufügen"
 4. Eingeben:
-   - Name: `ns1`
+   - Name: `server1` (oder beliebiger Eindeutiger Name)
    - URL: `http://pdns-server:8081`
    - API-Key: `dein-api-key`
 5. "Verbindung testen"

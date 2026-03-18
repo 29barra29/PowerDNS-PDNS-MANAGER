@@ -28,7 +28,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - 🎨 **Dark Mode** – Modernes, dunkles Design
 - 🚀 **Setup-Wizard** – Einfache Ersteinrichtung mit interaktivem Assistenten
 - 🔐 **Sichere Defaults** – Automatische Generierung von Secrets und Passwörtern
-- 🔍 **Teil-Suche** – Suche mit Teilnamen (z. B. „mygtg“ findet „mygtg.de“), Live-Suche ab 3 Zeichen
+- 🔍 **Teil-Suche** – Suche mit Teilnamen (z. B. „example“ findet „example.de“), Live-Suche ab 3 Zeichen
 - ✏️ **Pro-Server „Speichern“** – Pro DNS-Server einstellbar, ob Zonen hier geschrieben werden (ideal bei 1 DB mit mehreren Server-Einträgen)
 - 📢 **Fehlermeldungen im Modal** – Beim Erstellen einer Zone erscheinen Fehler direkt im Popup
 - 📊 **Ergebnis pro Server** – Nach Zonen-Erstellung: Anzeige pro Server (erstellt / vorhanden / Fehler)
@@ -40,9 +40,9 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 
 ### v2.2.2
 
-- **Suche:** Teil-Suche (PowerDNS-Wildcard), z. B. „mygtg“ findet „mygtg.de“; Live-Suche ab 3 Zeichen
+- **Suche:** Teil-Suche (PowerDNS-Wildcard), z. B. „example“ findet „example.de“; Live-Suche ab 3 Zeichen
 - **DNS-Server Einstellungen:** Option „Auf diesem Server speichern“ pro Server (Haken = Schreibzugriff). Bei gemeinsamer DB nur bei einem Server aktivieren, dann keine doppelten Schreibversuche mehr
-- **Neue Zone erstellen:** Fehlermeldungen erscheinen im Modal; Ergebnis pro Server (ns1/ns3) wird angezeigt
+- **Neue Zone erstellen:** Fehlermeldungen erscheinen im Modal; Ergebnis pro Server (z. B. server1/server2) wird angezeigt
 - **Zone erstellen (Backend):** Zone wird auf jedem Server mit Schreibrecht angelegt; 409 Conflict = „vorhanden“ (z. B. gleiche DB)
 - **Version:** Eine zentrale `VERSION`-Datei; Backend, API, Frontend (Über-Tab), Setup und README-Script nutzen sie. Release: nur `VERSION` anpassen, dann `./scripts/update-readme-from-version.sh`
 - **SECURITY.md:** Zweisprachig (EN/DE), Hinweis auf „Report a vulnerability“ im GitHub Security-Tab

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Search as SearchIcon, Loader2, Globe } from 'lucide-react'
 import api from '../api'
 
-const MIN_QUERY_LENGTH = 3  // Ab 3 Zeichen: Teil-Suche (z. B. "myg" findet "mygtg.de")
+const MIN_QUERY_LENGTH = 3  // Ab 3 Zeichen: Teil-Suche (z. B. "exam" findet "example.de")
 const DEBOUNCE_MS = 400     // Kurz warten nach Tippen, dann automatisch suchen
 
 export default function SearchPage() {
@@ -54,7 +54,7 @@ export default function SearchPage() {
             <div>
                 <h1 className="text-2xl font-bold text-text-primary">Suche</h1>
                 <p className="text-text-muted text-sm mt-1">
-                Durchsuche Domains, Einträge und IPs – Teilnamen reichen (z. B. „mygtg“ findet „mygtg.de“). Ab 3 Zeichen wird automatisch gesucht.
+                Durchsuche Domains, Einträge und IPs – Teilnamen reichen (z. B. „example“ findet „example.de“). Ab 3 Zeichen wird automatisch gesucht.
             </p>
             </div>
 
