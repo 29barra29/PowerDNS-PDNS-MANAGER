@@ -6,7 +6,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.2.1-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.2.2-blue.svg)
 
 ---
 
@@ -28,6 +28,29 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - 🎨 **Dark Mode** – Modernes, dunkles Design
 - 🚀 **Setup-Wizard** – Einfache Ersteinrichtung mit interaktivem Assistenten
 - 🔐 **Sichere Defaults** – Automatische Generierung von Secrets und Passwörtern
+- 🔍 **Teil-Suche** – Suche mit Teilnamen (z. B. „mygtg“ findet „mygtg.de“), Live-Suche ab 3 Zeichen
+- ✏️ **Pro-Server „Speichern“** – Pro DNS-Server einstellbar, ob Zonen hier geschrieben werden (ideal bei 1 DB mit mehreren Server-Einträgen)
+- 📢 **Fehlermeldungen im Modal** – Beim Erstellen einer Zone erscheinen Fehler direkt im Popup
+- 📊 **Ergebnis pro Server** – Nach Zonen-Erstellung: Anzeige pro Server (erstellt / vorhanden / Fehler)
+- 📄 **Zentrale Version** – Eine `VERSION`-Datei, alle Anzeigen (API, UI, Setup) lesen daraus
+
+---
+
+## 📋 Was ist neu (Changelog)
+
+### v2.2.2
+
+- **Suche:** Teil-Suche (PowerDNS-Wildcard), z. B. „mygtg“ findet „mygtg.de“; Live-Suche ab 3 Zeichen
+- **DNS-Server Einstellungen:** Option „Auf diesem Server speichern“ pro Server (Haken = Schreibzugriff). Bei gemeinsamer DB nur bei einem Server aktivieren, dann keine doppelten Schreibversuche mehr
+- **Neue Zone erstellen:** Fehlermeldungen erscheinen im Modal; Ergebnis pro Server (ns1/ns3) wird angezeigt
+- **Zone erstellen (Backend):** Zone wird auf jedem Server mit Schreibrecht angelegt; 409 Conflict = „vorhanden“ (z. B. gleiche DB)
+- **Version:** Eine zentrale `VERSION`-Datei; Backend, API, Frontend (Über-Tab), Setup und README-Script nutzen sie. Release: nur `VERSION` anpassen, dann `./scripts/update-readme-from-version.sh`
+- **SECURITY.md:** Zweisprachig (EN/DE), Hinweis auf „Report a vulnerability“ im GitHub Security-Tab
+- **Projekt:** Build-Skripte für lokale Entwicklung in `local-scripts/` (nicht auf GitHub); `scripts/update-readme-from-version.sh` für README-Badge/Beispiele
+
+### v2.2.1
+
+- Zonen-Vorlagen, Setup-Wizard, SMTP, Multi-Server, Audit-Log, Dark Mode (siehe Features)
 
 ---
 
@@ -101,9 +124,12 @@ docker compose up -d
 
 ```
 dns-manager/
+├── VERSION               # Zentrale Versionsnummer (eine Stelle für die ganze App)
 ├── compose.yaml          # Docker Compose Konfiguration
 ├── .env.example          # Vorlage für Umgebungsvariablen
 ├── .env                  # Deine lokale Konfiguration (nicht in Git!)
+├── scripts/
+│   └── update-readme-from-version.sh   # README-Badge/Beispiele aus VERSION aktualisieren
 │
 ├── backend/              # FastAPI Backend
 │   ├── Dockerfile
@@ -156,6 +182,8 @@ dns-manager/
 
 ## 🔄 Updates
 
+Nach einem Update: Änderungen und Neuerungen stehen oben unter **„Was ist neu (Changelog)“**.
+
 ### Automatisches Update
 
 ```bash
@@ -183,7 +211,7 @@ docker compose up -d
 ```bash
 cd dns-manager
 git fetch --tags
-git checkout v2.2.1  # Oder gewünschte Version
+git checkout v2.2.2  # Oder gewünschte Version
 docker compose build --no-cache
 docker compose up -d
 ```
@@ -281,6 +309,10 @@ MIT License – Frei nutzbar, auch kommerziell.
 ## 🤝 Mitwirken
 
 Pull Requests sind willkommen! Bei größeren Änderungen bitte zuerst ein Issue erstellen.
+
+### Version (eine Stelle)
+
+Die App-Version steht **nur in der Datei `VERSION`** im Projektroot. Backend, API und Web-Oberfläche lesen sie von dort. Vor einem Release: Inhalt von `VERSION` anpassen (z. B. `2.3.0`), dann `./scripts/update-readme-from-version.sh` ausführen, damit Badge und Beispiele in der README angepasst werden.
 
 ### Entwicklung
 

@@ -20,6 +20,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Zentrale Versionsdatei (wird von config.py gelesen)
+COPY VERSION ./
+
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \

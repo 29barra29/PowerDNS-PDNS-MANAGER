@@ -25,6 +25,9 @@ export default function SettingsPage() {
     const [loadingCommits, setLoadingCommits] = useState(false)
     const [commitError, setCommitError] = useState('')
 
+    // Über-Tab: Version kommt aus API (eine zentrale Quelle: VERSION-Datei)
+    const [appInfo, setAppInfo] = useState(null)
+
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
     const [editId, setEditId] = useState(null)
@@ -56,6 +59,10 @@ export default function SettingsPage() {
         loadServers()
         loadTemplates()
     }, [])
+
+    useEffect(() => {
+        if (activeTab === 'about') api.getAppInfo().then(setAppInfo).catch(() => setAppInfo(null))
+    }, [activeTab])
 
     useEffect(() => {
         if (activeTab === 'updates' && commits.length === 0) {
@@ -324,7 +331,7 @@ export default function SettingsPage() {
     // ===== Server functions =====
     function openAdd() {
         setEditId(null)
-        setForm({ name: '', display_name: '', url: '', api_key: '', description: '' })
+        setForm({ name: '', display_name: '', url: '', api_key: '', description: '', allow_writes: true })
         setTestResult(null)
         setShowApiKey(false)
         setShowForm(true)
@@ -338,6 +345,7 @@ export default function SettingsPage() {
             url: s.url,
             api_key: s.api_key_full || '',
             description: s.description || '',
+            allow_writes: s.allow_writes !== false,
         })
         setTestResult(null)
         setShowApiKey(false)
@@ -372,6 +380,7 @@ export default function SettingsPage() {
                     url: form.url,
                     api_key: form.api_key,
                     description: form.description,
+                    allow_writes: form.allow_writes,
                 })
                 setSuccess('Server aktualisiert!')
             } else {
@@ -401,6 +410,15 @@ export default function SettingsPage() {
     async function toggleActive(s) {
         try {
             await api.updateServerConfig(s.id, { is_active: !s.is_active })
+            loadServers()
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    async function toggleAllowWrites(s) {
+        try {
+            await api.updateServerConfig(s.id, { allow_writes: !(s.allow_writes !== false) })
             loadServers()
         } catch (err) {
             setError(err.message)
@@ -926,6 +944,9 @@ export default function SettingsPage() {
                                                 {!s.is_active && (
                                                     <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">Deaktiviert</span>
                                                 )}
+                                                <button type="button" onClick={() => toggleAllowWrites(s)} className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${s.allow_writes !== false ? 'bg-success/10 text-success border-success/30' : 'bg-bg-hover text-text-muted border-border'}`} title={s.allow_writes !== false ? 'Klicken: Speichern deaktivieren (nur Lesen)' : 'Klicken: Speichern aktivieren'}>
+                                                    {s.allow_writes !== false ? 'Speichern: Ja' : 'Speichern: Nein'}
+                                                </button>
                                             </div>
                                             <p className="text-sm text-text-muted font-mono mt-1">{s.url}</p>
                                             <div className="flex items-center gap-4 mt-2 text-xs text-text-muted">
@@ -1184,7 +1205,7 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-semibold text-text-primary mb-4">Über DNS Manager</h2>
                     <div className="space-y-3">
                         {[
-                            ['Version', '2.2.1'],
+                            ['Version', appInfo?.app_version || '–'],
                             ['Frontend', 'React + Vite + Tailwind CSS'],
                             ['Backend', 'Python FastAPI'],
                             ['Datenbank', 'MariaDB 11'],
@@ -1277,6 +1298,19 @@ export default function SettingsPage() {
                                     placeholder="Hetzner Server DE, Hauptserver..." className="w-full px-3 py-2 text-sm"
                                 />
                             </div>
+
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-bg-hover/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={form.allow_writes !== false}
+                                    onChange={e => setForm({ ...form, allow_writes: e.target.checked })}
+                                    className="w-4 h-4 rounded"
+                                />
+                                <div>
+                                    <span className="text-sm font-medium text-text-primary">Auf diesem Server speichern</span>
+                                    <p className="text-xs text-text-muted mt-0.5">Zonen und Änderungen werden auf diesem Server geschrieben. Bei gemeinsamer Datenbank (z. B. ns1 und ns3 auf eine DB) nur bei einem Server aktivieren.</p>
+                                </div>
+                            </label>
 
                             {/* Test Connection */}
                             <div className="border-t border-border pt-4">

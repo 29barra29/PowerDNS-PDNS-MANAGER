@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Search as SearchIcon, Loader2, Globe } from 'lucide-react'
 import api from '../api'
+
+const MIN_QUERY_LENGTH = 3  // Ab 3 Zeichen: Teil-Suche (z. B. "myg" findet "mygtg.de")
+const DEBOUNCE_MS = 400     // Kurz warten nach Tippen, dann automatisch suchen
 
 export default function SearchPage() {
     const [query, setQuery] = useState('')
@@ -13,28 +16,46 @@ export default function SearchPage() {
         api.getServers().then(d => setServers(d.servers || []))
     }, [])
 
-    async function handleSearch(e) {
-        e.preventDefault()
-        if (!query.trim()) return
+    const runSearch = useCallback(async (searchTerm) => {
+        if (!searchTerm.trim() || servers.length === 0) return
         setLoading(true)
         setSearched(true)
         const all = []
         for (const s of servers) {
             if (!s.is_reachable) continue
             try {
-                const data = await api.search(s.name, query)
-                    ; (data.results || []).forEach(r => all.push({ ...r, _server: s.name }))
+                const data = await api.search(s.name, searchTerm)
+                ;(data.results || []).forEach(r => all.push({ ...r, _server: s.name }))
             } catch { }
         }
         setResults(all)
         setLoading(false)
+    }, [servers])
+
+    // Live-Suche: ab 3 Zeichen nach kurzer Pause automatisch suchen
+    useEffect(() => {
+        const t = query.trim()
+        if (t.length < MIN_QUERY_LENGTH) {
+            if (searched) setResults([])
+            return
+        }
+        const timer = setTimeout(() => runSearch(t), DEBOUNCE_MS)
+        return () => clearTimeout(timer)
+    }, [query, runSearch])
+
+    async function handleSearch(e) {
+        e.preventDefault()
+        if (!query.trim()) return
+        await runSearch(query.trim())
     }
 
     return (
         <div className="space-y-6">
             <div>
                 <h1 className="text-2xl font-bold text-text-primary">Suche</h1>
-                <p className="text-text-muted text-sm mt-1">Durchsuche Domains, Einträge und IPs</p>
+                <p className="text-text-muted text-sm mt-1">
+                Durchsuche Domains, Einträge und IPs – Teilnamen reichen (z. B. „mygtg“ findet „mygtg.de“). Ab 3 Zeichen wird automatisch gesucht.
+            </p>
             </div>
 
             <form onSubmit={handleSearch} className="flex gap-3">

@@ -42,9 +42,8 @@ services:
       # Format: name|url|api_key,name|url|api_key
       PDNS_SERVERS: ${PDNS_SERVERS:-}
 
-      # App Settings
+      # App Settings (Version = eine Stelle: VERSION-Datei im Projektroot)
       APP_NAME: ${APP_NAME:-DNS Manager}
-      APP_VERSION: "2.2.1"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       
       # Generierte Passwörter / Secrets aus .env durchreichen

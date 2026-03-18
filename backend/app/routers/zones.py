@@ -10,7 +10,7 @@ from app.schemas.dns import (
     ZoneCreate, ZoneUpdate, ZoneResponse, ZoneListResponse,
     ZoneImport, MessageResponse,
 )
-from app.models.models import AuditLog, User, UserZoneAccess
+from app.models.models import AuditLog, User, UserZoneAccess, ServerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -97,117 +97,90 @@ async def get_zone(server_name: str, zone_id: str):
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
+async def _update_zone_soa_and_dnssec(client, server_name: str, zone_name: str, zone_data: ZoneCreate):
+    """Update SOA and optionally enable DNSSEC after zone creation. Logs warnings on failure."""
+    from datetime import datetime as dt
+    try:
+        zone_details = await client.get_zone(zone_name)
+        soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr["type"] == "SOA"), None)
+        if soa_rrset and len(zone_data.nameservers) > 0:
+            primary_ns = zone_data.nameservers[0]
+            if not primary_ns.endswith('.'):
+                primary_ns = primary_ns + '.'
+            if len(zone_data.nameservers) > 1:
+                rname = zone_data.nameservers[1]
+                if not rname.endswith('.'):
+                    rname = rname + '.'
+            else:
+                rname = f"hostmaster.{zone_name.rstrip('.')}."
+            serial = dt.now().strftime("%Y%m%d") + "01"
+            new_soa_content = f"{primary_ns} {rname} {serial} 10800 3600 604800 3600"
+            await client.add_record(zone_id=zone_name, name=zone_name, record_type="SOA", content=[new_soa_content], ttl=3600)
+    except Exception as e:
+        logger.warning(f"Failed to update SOA for {zone_name} on {server_name}: {e}")
+    if zone_data.enable_dnssec:
+        try:
+            await client.enable_dnssec(zone_name)
+        except Exception as e:
+            logger.warning(f"DNSSEC enable failed for {zone_name} on {server_name}: {e}")
+
+
+def _allow_writes_column():
+    """Spalte allow_writes kann bei alter DB fehlen."""
+    return getattr(ServerConfig, "allow_writes", None)
+
+
 @router.post("", response_model=MessageResponse)
 async def create_zone(zone_data: ZoneCreate, db: AsyncSession = Depends(get_db)):
-    """Create a new zone on one or more servers."""
-    # Determine target servers
-    target_servers = zone_data.servers if zone_data.servers else pdns_manager.list_servers()
-    
+    """Create a new zone on one or more servers. Only servers with allow_writes=True are used (see DNS-Server Einstellungen)."""
+    if zone_data.servers:
+        target_servers = zone_data.servers
+    else:
+        col = _allow_writes_column()
+        if col is not None:
+            r = await db.execute(select(ServerConfig.name).where(ServerConfig.is_active == True, col == True))
+            target_servers = [row[0] for row in r.all()]
+        else:
+            target_servers = pdns_manager.list_servers()
     if not target_servers:
         raise HTTPException(
             status_code=400,
-            detail="No PowerDNS servers configured. Set PDNS_SERVERS environment variable."
+            detail="Kein DNS-Server mit Schreibrechten. In Einstellungen → DNS-Server bei mindestens einem Server „Auf diesem Server speichern“ aktivieren."
         )
-    
     results = {}
-    created = False
     zone_name = zone_data.name
-    
+    payload = {
+        "name": zone_name,
+        "kind": zone_data.kind,
+        "nameservers": zone_data.nameservers,
+        "soa_edit_api": zone_data.soa_edit_api,
+    }
+    if zone_data.masters:
+        payload["masters"] = zone_data.masters
+
     for server_name in target_servers:
         try:
             client = pdns_manager.get_client(server_name)
-            
-            if not created:
-                # Erstelle die Zone auf dem ersten erreichbaren Server
-                payload = {
-                    "name": zone_name,
-                    "kind": zone_data.kind,
-                    "nameservers": zone_data.nameservers,
-                    "soa_edit_api": zone_data.soa_edit_api,
-                }
-                if zone_data.masters:
-                    payload["masters"] = zone_data.masters
-                
-                result = await client.create_zone(payload)
-                created = True
-                
-                # Fetch zone details to get current SOA and update it correctly
-                try:
-                    from datetime import datetime as dt
-                    
-                    zone_details = await client.get_zone(zone_name)
-                    soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr["type"] == "SOA"), None)
-                    
-                    if soa_rrset and len(zone_data.nameservers) > 0:
-                        # Use first nameserver as primary NS in SOA
-                        primary_ns = zone_data.nameservers[0]
-                        if not primary_ns.endswith('.'):
-                            primary_ns = primary_ns + '.'
-                        
-                        # Use second NS as rname if available, else hostmaster.zone.
-                        if len(zone_data.nameservers) > 1:
-                            rname = zone_data.nameservers[1]
-                            if not rname.endswith('.'):
-                                rname = rname + '.'
-                        else:
-                            clean_zone = zone_name.rstrip('.')
-                            rname = f"hostmaster.{clean_zone}."
-                        
-                        # Generate a proper serial in YYYYMMDD01 format
-                        # Don't use the auto-generated one since PowerDNS may set it to 0
-                        serial = dt.now().strftime("%Y%m%d") + "01"
-                        
-                        # Build SOA: primary_ns rname serial refresh retry expire minimum
-                        new_soa_content = f"{primary_ns} {rname} {serial} 10800 3600 604800 3600"
-                        
-                        await client.add_record(
-                            zone_id=zone_name,
-                            name=zone_name,
-                            record_type="SOA",
-                            content=[new_soa_content],
-                            ttl=3600
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to update default SOA for {zone_name}: {e}")
-
-                # Enable DNSSEC if requested
-                if zone_data.enable_dnssec:
-                    try:
-                        await client.enable_dnssec(zone_name)
-                    except Exception as e:
-                        logger.warning(f"DNSSEC enable failed for {zone_name} on {server_name}: {e}")
-                
-                results[server_name] = "created"
-                await _log_action(db, "CREATE", zone_name, server_name, {
-                    "kind": zone_data.kind,
-                    "nameservers": zone_data.nameservers,
-                    "dnssec": zone_data.enable_dnssec,
-                })
-            else:
-                # Andere Server teilen die gleiche DB → Zone existiert bereits
-                # Nur einen Rectify/Refresh ausführen
-                try:
-                    await client.rectify_zone(zone_name)
-                    results[server_name] = "synced"
-                    await _log_action(db, "CREATE", zone_name, server_name, {
-                        "action": "synced (gemeinsame Datenbank)",
-                    })
-                except Exception:
-                    # Rectify nicht unterstützt/fehlgeschlagen, Zone ist trotzdem da
-                    results[server_name] = "synced"
-                    await _log_action(db, "CREATE", zone_name, server_name, {
-                        "action": "synced (gemeinsame Datenbank)",
-                    })
-            
+            await client.create_zone(payload)
+            # SOA + DNSSEC für diese Instanz
+            await _update_zone_soa_and_dnssec(client, server_name, zone_name, zone_data)
+            results[server_name] = "created"
+            await _log_action(db, "CREATE", zone_name, server_name, {
+                "kind": zone_data.kind,
+                "nameservers": zone_data.nameservers,
+                "dnssec": zone_data.enable_dnssec,
+            })
         except PowerDNSAPIError as e:
-            results[server_name] = f"error: {e.detail}"
-            await _log_action(
-                db, "CREATE", zone_name, server_name,
-                status="error", error_message=e.detail,
-            )
+            if e.status_code == 409 or "already exists" in (e.detail or "").lower() or "Conflict" in (e.detail or ""):
+                # Zone existiert bereits (z. B. gemeinsame DB mit anderem Server)
+                results[server_name] = "synced"
+                await _log_action(db, "CREATE", zone_name, server_name, {"action": "synced (zone already present)"})
+            else:
+                results[server_name] = f"error: {e.detail}"
+                await _log_action(db, "CREATE", zone_name, server_name, status="error", error_message=e.detail)
         except ValueError as e:
             results[server_name] = f"error: {str(e)}"
-    
+
     return MessageResponse(
         message=f"Zone '{zone_name}' creation completed",
         details=results,
@@ -308,13 +281,18 @@ async def import_zone(
     import_data: ZoneImport,
     db: AsyncSession = Depends(get_db),
 ):
-    """Import a zone from BIND zonefile format.
-    
-    This creates the zone first, then parses and adds the records.
-    """
-    target_servers = pdns_manager.list_servers()
+    """Import a zone from BIND zonefile format. Only servers with allow_writes=True are used."""
+    col = _allow_writes_column()
+    if col is not None:
+        r = await db.execute(select(ServerConfig.name).where(ServerConfig.is_active == True, col == True))
+        target_servers = [row[0] for row in r.all()]
+    else:
+        target_servers = pdns_manager.list_servers()
     if not target_servers:
-        raise HTTPException(status_code=400, detail="No PowerDNS servers configured.")
+        raise HTTPException(
+            status_code=400,
+            detail="Kein DNS-Server mit Schreibrechten. In Einstellungen → DNS-Server „Auf diesem Server speichern“ aktivieren."
+        )
     
     results = {}
     created = False

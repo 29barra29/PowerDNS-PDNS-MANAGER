@@ -40,6 +40,11 @@ backend/app/static_new/
 mariadb_data/
 
 # ========================
+# Lokale Skripte (nicht für GitHub / Nutzer)
+# ========================
+local-scripts/
+
+# ========================
 # OS
 # ========================
 .DS_Store

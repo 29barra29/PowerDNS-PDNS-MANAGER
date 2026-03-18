@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
                         api_key=s["api_key"],
                         description=f"Imported from PDNS_SERVERS env",
                         is_active=True,
+                        allow_writes=True,
                     )
                     session.add(new_cfg)
                 await session.commit()

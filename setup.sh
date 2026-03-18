@@ -158,9 +158,9 @@ cat > .env << EOF
 # Generiert: $(date)
 # ====================================
 
-# App Settings
+# App Settings (Version aus VERSION-Datei im Projektroot)
 APP_NAME=${APP_NAME}
-APP_VERSION=2.0.0
+APP_VERSION=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | head -1 || echo "2.2.1")
 LOG_LEVEL=info
 
 # Sicherheit

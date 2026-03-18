@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Globe, Plus, Upload, Trash2, Loader2, Shield, AlertCircle } from 'lucide-react'
+import { Globe, Plus, Upload, Trash2, Loader2, Shield, AlertCircle, CheckCircle } from 'lucide-react'
 import api from '../api'
 
 export default function ZonesPage() {
@@ -10,6 +10,8 @@ export default function ZonesPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [showCreate, setShowCreate] = useState(false)
+    /** Nach Zone erstellen: Pro-Server-Ergebnis (damit bei 2 echten Servern klar ist, was wo passiert ist) */
+    const [createResult, setCreateResult] = useState(null)
     const defaultNS = (localStorage.getItem('defaultNameservers') || 'ns1.example.com.,ns2.example.com.').split(',').map(n => n.trim()).filter(Boolean)
     const [createForm, setCreateForm] = useState({ 
         name: '', 
@@ -96,8 +98,8 @@ export default function ZonesPage() {
         e.preventDefault()
         setCreating(true)
         setError('')
-        
-        // Validate domain name
+        setCreateResult(null)
+
         const domainName = createForm.name.trim().toLowerCase().replace(/\.$/, '')
         const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
         if (!domainRegex.test(domainName)) {
@@ -105,22 +107,33 @@ export default function ZonesPage() {
             setCreating(false)
             return
         }
-        
+
         try {
             const rawNsArray = createForm.nameservers.split(/[\n,]+/).map(n => n.trim()).filter(Boolean)
-            const nsArray = rawNsArray.map(ns => ns.endsWith('.') ? ns : `${ns}.`);
+            const nsArray = rawNsArray.map(ns => ns.endsWith('.') ? ns : `${ns}.`)
 
-            await api.createZone({
+            const res = await api.createZone({
                 ...createForm,
                 nameservers: nsArray.length ? nsArray : defaultNS,
             })
 
-            // Apply template records if a template is selected
+            // Pro-Server-Ergebnis anzeigen (wichtig bei 2 echten Servern oder 1 DB mit 2 Einträgen)
+            setCreateResult(res || {})
+
+            const details = (res && res.details) ? res.details : {}
+            const hasError = Object.values(details).some(v => String(v).startsWith('error:'))
+            if (hasError) {
+                const errParts = Object.entries(details)
+                    .filter(([, v]) => String(v).startsWith('error:'))
+                    .map(([srv, v]) => `${srv}: ${String(v).replace(/^error:\s*/, '')}`)
+                setError(errParts.length ? errParts.join(' · ') : 'Ein Server hat einen Fehler gemeldet.')
+            }
+
+            // Template-Records nur wenn mindestens ein Server die Zone erstellt hat
             const selectedTemplate = templates.find(t => String(t.id) === selectedTemplateId)
-            if (selectedTemplate && (selectedTemplate.records || []).length > 0) {
+            if (selectedTemplate && (selectedTemplate.records || []).length > 0 && !hasError) {
                 const zoneName = createForm.name.trim().toLowerCase()
                 const zoneNameDot = zoneName.endsWith('.') ? zoneName : `${zoneName}.`
-                // Find the server that has this zone
                 const sData = await api.getServers()
                 const srv = (sData.servers || []).find(s => s.is_reachable)
                 if (srv) {
@@ -128,38 +141,42 @@ export default function ZonesPage() {
                         try {
                             const recName = rec.name === '@' ? zoneNameDot : `${rec.name}.${zoneNameDot}`
                             let content = rec.content
-                            // For MX with prio, prepend prio
-                            if (rec.type === 'MX' && rec.prio != null) {
-                                content = `${rec.prio} ${content}`
-                            }
+                            if (rec.type === 'MX' && rec.prio != null) content = `${rec.prio} ${content}`
                             await api.createRecord(srv.name, zoneNameDot, {
                                 name: recName,
                                 type: rec.type,
                                 ttl: rec.ttl || selectedTemplate.default_ttl || 3600,
                                 records: [{ content, disabled: false }],
                             })
-                        } catch (recErr) {
-                            console.warn('Template record failed:', recErr)
-                        }
+                        } catch (recErr) { console.warn('Template record failed:', recErr) }
                     }
                 }
             }
 
-            setShowCreate(false)
-            const defTemplate = templates.find(t => t.is_default)
-            setCreateForm({ 
-                name: '', 
-                kind: defTemplate?.kind || 'Native', 
-                nameservers: (defTemplate?.nameservers || defaultNS).join(',\n'), 
-                soa_edit_api: defTemplate?.soa_edit_api || 'DEFAULT', 
-                enable_dnssec: false 
-            })
-            loadZones()
+            if (!hasError) {
+                setShowCreate(false)
+                const defTemplate = templates.find(t => t.is_default)
+                setCreateForm({
+                    name: '',
+                    kind: defTemplate?.kind || 'Native',
+                    nameservers: (defTemplate?.nameservers || defaultNS).join(',\n'),
+                    soa_edit_api: defTemplate?.soa_edit_api || 'DEFAULT',
+                    enable_dnssec: false,
+                })
+                setCreateResult(null)
+                loadZones()
+            }
         } catch (err) {
             setError(err.message)
         } finally {
             setCreating(false)
         }
+    }
+
+    function closeCreateModal() {
+        setShowCreate(false)
+        setError('')
+        setCreateResult(null)
     }
 
     async function handleDelete(server, zone) {
@@ -259,9 +276,52 @@ export default function ZonesPage() {
 
             {/* Create Zone Modal */}
             {showCreate && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
-                    <div className="glass-card p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={closeCreateModal}
+                >
+                    <div className="glass-card p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <h2 className="text-lg font-bold text-text-primary mb-4">Neue Zone erstellen</h2>
+
+                        {/* Fehlermeldung im Modal */}
+                        {error && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium">Fehler beim Erstellen</p>
+                                    <p className="text-sm mt-1">{error}</p>
+                                </div>
+                                <button type="button" onClick={() => setError('')} className="text-xs hover:underline shrink-0" aria-label="Meldung schließen">Schließen</button>
+                            </div>
+                        )}
+
+                        {/* Pro-Server-Ergebnis: bei 2 Servern / 2 DBs sieht man genau, was wo passiert ist */}
+                        {createResult?.details && Object.keys(createResult.details).length > 0 && (
+                            <div className="mb-4 p-4 rounded-xl bg-bg-hover/50 border border-border">
+                                <p className="text-sm font-medium text-text-primary mb-2">Ergebnis pro Server</p>
+                                <ul className="space-y-1.5 text-sm">
+                                    {Object.entries(createResult.details).map(([srv, status]) => {
+                                        const isError = String(status).startsWith('error:')
+                                        const msg = String(status).replace(/^error:\s*/, '')
+                                        return (
+                                            <li key={srv} className="flex items-center gap-2">
+                                                {isError ? (
+                                                    <AlertCircle className="w-4 h-4 text-danger shrink-0" />
+                                                ) : (
+                                                    <CheckCircle className="w-4 h-4 text-success shrink-0" />
+                                                )}
+                                                <span className="text-text-secondary">{srv}:</span>
+                                                <span className={isError ? 'text-danger' : 'text-text-primary'}>
+                                                    {isError ? msg : (status === 'created' ? 'Erstellt' : status === 'synced' ? 'Vorhanden (z. B. gemeinsame DB)' : status)}
+                                                </span>
+                                            </li>
+                                        )
+                                    })}
+                                </ul>
+                                <button type="button" onClick={closeCreateModal} className="mt-3 text-xs text-accent hover:underline">Fertig / Schließen</button>
+                            </div>
+                        )}
+
                         <form onSubmit={handleCreate} className="space-y-4">
                             {/* Template Selector */}
                             {templates.length > 0 && (
@@ -354,7 +414,7 @@ export default function ZonesPage() {
                                 <span className="text-sm text-text-secondary">DNSSEC sofort aktivieren</span>
                             </label>
                             <div className="flex justify-end gap-3 pt-2">
-                                <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+                                <button type="button" onClick={closeCreateModal} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
                                     Abbrechen
                                 </button>
                                 <button

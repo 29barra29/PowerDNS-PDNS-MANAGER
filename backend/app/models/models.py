@@ -64,6 +64,8 @@ class ServerConfig(Base):
     api_key = Column(String(500), nullable=False)  # PowerDNS API Key
     description = Column(Text, nullable=True)  # Optional description
     is_active = Column(Boolean, default=True)
+    # True = Zonen/Änderungen auf diesem Server speichern. False = nur lesen (z. B. gleiche DB wie anderer Server).
+    allow_writes = Column(Boolean, default=True)
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

@@ -1,15 +1,29 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Optional
 import os
 import secrets
 
 
+def _read_version_file() -> str:
+    """Liest die zentrale VERSION-Datei (eine Stelle für die ganze App)."""
+    fallback = "2.2.1"
+    base = Path(__file__).resolve().parent.parent.parent  # backend/app/core -> backend oder /app
+    for p in [base / "VERSION", base.parent / "VERSION"]:
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8").strip() or fallback
+            except Exception:
+                pass
+    return fallback
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # App
+    # App – Version aus VERSION-Datei (einmal eintragen, überall aktuell)
     APP_NAME: str = "DNS Manager"
-    APP_VERSION: str = "2.2.1"
+    APP_VERSION: str = _read_version_file()
     LOG_LEVEL: str = "info"
 
     # Database

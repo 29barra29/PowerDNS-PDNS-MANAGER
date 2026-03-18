@@ -68,6 +68,7 @@ class ServerConfigCreate(BaseModel):
     url: str = Field(..., description="PowerDNS API URL, z.B. http://192.168.1.10:8081")
     api_key: str = Field(..., description="PowerDNS API Key")
     description: Optional[str] = None
+    allow_writes: Optional[bool] = Field(True, description="Zonen/Änderungen auf diesem Server speichern. Bei gemeinsamer DB nur bei einem Server aktivieren.")
 
 
 class ServerConfigUpdate(BaseModel):
@@ -76,6 +77,7 @@ class ServerConfigUpdate(BaseModel):
     api_key: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    allow_writes: Optional[bool] = None
 
 
 class TestConnectionRequest(BaseModel):
@@ -121,6 +123,7 @@ async def list_server_configs(
             "api_key_full": cfg.api_key,  # Für Bearbeitung
             "description": cfg.description,
             "is_active": cfg.is_active,
+            "allow_writes": getattr(cfg, "allow_writes", True),
             "is_online": is_online,
             "version": version,
             "zone_count": zone_count,
@@ -150,6 +153,7 @@ async def add_server_config(
         api_key=data.api_key,
         description=data.description,
         is_active=True,
+        allow_writes=getattr(data, "allow_writes", True),
     )
     db.add(cfg)
     await db.flush()
@@ -184,7 +188,9 @@ async def update_server_config(
         cfg.description = data.description
     if data.is_active is not None:
         cfg.is_active = data.is_active
-    
+    if data.allow_writes is not None:
+        cfg.allow_writes = data.allow_writes
+
     await db.flush()
     
     # Live-Verbindung aktualisieren

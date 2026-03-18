@@ -301,12 +301,16 @@ class PowerDNSClient:
     # Search
     # ========================
     async def search(self, query: str, max_results: int = 100, object_type: str = "all") -> list:
-        """Search for zones and/or records."""
+        """Search for zones and/or records. Query is treated as substring: e.g. 'mygtg' finds 'mygtg.de'."""
+        q = (query or "").strip()
+        # PowerDNS supports * (any chars) and ? (one char). Wrap in * so partial match works.
+        if q and "*" not in q and "?" not in q:
+            q = f"*{q}*"
         return await self._request(
             "GET",
             "/search-data",
             params={
-                "q": query,
+                "q": q,
                 "max": max_results,
                 "object_type": object_type,
             },

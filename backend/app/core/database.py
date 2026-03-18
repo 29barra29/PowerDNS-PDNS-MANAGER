@@ -39,3 +39,16 @@ async def init_db():
     """Create all tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Migration: allow_writes auf server_configs (falls Tabelle schon existierte)
+    from sqlalchemy import text
+    async with async_session() as session:
+        try:
+            await session.execute(text(
+                "ALTER TABLE server_configs ADD COLUMN allow_writes TINYINT(1) DEFAULT 1"
+            ))
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            # Spalte existiert bereits oder anderes DB-System (z. B. SQLite) – ignorieren
+            pass
