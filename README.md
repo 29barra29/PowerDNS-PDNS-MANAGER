@@ -46,7 +46,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - **Zone erstellen (Backend):** Zone wird auf jedem Server mit Schreibrecht angelegt; 409 Conflict = „vorhanden“ (z. B. gleiche DB)
 - **Version:** Eine zentrale `VERSION`-Datei; Backend, API, Frontend (Über-Tab), Setup und README-Script nutzen sie. Release: nur `VERSION` anpassen, dann `./scripts/update-readme-from-version.sh`
 - **SECURITY.md:** Zweisprachig (EN/DE), Hinweis auf „Report a vulnerability“ im GitHub Security-Tab
-- **Projekt:** Build-Skripte für lokale Entwicklung in `local-scripts/` (nicht auf GitHub); `scripts/update-readme-from-version.sh` für README-Badge/Beispiele
+- **Release:** Script `scripts/update-readme-from-version.sh` aktualisiert README-Badge und Versionsbeispiele aus der `VERSION`-Datei
 
 ### v2.2.1
 
@@ -149,6 +149,7 @@ dns-manager/
 │       │   ├── records.py    # Record-Verwaltung
 │       │   ├── dnssec.py     # DNSSEC
 │       │   ├── search.py     # Suche + Audit-Log
+│       │   ├── setup.py      # Setup-Wizard API
 │       │   ├── settings.py   # Server-Konfiguration + SMTP
 │       │   └── templates.py  # Zonen-Vorlagen (CRUD)
 │       ├── schemas/
@@ -362,8 +363,9 @@ asyncio.run(reset())
 
 ## 🌟 Credits
 
-Entwickelt von der Community für die Community.
-Besonderer Dank an alle Contributors!
+Entwickelt von [29barra29](https://github.com/29barra29) – für die self-hosting Community.  
+Teilweise mit KI-Unterstützung entwickelt.  
+Pull Requests und Contributors sind willkommen!
 
 ---
 
