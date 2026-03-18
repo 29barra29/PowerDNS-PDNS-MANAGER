@@ -111,8 +111,8 @@ docker compose up -d
 
 | Komponente | Technologie |
 |---|---|
-| **Frontend** | React 19 + Vite |
-| **Backend** | Python FastAPI |
+| **Frontend** | React 19 + Vite 7 + Tailwind CSS 4 |
+| **Backend** | Python 3.12 + FastAPI + SQLAlchemy (async) + Pydantic |
 | **Datenbank** | MariaDB 11 |
 | **Auth** | JWT (Bearer Token) |
 | **DNS-Engine** | PowerDNS Authoritative |
