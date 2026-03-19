@@ -1,17 +1,21 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Globe, LayoutDashboard, Search, ScrollText, Users, LogOut, Shield, Settings } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import api from '../api'
 
 export default function Layout() {
+    const { t, i18n } = useTranslation()
     const navigate = useNavigate()
-    const [user, setUser] = useState(null)
-    const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '' })
+    const [user, setUser] = useState(() => api.getUser())
+    const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '', app_logo_url: '' })
 
     useEffect(() => {
-        const stored = localStorage.getItem('user')
-        if (stored) setUser(JSON.parse(stored))
-        
+        const u = api.getUser()
+        if (u) {
+            setUser(u)
+            if (u.preferred_language && u.preferred_language !== i18n.language) i18n.changeLanguage(u.preferred_language)
+        }
         api.getAppInfo().then(setAppInfo).catch(console.error)
     }, [])
 
@@ -22,20 +26,16 @@ export default function Layout() {
 
     const isAdmin = user?.role === 'admin'
 
-    // Basis-Links für alle Benutzer
     const links = [
-        { to: '/', icon: LayoutDashboard, label: 'Übersicht' },
-        { to: '/zones', icon: Globe, label: 'Meine Zonen' },
-        { to: '/search', icon: Search, label: 'Suche' },
+        { to: '/', icon: LayoutDashboard, labelKey: 'layout.overview' },
+        { to: '/zones', icon: Globe, labelKey: isAdmin ? 'layout.allZones' : 'layout.myZones' },
+        { to: '/search', icon: Search, labelKey: 'layout.search' },
     ]
-
-    // Admin-only Links
     if (isAdmin) {
-        links[1] = { to: '/zones', icon: Globe, label: 'Alle Zonen' }
-        links.push({ to: '/audit', icon: ScrollText, label: 'Protokoll' })
-        links.push({ to: '/users', icon: Users, label: 'Benutzer' })
-        links.push({ to: '/settings', icon: Settings, label: 'Einstellungen' })
+        links.push({ to: '/audit', icon: ScrollText, labelKey: 'layout.audit' })
+        links.push({ to: '/users', icon: Users, labelKey: 'layout.users' })
     }
+    links.push({ to: '/settings', icon: Settings, labelKey: 'layout.settings' })
 
     return (
         <div className="flex h-screen overflow-hidden">
@@ -44,9 +44,13 @@ export default function Layout() {
                 {/* Logo */}
                 <div className="p-5 border-b border-border">
                     <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center shadow-lg shadow-accent/10">
-                            <Shield className="w-5 h-5 text-white" />
-                        </div>
+                        {appInfo.app_logo_url ? (
+                            <img src={appInfo.app_logo_url} alt="" className="w-9 h-9 rounded-lg object-cover shadow-lg shadow-accent/10" />
+                        ) : (
+                            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center shadow-lg shadow-accent/10">
+                                <Shield className="w-5 h-5 text-white" />
+                            </div>
+                        )}
                         <div>
                             <h1 className="text-sm font-bold text-text-primary">{appInfo.app_name}</h1>
                             {appInfo.app_version ? <p className="text-xs text-text-muted">v{appInfo.app_version}</p> : <p className="text-xs text-text-muted opacity-0">v0</p>}
@@ -56,9 +60,9 @@ export default function Layout() {
 
                 {/* Navigation */}
                 <nav className="flex-1 p-3 space-y-1">
-                    {links.map(({ to, icon: Icon, label }) => (
+                    {links.map(({ to, icon: Icon, labelKey }) => (
                         <NavLink
-                            key={to + label}
+                            key={to + labelKey}
                             to={to}
                             end={to === '/'}
                             className={({ isActive }) =>
@@ -69,7 +73,7 @@ export default function Layout() {
                             }
                         >
                             <Icon className="w-4 h-4" />
-                            {label}
+                            {t(labelKey)}
                         </NavLink>
                     ))}
                 </nav>
@@ -82,12 +86,12 @@ export default function Layout() {
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-text-primary truncate">{user?.display_name || user?.username}</p>
-                            <p className="text-xs text-text-muted capitalize">{user?.role === 'admin' ? '👑 Admin' : '👤 Benutzer'}</p>
+                            <p className="text-xs text-text-muted capitalize">{user?.role === 'admin' ? `👑 ${t('layout.admin')}` : `👤 ${t('layout.user')}`}</p>
                         </div>
                         <button
                             onClick={handleLogout}
                             className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-                            title="Abmelden"
+                            title={t('layout.logout')}
                         >
                             <LogOut className="w-4 h-4" />
                         </button>

@@ -1,16 +1,19 @@
 """API routes for authentication and user management."""
 import logging
-from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, status
+from datetime import date, datetime, timezone
+from fastapi import APIRouter, HTTPException, Depends, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from sqlalchemy import select, func, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings as app_settings
 from app.core.database import get_db
 from app.core.auth import (
     hash_password, verify_password, create_access_token,
+    create_password_reset_token, decode_password_reset_token,
     get_current_user, get_admin_user,
 )
 from app.models.models import User, UserZoneAccess
@@ -49,6 +52,30 @@ class ProfileUpdate(BaseModel):
     username: Optional[str] = Field(None, min_length=3, max_length=100)
     email: Optional[str] = None
     display_name: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=25)
+    company: Optional[str] = Field(None, max_length=255)
+    street: Optional[str] = Field(None, max_length=255)
+    postal_code: Optional[str] = Field(None, max_length=20)
+    city: Optional[str] = Field(None, max_length=100)
+    country: Optional[str] = Field(None, max_length=100)
+    date_of_birth: Optional[str] = None  # ISO date string
+    preferred_language: Optional[str] = Field(None, max_length=10)  # de, en
+
+    @field_validator("phone")
+    @classmethod
+    def phone_at_least_one_digit(cls, v: Optional[str]) -> Optional[str]:
+        if not v or not v.strip():
+            return v or None
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Telefon muss mindestens eine Ziffer enthalten")
+        return v.strip()
+
+    @field_validator("postal_code", "city", "country")
+    @classmethod
+    def strip_optional(cls, v: Optional[str]) -> Optional[str]:
+        if not v or not v.strip():
+            return None
+        return v.strip()
 
 
 class PasswordChange(BaseModel):
@@ -58,6 +85,33 @@ class PasswordChange(BaseModel):
 
 class ZoneAccessUpdate(BaseModel):
     zones: list[str] = Field(..., description="Liste der Zonen die der Benutzer verwalten darf")
+
+
+class RegisterPublic(BaseModel):
+    """Public registration (only when registration_enabled)."""
+    username: str = Field(..., min_length=3, max_length=100)
+    password: str = Field(..., min_length=4, max_length=100)
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: Optional[str] = Field(None, description="E-Mail des Kontos")
+    username: Optional[str] = Field(None, description="Benutzername (Alternative zu E-Mail)")
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., description="Token aus der E-Mail")
+    new_password: str = Field(..., min_length=4)
+
+
+async def _get_auth_setting(db: AsyncSession, key: str) -> bool:
+    from app.models.models import SystemSetting
+    result = await db.execute(select(SystemSetting.value).where(SystemSetting.key == key))
+    value = result.scalar_one_or_none()  # Einzelne Spalte => Skalar (str), nicht Row
+    if value is None:
+        return False
+    return str(value).strip().lower() == "true"
 
 
 async def _user_to_dict(user: User, db: AsyncSession) -> dict:
@@ -77,18 +131,26 @@ async def _user_to_dict(user: User, db: AsyncSession) -> dict:
         "zones": zones,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login": user.last_login.isoformat() if user.last_login else None,
+        "phone": getattr(user, "phone", None),
+        "company": getattr(user, "company", None),
+        "street": getattr(user, "street", None),
+        "postal_code": getattr(user, "postal_code", None),
+        "city": getattr(user, "city", None),
+        "country": getattr(user, "country", None),
+        "date_of_birth": user.date_of_birth.isoformat()[:10] if getattr(user, "date_of_birth", None) else None,
+        "preferred_language": getattr(user, "preferred_language", None) or None,
     }
 
 
 # ========================
 # Auth Endpoints
 # ========================
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    """Login with username and password."""
+    """Login with username and password. Setzt HttpOnly-Cookie (kein Token im localStorage)."""
     result = await db.execute(
         select(User).where(User.username == form_data.username)
     )
@@ -111,11 +173,146 @@ async def login(
     await db.flush()
 
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    user_dict = await _user_to_dict(user, db)
 
-    return LoginResponse(
-        access_token=token,
-        user=await _user_to_dict(user, db),
+    response = JSONResponse(content={
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_dict,
+    })
+    response.set_cookie(
+        key=app_settings.AUTH_COOKIE_NAME,
+        value=token,
+        max_age=app_settings.AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=app_settings.AUTH_COOKIE_SECURE,
+        samesite=app_settings.AUTH_COOKIE_SAMESITE,
+        path="/",
     )
+    return response
+
+
+@router.post("/logout")
+async def logout():
+    """Abmelden: Auth-Cookie löschen (Frontend speichert keinen Token mehr)."""
+    response = JSONResponse(content={"message": "Abgemeldet"})
+    response.delete_cookie(key=app_settings.AUTH_COOKIE_NAME, path="/")
+    return response
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register_public(
+    data: RegisterPublic,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new user (only when registration is enabled in settings)."""
+    if not await _get_auth_setting(db, "registration_enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registrierung ist deaktiviert",
+        )
+
+    result = await db.execute(select(User).where(User.username == data.username))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Benutzername existiert bereits")
+
+    if data.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="E-Mail wird bereits verwendet")
+
+    user = User(
+        username=data.username,
+        email=data.email,
+        hashed_password=hash_password(data.password),
+        display_name=data.display_name or data.username,
+        role="user",
+        is_active=True,
+    )
+    db.add(user)
+    await db.flush()
+    logger.info(f"New user registered: {data.username}")
+    return {"message": "Registrierung erfolgreich. Du kannst dich jetzt anmelden."}
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request a password reset email (only when forgot_password is enabled)."""
+    if not await _get_auth_setting(db, "forgot_password_enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Passwort vergessen ist deaktiviert",
+        )
+
+    if not data.email and not data.username:
+        raise HTTPException(status_code=400, detail="E-Mail oder Benutzername angeben")
+
+    user = None
+    if data.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+        user = result.scalar_one_or_none()
+    if not user and data.username:
+        result = await db.execute(select(User).where(User.username == data.username))
+        user = result.scalar_one_or_none()
+
+    # Immer gleiche Antwort (keine Hinweise ob Konto existiert)
+    if not user or not user.email:
+        return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
+
+    token = create_password_reset_token(user.id)
+    from app.models.models import SystemSetting
+    result = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
+    base_url_val = result.scalar_one_or_none()
+    base_url = (base_url_val or "").strip() if base_url_val else ""
+    if not base_url:
+        base_url = str(request.base_url).rstrip("/")
+    reset_url = f"{base_url.rstrip('/')}/reset-password?token={token}"
+
+    from app.services.email_service import get_smtp_settings, send_email
+    smtp = await get_smtp_settings(db)
+    if not smtp.get("enabled") or not smtp.get("host"):
+        logger.warning("SMTP not configured - cannot send password reset email")
+        return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
+
+    subject = "Passwort zurücksetzen – DNS Manager"
+    body_html = f"""
+    <p>Hallo {user.display_name or user.username},</p>
+    <p>du hast eine Zurücksetzung deines Passworts angefordert.</p>
+    <p>Klicke auf den folgenden Link, um ein neues Passwort zu setzen (der Link ist 1 Stunde gültig):</p>
+    <p><a href="{reset_url}">{reset_url}</a></p>
+    <p>Falls du das nicht warst, ignoriere diese E-Mail.</p>
+    """
+    body_text = f"Passwort zurücksetzen: {reset_url}"
+    try:
+        send_email(smtp, user.email, subject, body_html, body_text)
+    except Exception as e:
+        logger.exception("Failed to send password reset email: %s", e)
+    return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set new password using the token from the email."""
+    user_id = decode_password_reset_token(data.token)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Ungültiger oder abgelaufener Link. Bitte fordere einen neuen an.")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=400, detail="Ungültiger oder abgelaufener Link.")
+
+    user.hashed_password = hash_password(data.new_password)
+    await db.flush()
+    logger.info(f"Password reset for user id={user_id}")
+    return {"message": "Passwort wurde geändert. Du kannst dich jetzt anmelden."}
 
 
 @router.get("/me")
@@ -152,6 +349,20 @@ async def update_profile(
     
     if data.display_name is not None:
         current_user.display_name = data.display_name or None
+
+    for attr in ("phone", "company", "street", "postal_code", "city", "country"):
+        if getattr(data, attr, None) is not None:
+            setattr(current_user, attr, getattr(data, attr) or None)
+    if data.date_of_birth is not None:
+        if data.date_of_birth:
+            try:
+                current_user.date_of_birth = date.fromisoformat(data.date_of_birth)
+            except ValueError:
+                current_user.date_of_birth = None
+        else:
+            current_user.date_of_birth = None
+    if data.preferred_language is not None:
+        current_user.preferred_language = (data.preferred_language or "").strip() or None
     
     await db.flush()
     logger.info(f"User '{current_user.username}' updated their profile")

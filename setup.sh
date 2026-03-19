@@ -36,6 +36,14 @@ echo ""
 echo "📋 Basis-Konfiguration"
 echo "----------------------"
 
+# Language: from install.sh (--from-install <de|en>) or default de
+if [ "$1" = "--from-install" ] && [ -n "$2" ]; then
+    DEFAULT_LANGUAGE="$2"
+else
+    DEFAULT_LANGUAGE="de"
+fi
+INSTALL_PATH=$(pwd)
+
 # App Name
 echo "Wie soll das Panel heißen? (Dieser Name wird später oben links im Panel angezeigt)"
 read -p "Eingabe (z.B. Firmenname oder Eigenname) [DNS Manager]: " APP_NAME
@@ -162,6 +170,8 @@ cat > .env << EOF
 APP_NAME=${APP_NAME}
 APP_VERSION=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | head -1 || echo "2.2.1")
 LOG_LEVEL=info
+DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-de}
+INSTALL_PATH=${INSTALL_PATH:-$(pwd)}
 
 # Sicherheit
 JWT_SECRET_KEY=${JWT_SECRET}

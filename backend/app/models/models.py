@@ -24,6 +24,15 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=func.now())
     last_login = Column(DateTime, nullable=True)
+    # Erweiterte Profilfelder (z. B. geschäftlich)
+    phone = Column(String(50), nullable=True)
+    company = Column(String(255), nullable=True)
+    street = Column(String(255), nullable=True)
+    postal_code = Column(String(20), nullable=True)
+    city = Column(String(100), nullable=True)
+    country = Column(String(100), nullable=True)
+    date_of_birth = Column(DateTime, nullable=True)
+    preferred_language = Column(String(10), nullable=True)  # de, en, etc.
 
 
 class UserZoneAccess(Base):

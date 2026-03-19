@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   User,
   Mail,
@@ -10,13 +11,22 @@ import {
   Shield,
   Loader2
 } from 'lucide-react';
+import api from '../api';
 
 export default function SetupWizard() {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [setupStatus, setSetupStatus] = useState(null);
+  const [appInfo, setAppInfo] = useState({
+    app_name: 'DNS Manager',
+    app_tagline: 'PowerDNS Admin Panel',
+    app_creator: '',
+    app_logo_url: '',
+    app_version: '',
+  });
 
   // Form data
   const [userData, setUserData] = useState({
@@ -46,6 +56,7 @@ export default function SetupWizard() {
   useEffect(() => {
     // Check setup status
     checkSetupStatus();
+    api.getAppInfo().then(setAppInfo).catch(() => {});
   }, []);
 
   const checkSetupStatus = async () => {
@@ -68,12 +79,12 @@ export default function SetupWizard() {
 
     // Validate
     if (userData.password !== userData.passwordConfirm) {
-      setError('Passwörter stimmen nicht überein');
+      setError(t('setup.passwordsMismatch'));
       return;
     }
 
     if (userData.password.length < 8) {
-      setError('Passwort muss mindestens 8 Zeichen haben');
+      setError(t('setup.passwordTooShort'));
       return;
     }
 
@@ -84,6 +95,7 @@ export default function SetupWizard() {
       const res = await fetch('/api/v1/setup/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           username: userData.username,
           email: userData.email,
@@ -94,14 +106,13 @@ export default function SetupWizard() {
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || 'Registrierung fehlgeschlagen');
+        throw new Error(err.detail || t('setup.registerFailed'));
       }
 
       const data = await res.json();
 
-      // Save token
-      localStorage.setItem('token', data.access_token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      // Token wird per HttpOnly-Cookie gesetzt; User nur im Speicher
+      api.setUser(data.user);
 
       // Configure email if enabled
       if (emailConfig.enabled) {
@@ -145,7 +156,7 @@ export default function SetupWizard() {
   if (!setupStatus) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white">Lade...</div>
+        <div className="text-white">{t('setup.loading')}</div>
       </div>
     );
   }
@@ -159,16 +170,25 @@ export default function SetupWizard() {
       <div className="container mx-auto px-4 relative z-10">
         <div className="max-w-2xl mx-auto">
           {/* Header */}
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
+          <div className="text-center mb-8 relative">
+            {!appInfo.app_logo_url ? (
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
                 <Shield className="w-8 h-8 text-white" />
-            </div>
+              </div>
+            ) : (
+              <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-cover mx-auto mb-4 shadow-lg shadow-accent/20" />
+            )}
             <h1 className="text-3xl font-bold text-text-primary mb-2">
-              DNS Manager Setup
+              {appInfo.app_name || t('setup.welcomeTitle')}
             </h1>
             <p className="text-text-muted text-sm">
-              Willkommen! Lass uns deinen DNS Manager einrichten.
+              {t('setup.welcomeSubtitle')}
             </p>
+            <div className="absolute top-4 right-4 flex gap-1 text-xs">
+              <button type="button" onClick={() => i18n.changeLanguage('de')} className={`px-2 py-1 rounded ${i18n.language === 'de' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>DE</button>
+              <span className="text-text-muted">|</span>
+              <button type="button" onClick={() => i18n.changeLanguage('en')} className={`px-2 py-1 rounded ${i18n.language === 'en' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>EN</button>
+            </div>
           </div>
 
           {/* Progress */}
@@ -199,12 +219,12 @@ export default function SetupWizard() {
                   <div className="p-2 bg-surface rounded-lg border border-border">
                     <User className="w-5 h-5 text-accent" />
                   </div>
-                  Administrator Account
+                  {t('setup.step1Title')}
                 </h2>
 
                 <div className="space-y-5">
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Benutzername</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('login.username')}</label>
                     <input
                       type="text"
                       className="w-full px-4 py-2.5 text-sm"
@@ -216,7 +236,7 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">E-Mail</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('register.email')}</label>
                     <input
                       type="email"
                       className="w-full px-4 py-2.5 text-sm"
@@ -228,7 +248,7 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Anzeigename</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('register.displayName')}</label>
                     <input
                       type="text"
                       className="w-full px-4 py-2.5 text-sm"
@@ -239,25 +259,25 @@ export default function SetupWizard() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Passwort</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('login.password')}</label>
                     <input
                       type="password"
                       className="w-full px-4 py-2.5 text-sm"
                       value={userData.password}
                       onChange={(e) => setUserData({...userData, password: e.target.value})}
-                      placeholder="Mindestens 8 Zeichen"
+                      placeholder={t('setup.passwordPlaceholder')}
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">Passwort wiederholen</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.passwordRepeat')}</label>
                     <input
                       type="password"
                       className="w-full px-4 py-2.5 text-sm"
                       value={userData.passwordConfirm}
                       onChange={(e) => setUserData({...userData, passwordConfirm: e.target.value})}
-                      placeholder="Passwort bestätigen"
+                      placeholder={t('setup.confirmPlaceholder')}
                       required
                     />
                   </div>
@@ -269,7 +289,7 @@ export default function SetupWizard() {
                     disabled={!userData.username || !userData.email || !userData.password}
                     className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Weiter →
+                    {t('setup.next')}
                   </button>
                 </div>
               </div>
@@ -282,7 +302,7 @@ export default function SetupWizard() {
                   <div className="p-2 bg-surface rounded-lg border border-border">
                     <Mail className="w-5 h-5 text-accent" />
                   </div>
-                  E-Mail Konfiguration (Optional)
+                  {t('setup.step2Title')}
                 </h2>
 
                 <div className="mb-6 p-4 bg-surface border border-border rounded-lg">
@@ -293,7 +313,7 @@ export default function SetupWizard() {
                       checked={emailConfig.enabled}
                       onChange={(e) => setEmailConfig({...emailConfig, enabled: e.target.checked})}
                     />
-                    <span className="text-sm font-medium text-text-primary">E-Mail-Benachrichtigungen aktivieren</span>
+                    <span className="text-sm font-medium text-text-primary">{t('setup.enableEmail')}</span>
                   </label>
                 </div>
 
@@ -301,7 +321,7 @@ export default function SetupWizard() {
                   <div className="space-y-5">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Server</label>
+                        <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.smtpServer')}</label>
                         <input
                           type="text"
                           className="w-full px-4 py-2.5 text-sm"
@@ -310,7 +330,7 @@ export default function SetupWizard() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-text-secondary mb-1.5">Port</label>
+                        <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.port')}</label>
                         <input
                           type="number"
                           className="w-full px-4 py-2.5 text-sm"
@@ -321,7 +341,7 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Benutzer</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.smtpUser')}</label>
                       <input
                         type="email"
                         className="w-full px-4 py-2.5 text-sm"
@@ -332,7 +352,7 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1.5">SMTP Passwort</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.smtpPassword')}</label>
                       <input
                         type="password"
                         className="w-full px-4 py-2.5 text-sm"
@@ -343,7 +363,7 @@ export default function SetupWizard() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1.5">Absender E-Mail</label>
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('setup.senderEmail')}</label>
                       <input
                         type="email"
                         className="w-full px-4 py-2.5 text-sm"
@@ -360,13 +380,13 @@ export default function SetupWizard() {
                     onClick={() => setStep(1)}
                     className="px-6 py-2.5 bg-surface text-text-primary border border-border rounded-lg hover:bg-surface-hover font-medium text-sm transition-all duration-200"
                   >
-                    ← Zurück
+                    {t('setup.back')}
                   </button>
                   <button
                     onClick={() => setStep(3)}
                     className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200"
                   >
-                    Weiter →
+                    {t('setup.next')}
                   </button>
                 </div>
               </div>
@@ -379,31 +399,31 @@ export default function SetupWizard() {
                   <div className="p-2 bg-surface rounded-lg border border-border">
                     <Key className="w-5 h-5 text-accent" />
                   </div>
-                  Setup abschließen
+                  {t('setup.step3Title')}
                 </h2>
 
                 <div className="space-y-4 mb-8">
                   <div className="p-5 bg-surface border border-border rounded-lg">
-                    <h3 className="font-semibold text-text-primary mb-3">Administrator</h3>
+                    <h3 className="font-semibold text-text-primary mb-3">{t('setup.step1Title')}</h3>
                     <div className="space-y-2 text-sm text-text-secondary">
-                        <p><span className="text-text-muted">Benutzername:</span> {userData.username}</p>
-                        <p><span className="text-text-muted">E-Mail:</span> {userData.email}</p>
+                        <p><span className="text-text-muted">{t('login.username')}:</span> {userData.username}</p>
+                        <p><span className="text-text-muted">{t('register.email')}:</span> {userData.email}</p>
                     </div>
                   </div>
 
                   {emailConfig.enabled && (
                     <div className="p-5 bg-surface border border-border rounded-lg">
-                      <h3 className="font-semibold text-text-primary mb-3">E-Mail</h3>
+                      <h3 className="font-semibold text-text-primary mb-3">{t('register.email')}</h3>
                       <div className="space-y-2 text-sm text-text-secondary">
-                          <p><span className="text-text-muted">SMTP:</span> {emailConfig.smtp_host}:{emailConfig.smtp_port}</p>
-                          <p><span className="text-text-muted">Benutzer:</span> {emailConfig.smtp_user}</p>
+                          <p><span className="text-text-muted">{t('setup.smtpServer')}:</span> {emailConfig.smtp_host}:{emailConfig.smtp_port}</p>
+                          <p><span className="text-text-muted">{t('setup.smtpUser')}:</span> {emailConfig.smtp_user}</p>
                       </div>
                     </div>
                   )}
 
                   <div className="p-5 bg-accent/10 border border-accent/20 rounded-lg">
                     <p className="text-accent text-sm">
-                      PowerDNS Server können bequem nach der Installation über das Admin-Panel im Browser hinzugefügt werden.
+                      {t('setup.pdnsHint')}
                     </p>
                   </div>
                 </div>
@@ -414,7 +434,7 @@ export default function SetupWizard() {
                     className="px-6 py-2.5 bg-surface text-text-primary border border-border rounded-lg hover:bg-surface-hover font-medium text-sm transition-all duration-200"
                     disabled={loading}
                   >
-                    ← Zurück
+                    {t('setup.back')}
                   </button>
                   <button
                     onClick={handleRegister}
@@ -424,10 +444,10 @@ export default function SetupWizard() {
                     {loading ? (
                         <>
                             <Loader2 className="w-4 h-4 animate-spin" />
-                            Wird eingerichtet...
+                            {t('setup.settingUp')}
                         </>
                     ) : (
-                        '✓ Setup abschließen'
+                        t('setup.completeSetup')
                     )}
                   </button>
                 </div>
@@ -441,10 +461,10 @@ export default function SetupWizard() {
                     <CheckCircle className="w-10 h-10 text-green-500" />
                 </div>
                 <h2 className="text-2xl font-bold text-text-primary mb-4">
-                  Setup erfolgreich!
+                  {t('setup.step4Title')}
                 </h2>
                 <p className="text-text-muted text-sm mb-8 max-w-sm mx-auto">
-                  Dein DNS Manager ist bereit. Du wirst in wenigen Sekunden zum Dashboard weitergeleitet...
+                  {t('setup.step4Subtitle')}
                 </p>
                 <div className="w-48 h-1.5 bg-surface border border-border mx-auto rounded-full overflow-hidden">
                     <div className="h-full bg-gradient-to-r from-accent to-purple-600 animate-pulse/2"></div>
@@ -455,7 +475,9 @@ export default function SetupWizard() {
 
           {/* Help text */}
           <div className="mt-8 text-center text-xs text-text-muted">
-            <p>Brauchst du Hilfe? Schau in die <a href="https://github.com/29barra29/dns-manager/wiki" className="text-accent hover:text-accent-hover transition-colors">Dokumentation</a></p>
+            <p>{t('setup.needHelp')} <a href="https://github.com/29barra29/dns-manager/wiki" className="text-accent hover:text-accent-hover transition-colors">{t('setup.documentation')}</a></p>
+            <p className="mt-2">{(appInfo.app_tagline || t('login.tagline'))}{appInfo.app_version ? ` • v${appInfo.app_version}` : ''}</p>
+            {appInfo.app_creator ? <p>{appInfo.app_creator}</p> : null}
           </div>
         </div>
       </div>

@@ -1,7 +1,8 @@
 """API routes for system settings and configuration management (Admin only)."""
 import logging
+from pathlib import Path
 import httpx
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy import select
@@ -22,21 +23,49 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 # ========================
 class AppInfoUpdate(BaseModel):
     app_name: str = Field(..., description="Name der Anwendung")
+    app_base_url: Optional[str] = Field(None, max_length=500, description="Öffentliche Basis-URL für E-Mail-Links (nur Admin)")
+    registration_enabled: Optional[bool] = Field(None, description="Registrierung auf der Login-Seite erlauben")
+    forgot_password_enabled: Optional[bool] = Field(None, description="Passwort vergessen-Link anzeigen und erlauben")
+    app_tagline: Optional[str] = Field(None, max_length=200, description="Kurzer Footer-Text auf Login-Seiten")
+    app_creator: Optional[str] = Field(None, max_length=200, description="Creator-/Branding-Hinweis unter dem Footer")
+    app_logo_url: Optional[str] = Field(None, max_length=500, description="URL zum Logo für Login-/Setup-Seiten")
+
 
 @router.get("/app-info", include_in_schema=False)
 async def get_app_info(db: AsyncSession = Depends(get_db)):
-    """Get public app info like app name and version."""
+    """Get public app info like app name, version, and auth feature flags."""
     from app.models.models import SystemSetting
-    from sqlalchemy import select
     from app.core.config import settings
-    
-    result = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_name"))
-    custom_name = result.scalar_one_or_none()
-    
+
+    result = await db.execute(
+        select(SystemSetting.key, SystemSetting.value).where(
+            SystemSetting.key.in_((
+                "app_name",
+                "app_base_url",
+                "registration_enabled",
+                "forgot_password_enabled",
+                "app_tagline",
+                "app_creator",
+                "app_logo_url",
+            ))
+        )
+    )
+    rows = {r[0]: r[1] for r in result.all()}
+    base_url = (rows.get("app_base_url") or "").strip()
+
     return {
-        "app_name": custom_name or settings.APP_NAME,
-        "app_version": settings.APP_VERSION
+        "app_name": rows.get("app_name") or settings.APP_NAME,
+        "app_version": settings.APP_VERSION,
+        "app_base_url": base_url or None,
+        "registration_enabled": (rows.get("registration_enabled") or "false").lower() == "true",
+        "forgot_password_enabled": (rows.get("forgot_password_enabled") or "false").lower() == "true",
+        "app_tagline": (rows.get("app_tagline") or "").strip() or "PowerDNS Admin Panel",
+        "app_creator": (rows.get("app_creator") or "").strip() or "Created by GemTec Games • Barra",
+        "app_logo_url": (rows.get("app_logo_url") or "").strip() or None,
+        "install_path": (settings.INSTALL_PATH or "").strip() or None,
+        "default_language": (settings.DEFAULT_LANGUAGE or "").strip() or "de",
     }
+
 
 @router.put("/app-info")
 async def update_app_info(
@@ -44,20 +73,120 @@ async def update_app_info(
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update custom app name."""
+    """Update custom app name and auth feature toggles."""
     from app.models.models import SystemSetting
-    from sqlalchemy import select
-    
+
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_name"))
     setting = result.scalar_one_or_none()
-    
     if setting:
         setting.value = data.app_name
     else:
         db.add(SystemSetting(key="app_name", value=data.app_name))
-    
+
+    if data.registration_enabled is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "registration_enabled"))
+        s = r.scalar_one_or_none()
+        if s:
+            s.value = "true" if data.registration_enabled else "false"
+        else:
+            db.add(SystemSetting(key="registration_enabled", value="true" if data.registration_enabled else "false"))
+
+    if data.forgot_password_enabled is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "forgot_password_enabled"))
+        s = r.scalar_one_or_none()
+        if s:
+            s.value = "true" if data.forgot_password_enabled else "false"
+        else:
+            db.add(SystemSetting(key="forgot_password_enabled", value="true" if data.forgot_password_enabled else "false"))
+
+    if data.app_base_url is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_base_url"))
+        s = r.scalar_one_or_none()
+        val = (data.app_base_url or "").strip() or ""
+        if s:
+            s.value = val
+        else:
+            db.add(SystemSetting(key="app_base_url", value=val))
+
+    if data.app_tagline is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_tagline"))
+        s = r.scalar_one_or_none()
+        val = (data.app_tagline or "").strip()
+        if s:
+            s.value = val
+        else:
+            db.add(SystemSetting(key="app_tagline", value=val))
+
+    if data.app_creator is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_creator"))
+        s = r.scalar_one_or_none()
+        val = (data.app_creator or "").strip()
+        if s:
+            s.value = val
+        else:
+            db.add(SystemSetting(key="app_creator", value=val))
+
+    if data.app_logo_url is not None:
+        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_logo_url"))
+        s = r.scalar_one_or_none()
+        val = (data.app_logo_url or "").strip()
+        if s:
+            s.value = val
+        else:
+            db.add(SystemSetting(key="app_logo_url", value=val))
+
     await db.commit()
-    return {"message": "Systemname aktualisiert"}
+    return {"message": "Einstellungen aktualisiert"}
+
+
+@router.post("/app-logo")
+async def upload_app_logo(
+    file: UploadFile = File(...),
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload custom logo for login/setup pages (admin only)."""
+    from app.models.models import SystemSetting
+
+    allowed = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }
+    ext = allowed.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="Nur PNG, JPG, WEBP oder SVG erlaubt")
+
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Logo ist zu groß (max. 2 MB)")
+
+    static_dir = Path(__file__).resolve().parent.parent / "static_new"
+    uploads_dir = static_dir / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Delete older custom logos with different extensions
+    for old in uploads_dir.glob("custom-logo.*"):
+        try:
+            old.unlink()
+        except Exception:
+            pass
+
+    filename = f"custom-logo{ext}"
+    out = uploads_dir / filename
+    out.write_bytes(content)
+    logo_url = f"/uploads/{filename}"
+
+    r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_logo_url"))
+    s = r.scalar_one_or_none()
+    if s:
+        s.value = logo_url
+    else:
+        db.add(SystemSetting(key="app_logo_url", value=logo_url))
+    await db.commit()
+
+    return {"message": "Logo hochgeladen", "app_logo_url": logo_url}
 
 # ========================
 # Schemas

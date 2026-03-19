@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24 Stunden
 
+    # Auth-Cookie (sicherer als localStorage; HttpOnly, kein Zugriff per JavaScript)
+    AUTH_COOKIE_NAME: str = "dns_manager_token"
+    AUTH_COOKIE_MAX_AGE: int = 86400  # Sekunden, 24h (sollte zu JWT_EXPIRE_MINUTES passen)
+    AUTH_COOKIE_SECURE: bool = False  # True wenn nur HTTPS
+    AUTH_COOKIE_SAMESITE: str = "lax"
+
     # First-Run Settings
     ENABLE_REGISTRATION: bool = False
     INITIAL_ADMIN_PASSWORD: Optional[str] = None
@@ -50,6 +56,11 @@ class Settings(BaseSettings):
     # PowerDNS Servers
     # Format: name|url|api_key,name|url|api_key
     PDNS_SERVERS: str = ""
+
+    # Optional: Pfad zum Projekt auf dem Host (für Anzeige unter Einstellungen → Updates).
+    INSTALL_PATH: Optional[str] = None
+    # Standard-Sprache der Oberfläche (de/en), z.B. aus install.sh gesetzt.
+    DEFAULT_LANGUAGE: Optional[str] = None
     
     class Config:
         env_file = ".env"

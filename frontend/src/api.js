@@ -1,44 +1,43 @@
 /**
  * API Client für das DNS Manager Backend.
- * Verwaltet JWT-Token-Handling und alle API-Aufrufe.
+ * Token wird nur per HttpOnly-Cookie gesetzt (nicht in localStorage – sicherer gegen XSS).
  */
 const API_BASE = '/api/v1';
 
+const FETCH_OPTS = { credentials: 'include' };
+
 class APIClient {
     constructor() {
-        this.token = localStorage.getItem('token');
-    }
-
-    setToken(token) {
-        this.token = token;
-        if (token) {
-            localStorage.setItem('token', token);
-        } else {
-            localStorage.removeItem('token');
-        }
-    }
-
-    getToken() {
-        return this.token;
+        this._userCache = null; // Nur im Speicher, nie in localStorage
     }
 
     isLoggedIn() {
-        return !!this.token;
+        return this._userCache !== null;
     }
 
-    logout() {
-        this.setToken(null);
-        localStorage.removeItem('user');
+    getUser() {
+        return this._userCache;
+    }
+
+    setUser(user) {
+        this._userCache = user;
+    }
+
+    clearUser() {
+        this._userCache = null;
+    }
+
+    async logout() {
+        try {
+            await fetch(`${API_BASE}/auth/logout`, { method: 'POST', ...FETCH_OPTS });
+        } catch (_) { /* ignore */ }
+        this.clearUser();
         window.location.href = '/login';
     }
 
     async request(method, path, data = null) {
         const headers = { 'Content-Type': 'application/json' };
-        if (this.token) {
-            headers['Authorization'] = `Bearer ${this.token}`;
-        }
-
-        const opts = { method, headers };
+        const opts = { method, headers, ...FETCH_OPTS };
         if (data && method !== 'GET') {
             opts.body = JSON.stringify(data);
         }
@@ -46,7 +45,8 @@ class APIClient {
         const res = await fetch(`${API_BASE}${path}`, opts);
 
         if (res.status === 401) {
-            this.logout();
+            this.clearUser();
+            window.location.href = '/login';
             throw new Error('Sitzung abgelaufen – bitte erneut anmelden');
         }
 
@@ -68,22 +68,55 @@ class APIClient {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: form,
+            ...FETCH_OPTS,
         });
 
         if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Login fehlgeschlagen');
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || 'Login fehlgeschlagen');
         }
 
         const data = await res.json();
-        this.setToken(data.access_token);
-        localStorage.setItem('user', JSON.stringify(data.user));
+        this.setUser(data.user);
         return data;
     }
 
     getMe() { return this.request('GET', '/auth/me'); }
     updateProfile(data) { return this.request('PUT', '/auth/me', data); }
     changePassword(data) { return this.request('PUT', '/auth/me/password', data); }
+    register(data) {
+        return fetch(`${API_BASE}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Registrierung fehlgeschlagen');
+            return data;
+        });
+    }
+    requestPasswordReset(data) {
+        return fetch(`${API_BASE}/auth/forgot-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Anfrage fehlgeschlagen');
+            return data;
+        });
+    }
+    resetPassword(data) {
+        return fetch(`${API_BASE}/auth/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Zurücksetzen fehlgeschlagen');
+            return data;
+        });
+    }
     listUsers() { return this.request('GET', '/auth/users'); }
     createUser(data) { return this.request('POST', '/auth/users', data); }
     updateUser(id, data) { return this.request('PUT', `/auth/users/${id}`, data); }
@@ -141,6 +174,19 @@ class APIClient {
     // ========== App Info ==========
     getAppInfo() { return this.request('GET', '/settings/app-info'); }
     updateAppInfo(data) { return this.request('PUT', '/settings/app-info', data); }
+    uploadAppLogo(file) {
+        const form = new FormData();
+        form.append('file', file);
+        return fetch(`${API_BASE}/settings/app-logo`, {
+            method: 'POST',
+            body: form,
+            ...FETCH_OPTS,
+        }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || 'Logo-Upload fehlgeschlagen');
+            return data;
+        });
+    }
 }
 const api = new APIClient();
 export default api;

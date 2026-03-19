@@ -6,7 +6,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.3.1-blue.svg)
 
 ---
 
@@ -33,10 +33,19 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - 📢 **Fehlermeldungen im Modal** – Beim Erstellen einer Zone erscheinen Fehler direkt im Popup
 - 📊 **Ergebnis pro Server** – Nach Zonen-Erstellung: Anzeige pro Server (erstellt / vorhanden / Fehler)
 - 📄 **Zentrale Version** – Eine `VERSION`-Datei, alle Anzeigen (API, UI, Setup) lesen daraus
+- 🎨 **Branding (Login/Setup)** – Eigenes Logo, Footer- und Creator-Text in den Einstellungen; Anzeige auf Login, Registrierung, Passwort vergessen/Reset und im Setup-Wizard
+- 🌐 **Mehrsprachigkeit (i18n)** – Login, Registrierung, Passwort-Reset, Setup-Wizard und Einstellungen auf Deutsch/Englisch mit Sprachumschalter
 
 ---
 
 ## 📋 Was ist neu (Changelog)
+
+### v2.3.1
+
+- **Branding:** Eigenes Logo, Tagline (Footer-Text) und Creator-Text in den Admin-Einstellungen („Branding (Login/Setup)“). Logo-Upload (PNG/JPG/WEBP/SVG, max. 2 MB), optional „Logo entfernen“. API: `GET/PUT /settings/app-info`, `POST /settings/app-logo`; Logo wird unter `static_new/uploads/custom-logo.*` gespeichert.
+- **Logo überall:** Das eingestellte Logo erscheint auf Login, Registrierung, Passwort vergessen, Passwort-Reset und im Setup-Wizard – sowie in der **Sidebar** (Dashboard und alle eingeloggten Seiten).
+- **Mehrsprachigkeit (i18n):** Login-, Registrierungs-, Forgot-/Reset- und Setup-Seiten sowie Einstellungen nutzen vollständig die Übersetzungen (DE/EN). Sprachumschalter auf der Login-Seite; gewählte Sprache wird im Benutzerprofil gespeichert und beim nächsten Login übernommen.
+- **Locales:** Erweiterte `de.json` und `en.json` um alle Keys für Branding, Login, Register, Forgot, Reset und Setup.
 
 ### v2.2.2
 
@@ -212,7 +221,7 @@ docker compose up -d
 ```bash
 cd dns-manager
 git fetch --tags
-git checkout v2.2.2  # Oder gewünschte Version
+git checkout v2.3.1  # Oder gewünschte Version
 docker compose build --no-cache
 docker compose up -d
 ```
@@ -313,7 +322,7 @@ Pull Requests sind willkommen! Bei größeren Änderungen bitte zuerst ein Issue
 
 ### Version (eine Stelle)
 
-Die App-Version steht **nur in der Datei `VERSION`** im Projektroot. Backend, API und Web-Oberfläche lesen sie von dort. Vor einem Release: Inhalt von `VERSION` anpassen (z. B. `2.3.0`), dann `./scripts/update-readme-from-version.sh` ausführen, damit Badge und Beispiele in der README angepasst werden.
+Die App-Version steht **nur in der Datei `VERSION`** im Projektroot. Backend, API und Web-Oberfläche lesen sie von dort. Vor einem Release: Inhalt von `VERSION` anpassen (z. B. `2.3.1`), dann `./scripts/update-readme-from-version.sh` ausführen, damit Badge und Beispiele in der README angepasst werden.
 
 ### Entwicklung
 

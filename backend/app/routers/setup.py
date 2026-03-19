@@ -1,6 +1,7 @@
 """First-run setup and registration endpoints."""
 import logging
 from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr, Field
@@ -109,25 +110,40 @@ async def register_first_user(
     await db.commit()
     await db.refresh(new_user)
 
-    # Create access token
-    access_token = create_access_token(data={"sub": str(new_user.id)})
+    # Create access token and set HttpOnly cookie (wie Login)
+    access_token = create_access_token(data={"sub": str(new_user.id), "role": new_user.role})
+    user_dict = {
+        "id": new_user.id,
+        "username": new_user.username,
+        "email": new_user.email,
+        "display_name": new_user.display_name,
+        "role": new_user.role,
+        "zones": [],
+        "created_at": new_user.created_at.isoformat() if new_user.created_at else None,
+        "last_login": None,
+    }
 
-    # Disable registration after first user
-    # Note: In production, you might want to update an env file or config
     logger.info(f"First admin user created: {new_user.username}")
-    logger.info("Registration will be disabled for future requests")
 
-    return RegisterResponse(
-        message="Administrator-Account erfolgreich erstellt!",
-        access_token=access_token,
-        user={
-            "id": new_user.id,
-            "username": new_user.username,
-            "email": new_user.email,
-            "display_name": new_user.display_name,
-            "role": new_user.role,
+    response = JSONResponse(
+        status_code=201,
+        content={
+            "message": "Administrator-Account erfolgreich erstellt!",
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": user_dict,
         },
     )
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=settings.AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path="/",
+    )
+    return response
 
 
 class EmailConfig(BaseModel):

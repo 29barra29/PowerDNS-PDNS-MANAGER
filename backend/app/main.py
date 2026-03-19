@@ -171,6 +171,7 @@ STATIC_DIR = Path(__file__).parent / "static_new"
 # Serve static assets (JS, CSS, images)
 if STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+    app.mount("/uploads", StaticFiles(directory=str(STATIC_DIR / "uploads"), check_dir=False), name="uploads")
 
 
 @app.get("/api", tags=["Health"])
@@ -210,7 +211,7 @@ async def health_check():
 async def spa_catch_all(path: str):
     """Serve the React SPA for all frontend routes."""
     # Don't intercept API, docs, or static paths
-    if path.startswith(("api/", "docs", "redoc", "openapi", "assets/")):
+    if path.startswith(("api/", "docs", "redoc", "openapi", "assets/", "uploads/")):
         return JSONResponse(status_code=404, content={"error": "Not found"})
     
     index_file = STATIC_DIR / "index.html"

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Key, Loader2, Shield, User, Globe, X, Check } from 'lucide-react'
 import api from '../api'
 
 export default function UsersPage() {
+    const { t } = useTranslation()
     const [users, setUsers] = useState([])
     const [allZones, setAllZones] = useState([])
     const [loading, setLoading] = useState(true)
@@ -64,7 +66,7 @@ export default function UsersPage() {
     }
 
     async function handleDelete(id, name) {
-        if (!confirm(`Benutzer "${name}" wirklich löschen?`)) return
+        if (!confirm(t('users.deleteConfirm', { name }))) return
         try {
             await api.deleteUser(id)
             loadData()
@@ -80,7 +82,7 @@ export default function UsersPage() {
         setSuccess('')
         try {
             await api.updateUser(editPasswordUser.id, { password: newPassword })
-            setSuccess(`Passwort für ${editPasswordUser.username} erfolgreich geändert!`)
+            setSuccess(t('users.passwordChangedSuccess', { name: editPasswordUser.username }))
             setEditPasswordUser(null)
             setNewPassword('')
         } catch (err) {
@@ -133,14 +135,14 @@ export default function UsersPage() {
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-text-primary">Benutzerverwaltung</h1>
-                    <p className="text-text-muted text-sm mt-1">{users.length} Benutzer</p>
+                    <h1 className="text-2xl font-bold text-text-primary">{t('users.title')}</h1>
+                    <p className="text-text-muted text-sm mt-1">{t('users.usersCount', { count: users.length })}</p>
                 </div>
                 <button
                     onClick={() => setShowCreate(true)}
                     className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
                 >
-                    <Plus className="w-4 h-4" /> Neuer Benutzer
+                    <Plus className="w-4 h-4" /> {t('users.newUser')}
                 </button>
             </div>
 
@@ -175,10 +177,10 @@ export default function UsersPage() {
                                         ? 'bg-accent/10 text-accent-light border-accent/30'
                                         : 'bg-bg-hover text-text-muted border-border'
                                         }`}>
-                                        {u.role === 'admin' ? 'Admin' : 'Benutzer'}
+                                        {u.role === 'admin' ? t('layout.admin') : t('layout.user')}
                                     </span>
                                     {!u.is_active && (
-                                        <span className="text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/30">Deaktiviert</span>
+                                        <span className="text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/30">{t('users.deactivated')}</span>
                                     )}
                                 </div>
                                 <p className="text-sm text-text-muted">@{u.username}</p>
@@ -187,7 +189,7 @@ export default function UsersPage() {
                                 {u.role !== 'admin' && (
                                     <div className="mt-2">
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <span className="text-xs text-text-muted">Zonen:</span>
+                                            <span className="text-xs text-text-muted">{t('users.zonesLabel')}</span>
                                             {(u.zones || []).length > 0 ? (
                                                 (u.zones || []).map(z => (
                                                     <span key={z} className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/30 flex items-center gap-1">
@@ -196,14 +198,14 @@ export default function UsersPage() {
                                                     </span>
                                                 ))
                                             ) : (
-                                                <span className="text-xs text-text-muted italic">Keine Zonen zugewiesen</span>
+                                                <span className="text-xs text-text-muted italic">{t('settings.noZonesAssigned')}</span>
                                             )}
                                         </div>
                                     </div>
                                 )}
                                 {u.role === 'admin' && (
                                     <p className="text-xs text-accent-light mt-2 flex items-center gap-1">
-                                        <Globe className="w-3 h-3" /> Zugriff auf alle Zonen
+                                        <Globe className="w-3 h-3" /> {t('users.accessAllZones')}
                                     </p>
                                 )}
                             </div>
@@ -214,7 +216,7 @@ export default function UsersPage() {
                                     <button
                                         onClick={() => openZoneEditor(u)}
                                         className="p-2 rounded-lg text-text-muted hover:text-purple-400 hover:bg-purple-500/10 transition-colors"
-                                        title="Zonen zuweisen"
+                                        title={t('users.assignZones')}
                                     >
                                         <Globe className="w-4 h-4" />
                                     </button>
@@ -222,21 +224,21 @@ export default function UsersPage() {
                                 <button
                                     onClick={() => toggleRole(u)}
                                     className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors"
-                                    title={u.role === 'admin' ? 'Zum Benutzer herabstufen' : 'Zum Admin befördern'}
+                                    title={u.role === 'admin' ? t('users.demoteToUser') : t('users.promoteToAdmin')}
                                 >
                                     <Shield className="w-4 h-4" />
                                 </button>
                                 <button
                                     onClick={() => { setEditPasswordUser(u); setNewPassword(''); setError(''); setSuccess(''); }}
                                     className="p-2 rounded-lg text-text-muted hover:text-warning hover:bg-warning/10 transition-colors"
-                                    title="Passwort ändern"
+                                    title={t('users.changePassword')}
                                 >
                                     <Key className="w-4 h-4" />
                                 </button>
                                 <button
                                     onClick={() => handleDelete(u.id, u.username)}
                                     className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-                                    title="Löschen"
+                                    title={t('users.delete')}
                                 >
                                     <Trash2 className="w-4 h-4" />
                                 </button>
@@ -250,34 +252,34 @@ export default function UsersPage() {
             {showCreate && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
                     <div className="glass-card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-lg font-bold text-text-primary mb-4">Neuen Benutzer erstellen</h2>
+                        <h2 className="text-lg font-bold text-text-primary mb-4">{t('users.createUser')}</h2>
                         <form onSubmit={handleCreate} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Benutzername</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.username')}</label>
                                 <input type="text" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
                                     placeholder="benutzername" className="w-full px-3 py-2 text-sm" required minLength={3} />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Anzeigename</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.displayName')}</label>
                                 <input type="text" value={form.display_name} onChange={e => setForm({ ...form, display_name: e.target.value })}
                                     placeholder="Max Mustermann" className="w-full px-3 py-2 text-sm" />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Passwort</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.password')}</label>
                                 <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
                                     placeholder="••••••" className="w-full px-3 py-2 text-sm" required minLength={4} />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Rolle</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.role')}</label>
                                 <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} className="w-full px-3 py-2 text-sm">
-                                    <option value="user">Benutzer</option>
-                                    <option value="admin">Administrator</option>
+                                    <option value="user">{t('layout.user')}</option>
+                                    <option value="admin">{t('users.administrator')}</option>
                                 </select>
                             </div>
                             <div className="flex justify-end gap-3 pt-2">
-                                <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">Abbrechen</button>
+                                <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
                                 <button type="submit" disabled={saving} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
-                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} Erstellen
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('settings.create')}
                                 </button>
                             </div>
                         </form>
@@ -291,8 +293,8 @@ export default function UsersPage() {
                     <div className="glass-card p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-4">
                             <div>
-                                <h2 className="text-lg font-bold text-text-primary">Zonen zuweisen</h2>
-                                <p className="text-sm text-text-muted">Für: <span className="text-text-primary font-medium">{editZonesUser.display_name || editZonesUser.username}</span></p>
+                                <h2 className="text-lg font-bold text-text-primary">{t('users.assignZones')}</h2>
+                                <p className="text-sm text-text-muted">{t('users.forUser')} <span className="text-text-primary font-medium">{editZonesUser.display_name || editZonesUser.username}</span></p>
                             </div>
                             <button onClick={() => setEditZonesUser(null)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
@@ -300,12 +302,12 @@ export default function UsersPage() {
                         </div>
 
                         <p className="text-xs text-text-muted mb-3">
-                            Wähle die Zonen aus, die dieser Benutzer verwalten darf. Nicht ausgewählte Zonen sind für ihn unsichtbar.
+                            {t('users.zonesSelectHint')}
                         </p>
 
                         <div className="space-y-2">
                             {allZones.length === 0 ? (
-                                <p className="text-sm text-text-muted text-center py-4">Keine Zonen vorhanden</p>
+                                <p className="text-sm text-text-muted text-center py-4">{t('users.noZonesAvailable')}</p>
                             ) : (
                                 allZones.map(z => {
                                     const active = selectedZones.includes(z.name)
@@ -332,15 +334,15 @@ export default function UsersPage() {
                         </div>
 
                         <div className="flex justify-between items-center mt-4 pt-4 border-t border-border">
-                            <p className="text-xs text-text-muted">{selectedZones.length} Zone(n) ausgewählt</p>
+                            <p className="text-xs text-text-muted">{t('users.zonesSelected', { count: selectedZones.length })}</p>
                             <div className="flex gap-3">
-                                <button onClick={() => setEditZonesUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">Abbrechen</button>
+                                <button onClick={() => setEditZonesUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
                                 <button
                                     onClick={saveZones}
                                     disabled={saving}
                                     className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
                                 >
-                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} Speichern
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                                 </button>
                             </div>
                         </div>
@@ -352,12 +354,12 @@ export default function UsersPage() {
             {editPasswordUser && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditPasswordUser(null)}>
                     <div className="glass-card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-lg font-bold text-text-primary mb-4">Passwort ändern</h2>
-                        <p className="text-sm text-text-muted mb-4">Neues Passwort für <span className="text-text-primary font-medium">{editPasswordUser.display_name || editPasswordUser.username}</span> festlegen.</p>
+                        <h2 className="text-lg font-bold text-text-primary mb-4">{t('users.changePassword')}</h2>
+                        <p className="text-sm text-text-muted mb-4">{t('users.newPasswordFor', { name: editPasswordUser.display_name || editPasswordUser.username })}</p>
 
                         <form onSubmit={handleSetPassword} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Neues Passwort</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.newPassword')}</label>
                                 <input
                                     type="password"
                                     value={newPassword}
@@ -369,9 +371,9 @@ export default function UsersPage() {
                                 />
                             </div>
                             <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-border">
-                                <button type="button" onClick={() => setEditPasswordUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">Abbrechen</button>
+                                <button type="button" onClick={() => setEditPasswordUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
                                 <button type="submit" disabled={saving || !newPassword} className="px-4 py-2 bg-gradient-to-r from-warning/80 to-orange-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
-                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} Speichern
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                                 </button>
                             </div>
                         </form>

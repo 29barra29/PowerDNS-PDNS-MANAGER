@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code, Sliders, Copy, Star, Send } from 'lucide-react'
 import api from '../api'
 
+const LANGUAGES = [
+    { code: 'de', label: 'Deutsch' },
+    { code: 'en', label: 'English' },
+]
+
 export default function SettingsPage() {
+    const { t, i18n } = useTranslation()
     const [activeTab, setActiveTab] = useState('profile')
     const [servers, setServers] = useState([])
     const [loading, setLoading] = useState(true)
@@ -11,7 +18,12 @@ export default function SettingsPage() {
 
     // Profile
     const [profile, setProfile] = useState(null)
-    const [profileForm, setProfileForm] = useState({ username: '', display_name: '', email: '' })
+    const [profileForm, setProfileForm] = useState({
+        username: '', display_name: '', email: '', app_name: 'DNS Manager', app_base_url: '',
+        registration_enabled: false, forgot_password_enabled: false,
+        app_tagline: '', app_creator: '', app_logo_url: '',
+        phone: '', company: '', street: '', postal_code: '', city: '', country: '', date_of_birth: '', preferred_language: 'de',
+    })
     const [savingProfile, setSavingProfile] = useState(false)
 
     // Password change
@@ -38,6 +50,7 @@ export default function SettingsPage() {
     // Test connection
     const [testing, setTesting] = useState(false)
     const [testResult, setTestResult] = useState(null)
+    const [uploadingLogo, setUploadingLogo] = useState(false)
 
     // Templates
     const [templates, setTemplates] = useState([])
@@ -56,22 +69,32 @@ export default function SettingsPage() {
 
     useEffect(() => {
         loadProfile()
-        loadServers()
-        loadTemplates()
     }, [])
 
     useEffect(() => {
-        if (activeTab === 'about') api.getAppInfo().then(setAppInfo).catch(() => setAppInfo(null))
+        if (profile?.role === 'admin') {
+            loadServers()
+            loadTemplates()
+        }
+    }, [profile?.role])
+
+    useEffect(() => {
+        if (activeTab === 'about' || activeTab === 'updates') api.getAppInfo().then(setAppInfo).catch(() => setAppInfo(null))
     }, [activeTab])
 
     useEffect(() => {
+        if (profile && profile.role !== 'admin' && !['profile', 'about'].includes(activeTab)) setActiveTab('profile')
+    }, [profile?.role, activeTab])
+
+    useEffect(() => {
+        if (profile?.role !== 'admin') return
         if (activeTab === 'updates' && commits.length === 0) {
             loadCommits()
         }
         if (activeTab === 'smtp') {
             loadSmtp()
         }
-    }, [activeTab])
+    }, [activeTab, profile?.role])
 
     async function loadCommits() {
         setLoadingCommits(true)
@@ -93,19 +116,36 @@ export default function SettingsPage() {
             const data = await api.getMe()
             const app = await api.getAppInfo().catch(() => ({ app_name: 'DNS Manager' }))
             setProfile(data)
+            const lang = data.preferred_language || 'de'
+            if (lang !== i18n.language) i18n.changeLanguage(lang)
             setProfileForm({
                 username: data.username || '',
                 display_name: data.display_name || '',
                 email: data.email || '',
-                app_name: app.app_name || 'DNS Manager'
+                app_name: app.app_name || 'DNS Manager',
+                app_base_url: app.app_base_url || '',
+                registration_enabled: !!app.registration_enabled,
+                forgot_password_enabled: !!app.forgot_password_enabled,
+                app_tagline: app.app_tagline || 'PowerDNS Admin Panel',
+                app_creator: app.app_creator || 'Created by GemTec Games • Barra',
+                app_logo_url: app.app_logo_url || '',
+                phone: data.phone || '',
+                company: data.company || '',
+                street: data.street || '',
+                postal_code: data.postal_code || '',
+                city: data.city || '',
+                country: data.country || '',
+                date_of_birth: data.date_of_birth || '',
+                preferred_language: data.preferred_language || 'de',
             })
         } catch (err) {
             setError(err.message)
+        } finally {
+            setLoading(false)
         }
     }
 
     async function loadServers() {
-        setLoading(true)
         try {
             const data = await api.getServerConfigs()
             setServers(data.servers || [])
@@ -127,18 +167,35 @@ export default function SettingsPage() {
                 username: profileForm.username,
                 display_name: profileForm.display_name,
                 email: profileForm.email,
+                phone: profileForm.phone || undefined,
+                company: profileForm.company || undefined,
+                street: profileForm.street || undefined,
+                postal_code: profileForm.postal_code || undefined,
+                city: profileForm.city || undefined,
+                country: profileForm.country || undefined,
+                date_of_birth: profileForm.date_of_birth || undefined,
+                preferred_language: profileForm.preferred_language || undefined,
             })
-            if (profile?.role === 'admin' && profileForm.app_name) {
-                await api.updateAppInfo({ app_name: profileForm.app_name })
+            if (profile?.role === 'admin') {
+                await api.updateAppInfo({
+                    app_name: profileForm.app_name,
+                    app_base_url: profileForm.app_base_url || undefined,
+                    registration_enabled: profileForm.registration_enabled,
+                    forgot_password_enabled: profileForm.forgot_password_enabled,
+                    app_tagline: profileForm.app_tagline || undefined,
+                    app_creator: profileForm.app_creator || undefined,
+                    app_logo_url: profileForm.app_logo_url || undefined,
+                })
             }
             // Trigger a minor refresh on the layout without full reload, by delaying localstorage
-            setSuccess('Profil und Einstellungen erfolgreich aktualisiert! (Lädt neu...)')
-            
+            setSuccess(t('settings.profileSaveSuccess'))
             if (result.user) {
-                localStorage.setItem('user', JSON.stringify(result.user))
+                api.setUser(result.user)
                 setProfile(result.user)
+                if (result.user.preferred_language && result.user.preferred_language !== i18n.language) {
+                    i18n.changeLanguage(result.user.preferred_language)
+                }
             }
-            setTimeout(() => window.location.reload(), 1500)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -153,7 +210,7 @@ export default function SettingsPage() {
             return
         }
         if (passwordForm.new_password.length < 4) {
-            setError('Das neue Passwort muss mindestens 4 Zeichen lang sein!')
+            setError(t('settings.passwordMinLength'))
             return
         }
         setSavingPassword(true)
@@ -164,7 +221,7 @@ export default function SettingsPage() {
                 current_password: passwordForm.current_password,
                 new_password: passwordForm.new_password,
             })
-            setSuccess('Passwort erfolgreich geändert!')
+            setSuccess(t('settings.passwordChangeSuccess'))
             setPasswordForm({ current_password: '', new_password: '', confirm_password: '' })
             setShowCurrentPw(false)
             setShowNewPw(false)
@@ -177,6 +234,22 @@ export default function SettingsPage() {
 
     function handleSaveDefaults(e) {
         // kept for backwards compat, no-op now
+    }
+
+    async function handleUploadLogo(e) {
+        const file = e.target.files?.[0]
+        if (!file) return
+        setUploadingLogo(true)
+        setError('')
+        try {
+            const res = await api.uploadAppLogo(file)
+            setProfileForm(prev => ({ ...prev, app_logo_url: res.app_logo_url || '' }))
+            setSuccess(t('settings.logoUploadedSuccess'))
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setUploadingLogo(false)
+        }
     }
 
     async function loadTemplates() {
@@ -302,7 +375,7 @@ export default function SettingsPage() {
         setError('')
         try {
             await api.updateSmtpSettings(smtpForm)
-            setSuccess('SMTP-Einstellungen gespeichert!')
+            setSuccess(t('settings.smtpSaveSuccess'))
         } catch (err) { setError(err.message) }
         finally { setSavingSmtp(false) }
     }
@@ -425,22 +498,23 @@ export default function SettingsPage() {
         }
     }
 
-    const tabs = [
-        { id: 'profile', label: 'Profil', icon: UserCog },
-        { id: 'servers', label: 'DNS-Server', icon: Server },
-        { id: 'templates', label: 'Vorlagen', icon: Copy },
-        { id: 'smtp', label: 'E-Mail (SMTP)', icon: Mail },
-        { id: 'updates', label: 'Updates', icon: Download },
-        { id: 'about', label: 'Über', icon: Database },
+    const allTabs = [
+        { id: 'profile', labelKey: 'settings.profile', icon: UserCog },
+        { id: 'servers', labelKey: 'settings.servers', icon: Server },
+        { id: 'templates', labelKey: 'settings.templates', icon: Copy },
+        { id: 'smtp', labelKey: 'settings.smtp', icon: Mail },
+        { id: 'updates', labelKey: 'settings.updates', icon: Download },
+        { id: 'about', labelKey: 'settings.about', icon: Database },
     ]
+    const tabs = profile?.role === 'admin' ? allTabs : allTabs.filter(tab => tab.id === 'profile' || tab.id === 'about')
 
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
 
     return (
         <div className="space-y-6">
             <div>
-                <h1 className="text-2xl font-bold text-text-primary">Einstellungen</h1>
-                <p className="text-text-muted text-sm mt-1">Profil, Systemkonfiguration und Server-Verwaltung</p>
+                <h1 className="text-2xl font-bold text-text-primary">{t('settings.title')}</h1>
+                <p className="text-text-muted text-sm mt-1">{t('settings.subtitle')}</p>
             </div>
 
             {error && (
@@ -470,7 +544,7 @@ export default function SettingsPage() {
                             }`}
                     >
                         <tab.icon className="w-4 h-4" />
-                        {tab.label}
+                        {t(tab.labelKey)}
                     </button>
                 ))}
             </div>
@@ -485,16 +559,42 @@ export default function SettingsPage() {
                                 <User className="w-5 h-5 text-accent-light" />
                             </div>
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">Profil bearbeiten</h2>
-                                <p className="text-sm text-text-muted">Ändere deinen Benutzernamen, Anzeigenamen und E-Mail</p>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.profileEdit')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.profileSubtitle')}</p>
                             </div>
                         </div>
 
                         <form onSubmit={handleSaveProfile} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.language')}</label>
+                                <select
+                                    value={profileForm.preferred_language || 'de'}
+                                    onChange={async (e) => {
+                                        const code = e.target.value
+                                        setProfileForm({ ...profileForm, preferred_language: code })
+                                        i18n.changeLanguage(code)
+                                        try {
+                                            await api.updateProfile({ preferred_language: code })
+                                            if (profile) {
+                                                const updated = { ...profile, preferred_language: code }
+                                                setProfile(updated)
+                                                api.setUser(updated)
+                                            }
+                                        } catch (_) { setProfileForm({ ...profileForm, preferred_language: i18n.language }) }
+                                    }}
+                                    className="w-full max-w-xs px-3 py-2 text-sm border border-border rounded-lg bg-bg-primary"
+                                >
+                                    {LANGUAGES.map(({ code, label }) => (
+                                        <option key={code} value={code}>{label}</option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-text-muted mt-1">{t('settings.languageHint')}</p>
+                            </div>
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">
-                                        Benutzername
+                                        {t('settings.username')}
                                     </label>
                                     <input
                                         type="text"
@@ -505,11 +605,11 @@ export default function SettingsPage() {
                                         required
                                         minLength={3}
                                     />
-                                    <p className="text-xs text-text-muted mt-1">Wird für den Login verwendet</p>
+                                    <p className="text-xs text-text-muted mt-1">{t('settings.usernameHint')}</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">
-                                        Anzeigename
+                                        {t('settings.displayName')}
                                     </label>
                                     <input
                                         type="text"
@@ -518,12 +618,12 @@ export default function SettingsPage() {
                                         placeholder="Administrator"
                                         className="w-full px-3 py-2 text-sm"
                                     />
-                                    <p className="text-xs text-text-muted mt-1">Wird in der Oberfläche angezeigt</p>
+                                    <p className="text-xs text-text-muted mt-1">{t('settings.displayNameHint')}</p>
                                 </div>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">
-                                    E-Mail
+                                    {t('settings.email')}
                                 </label>
                                 <div className="relative">
                                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
@@ -536,29 +636,169 @@ export default function SettingsPage() {
                                     />
                                 </div>
                             </div>
-                            
-                            {profile?.role === 'admin' && (
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border">
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">
-                                        System-Titel
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={profileForm.app_name}
-                                        onChange={e => setProfileForm({ ...profileForm, app_name: e.target.value })}
-                                        placeholder="DNS Manager"
-                                        className="w-full px-3 py-2 text-sm"
-                                        required
-                                    />
-                                    <p className="text-xs text-text-muted mt-1">Der Name der Anwendung (wird oben links im Menü angezeigt)</p>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.phone')}</label>
+                                    <input type="text" value={profileForm.phone} onChange={e => setProfileForm({ ...profileForm, phone: e.target.value })}
+                                        placeholder="+49 123 456789" className="w-full px-3 py-2 text-sm" maxLength={25}
+                                        pattern="(^$|.*[0-9].*)" title={t('settings.phoneTitle')} />
+                                    <p className="text-xs text-text-muted mt-1">{t('settings.phoneHint')}</p>
                                 </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.company')}</label>
+                                    <input type="text" value={profileForm.company} onChange={e => setProfileForm({ ...profileForm, company: e.target.value })}
+                                        placeholder="Firma GmbH" className="w-full px-3 py-2 text-sm" maxLength={255} />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.street')}</label>
+                                <input type="text" value={profileForm.street} onChange={e => setProfileForm({ ...profileForm, street: e.target.value })}
+                                    placeholder="Musterstraße 1" className="w-full px-3 py-2 text-sm" maxLength={255} />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.postalCode')}</label>
+                                    <input type="text" value={profileForm.postal_code} onChange={e => setProfileForm({ ...profileForm, postal_code: e.target.value })}
+                                        placeholder={t('settings.postalCodePlaceholder')} className="w-full px-3 py-2 text-sm" maxLength={20} />
+                                    <p className="text-xs text-text-muted mt-1">{t('settings.postalCodeHint')}</p>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.city')}</label>
+                                    <input type="text" value={profileForm.city} onChange={e => setProfileForm({ ...profileForm, city: e.target.value })}
+                                        placeholder="Berlin" className="w-full px-3 py-2 text-sm" maxLength={100} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.country')}</label>
+                                    <input type="text" value={profileForm.country} onChange={e => setProfileForm({ ...profileForm, country: e.target.value })}
+                                        placeholder="Deutschland" className="w-full px-3 py-2 text-sm" maxLength={100} />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.dateOfBirth')}</label>
+                                <input type="date" value={profileForm.date_of_birth} onChange={e => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
+                                    className="w-full px-3 py-2 text-sm" />
+                            </div>
+
+                            {profile?.role !== 'admin' && profile?.zones?.length !== undefined && (
+                                <div className="pt-2 border-t border-border">
+                                    <p className="text-sm font-medium text-text-secondary mb-2">{t('settings.myZones')}</p>
+                                    <p className="text-xs text-text-muted mb-2">{t('settings.myZonesHint')}</p>
+                                    <ul className="text-sm text-text-primary list-disc list-inside">
+                                        {profile.zones.length === 0 ? (
+                                            <li className="text-text-muted">{t('settings.noZonesAssigned')}</li>
+                                        ) : (
+                                            profile.zones.map(z => <li key={z}>{z}</li>)
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {profile?.role === 'admin' && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">
+                                            {t('settings.systemTitle')}
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={profileForm.app_name}
+                                            onChange={e => setProfileForm({ ...profileForm, app_name: e.target.value })}
+                                            placeholder="DNS Manager"
+                                            className="w-full px-3 py-2 text-sm"
+                                            required
+                                        />
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.systemTitleHint')}</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">
+                                            {t('settings.appBaseUrl')}
+                                        </label>
+                                        <input
+                                            type="url"
+                                            value={profileForm.app_base_url}
+                                            onChange={e => setProfileForm({ ...profileForm, app_base_url: e.target.value })}
+                                            placeholder={t('settings.appBaseUrlPlaceholder')}
+                                            className="w-full px-3 py-2 text-sm"
+                                        />
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.appBaseUrlHint')}</p>
+                                    </div>
+                                    <div className="space-y-3 pt-2 border-t border-border">
+                                        <p className="text-sm font-medium text-text-secondary">{t('settings.loginRegistration')}</p>
+                                        <label className="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!profileForm.registration_enabled}
+                                                onChange={e => setProfileForm({ ...profileForm, registration_enabled: e.target.checked })}
+                                                className="rounded border-border"
+                                            />
+                                            <span className="text-sm text-text-primary">{t('settings.allowRegistration')}</span>
+                                        </label>
+                                        <p className="text-xs text-text-muted ml-6">{t('settings.allowRegistrationHint')}</p>
+                                        <label className="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!profileForm.forgot_password_enabled}
+                                                onChange={e => setProfileForm({ ...profileForm, forgot_password_enabled: e.target.checked })}
+                                                className="rounded border-border"
+                                            />
+                                            <span className="text-sm text-text-primary">{t('settings.allowForgotPassword')}</span>
+                                        </label>
+                                        <p className="text-xs text-text-muted ml-6">{t('settings.allowForgotPasswordHint')}</p>
+                                    </div>
+                                    <div className="space-y-3 pt-2 border-t border-border">
+                                        <p className="text-sm font-medium text-text-secondary">{t('settings.brandingTitle')}</p>
+                                        <div>
+                                            <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.footerText')}</label>
+                                            <input
+                                                type="text"
+                                                value={profileForm.app_tagline}
+                                                onChange={e => setProfileForm({ ...profileForm, app_tagline: e.target.value })}
+                                                placeholder="PowerDNS Admin Panel"
+                                                className="w-full px-3 py-2 text-sm"
+                                                maxLength={200}
+                                            />
+                                            <p className="text-xs text-text-muted mt-1">{t('settings.footerTextHint')}</p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.creatorText')}</label>
+                                            <input
+                                                type="text"
+                                                value={profileForm.app_creator}
+                                                onChange={e => setProfileForm({ ...profileForm, app_creator: e.target.value })}
+                                                placeholder="Created by GemTec Games • Barra"
+                                                className="w-full px-3 py-2 text-sm"
+                                                maxLength={200}
+                                            />
+                                            <p className="text-xs text-text-muted mt-1">{t('settings.creatorTextHint')}</p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.logoUploadLabel')}</label>
+                                            <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={handleUploadLogo} className="w-full text-sm" />
+                                            {uploadingLogo && <p className="text-xs text-text-muted mt-1">{t('settings.logoUploading')}</p>}
+                                            {profileForm.app_logo_url && (
+                                                <div className="mt-2 flex items-center gap-3">
+                                                    <img src={profileForm.app_logo_url} alt="App logo" className="w-10 h-10 rounded-lg object-cover border border-border" />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setProfileForm({ ...profileForm, app_logo_url: '' })}
+                                                        className="text-xs text-danger hover:underline"
+                                                    >
+                                                        {t('settings.logoRemoveOnSave')}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-text-muted">{t('settings.brandingTransparentHint')}</p>
+                                    </div>
+                                </>
                             )}
 
                             {profile && (
                                 <div className="flex items-center gap-4 pt-2 text-xs text-text-muted">
-                                    <span>Rolle: <span className="text-accent-light font-medium">{profile.role === 'admin' ? 'Administrator' : 'Benutzer'}</span></span>
-                                    {profile.created_at && <span>Erstellt: {new Date(profile.created_at).toLocaleDateString('de-DE')}</span>}
-                                    {profile.last_login && <span>Letzter Login: {new Date(profile.last_login).toLocaleString('de-DE')}</span>}
+                                    <span>{t('settings.role')}: <span className="text-accent-light font-medium">{profile.role === 'admin' ? t('settings.administrator') : t('layout.user')}</span></span>
+                                    {profile.created_at && <span>{t('settings.created')}: {new Date(profile.created_at).toLocaleDateString()}</span>}
+                                    {profile.last_login && <span>{t('settings.lastLogin')}: {new Date(profile.last_login).toLocaleString()}</span>}
                                 </div>
                             )}
 
@@ -569,7 +809,7 @@ export default function SettingsPage() {
                                     className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
                                 >
                                     {savingProfile && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    Profil speichern
+                                    {t('settings.saveProfile')}
                                 </button>
                             </div>
                         </form>
@@ -582,15 +822,15 @@ export default function SettingsPage() {
                                 <Lock className="w-5 h-5 text-warning" />
                             </div>
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">Passwort ändern</h2>
-                                <p className="text-sm text-text-muted">Ändere dein Passwort für den Login</p>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.passwordChange')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.passwordChangeHint')}</p>
                             </div>
                         </div>
 
                         <form onSubmit={handleChangePassword} className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">
-                                    Aktuelles Passwort
+                                    {t('settings.currentPassword')}
                                 </label>
                                 <div className="relative">
                                     <input
@@ -611,7 +851,7 @@ export default function SettingsPage() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">
-                                        Neues Passwort
+                                        {t('settings.newPassword')}
                                     </label>
                                     <div className="relative">
                                         <input
@@ -631,7 +871,7 @@ export default function SettingsPage() {
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">
-                                        Neues Passwort bestätigen
+                                        {t('settings.newPasswordConfirm')}
                                     </label>
                                     <input
                                         type={showNewPw ? 'text' : 'password'}
@@ -648,7 +888,7 @@ export default function SettingsPage() {
                             {passwordForm.new_password && passwordForm.confirm_password && passwordForm.new_password !== passwordForm.confirm_password && (
                                 <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-center gap-2">
                                     <AlertCircle className="w-4 h-4 shrink-0" />
-                                    Die Passwörter stimmen nicht überein
+                                    {t('settings.passwordsDoNotMatch')}
                                 </div>
                             )}
 
@@ -659,7 +899,7 @@ export default function SettingsPage() {
                                     className="px-5 py-2 bg-gradient-to-r from-warning/80 to-orange-600 hover:from-warning hover:to-orange-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
                                 >
                                     {savingPassword && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    Passwort ändern
+                                    {t('settings.changePasswordButton')}
                                 </button>
                             </div>
                         </form>
@@ -676,8 +916,8 @@ export default function SettingsPage() {
                                 <Mail className="w-5 h-5 text-accent-light" />
                             </div>
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">E-Mail-Versand (SMTP)</h2>
-                                <p className="text-sm text-text-muted">Konfiguriere den SMTP-Server für E-Mail-Versand (z.B. Benachrichtigungen, Passwort-Reset)</p>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.smtpTitle')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.smtpSubtitle')}</p>
                             </div>
                         </div>
 
@@ -689,20 +929,20 @@ export default function SettingsPage() {
                                 <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-bg-hover transition-colors">
                                     <input type="checkbox" checked={smtpForm.enabled} onChange={e => setSmtpForm({ ...smtpForm, enabled: e.target.checked })} className="w-4 h-4 rounded" />
                                     <div>
-                                        <span className="text-sm font-medium text-text-primary">SMTP aktivieren</span>
-                                        <p className="text-xs text-text-muted">E-Mails können nur gesendet werden, wenn SMTP aktiviert ist</p>
+                                        <span className="text-sm font-medium text-text-primary">{t('settings.smtpEnable')}</span>
+                                        <p className="text-xs text-text-muted">{t('settings.smtpOnlyWhenEnabled')}</p>
                                     </div>
                                 </label>
 
                                 {/* Server & Port */}
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div className="md:col-span-2">
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">SMTP-Server</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.smtpServer')}</label>
                                         <input type="text" value={smtpForm.host} onChange={e => setSmtpForm({ ...smtpForm, host: e.target.value })}
                                             placeholder="smtp.gmail.com" className="w-full px-3 py-2 text-sm" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">Port</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.port')}</label>
                                         <input type="number" value={smtpForm.port} onChange={e => setSmtpForm({ ...smtpForm, port: parseInt(e.target.value) || 587 })}
                                             placeholder="587" className="w-full px-3 py-2 text-sm" />
                                     </div>
@@ -710,23 +950,23 @@ export default function SettingsPage() {
 
                                 {/* Verschlüsselung */}
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Verschlüsselung</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.encryption')}</label>
                                     <select value={smtpForm.encryption} onChange={e => setSmtpForm({ ...smtpForm, encryption: e.target.value })} className="w-full px-3 py-2 text-sm">
-                                        <option value="starttls">STARTTLS (Port 587 – empfohlen)</option>
-                                        <option value="ssl">SSL/TLS (Port 465)</option>
-                                        <option value="none">Keine Verschlüsselung (Port 25)</option>
+                                        <option value="starttls">{t('settings.encryptionStarttls')}</option>
+                                        <option value="ssl">{t('settings.encryptionSsl')}</option>
+                                        <option value="none">{t('settings.encryptionNone')}</option>
                                     </select>
                                 </div>
 
                                 {/* Zugangsdaten */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">Benutzername</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.username')}</label>
                                         <input type="text" value={smtpForm.username} onChange={e => setSmtpForm({ ...smtpForm, username: e.target.value })}
                                             placeholder="user@example.com" className="w-full px-3 py-2 text-sm" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">Passwort</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('login.password')}</label>
                                         <div className="relative">
                                             <input type={showSmtpPassword ? 'text' : 'password'} value={smtpForm.password}
                                                 onChange={e => setSmtpForm({ ...smtpForm, password: e.target.value })}
@@ -742,12 +982,12 @@ export default function SettingsPage() {
                                 {/* Absender */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">Absender E-Mail</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.senderEmail')}</label>
                                         <input type="email" value={smtpForm.from_email} onChange={e => setSmtpForm({ ...smtpForm, from_email: e.target.value })}
                                             placeholder="noreply@meinedomain.de" className="w-full px-3 py-2 text-sm" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-text-secondary mb-1">Absender Name</label>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.senderName')}</label>
                                         <input type="text" value={smtpForm.from_name} onChange={e => setSmtpForm({ ...smtpForm, from_name: e.target.value })}
                                             placeholder="DNS Manager" className="w-full px-3 py-2 text-sm" />
                                     </div>
@@ -759,7 +999,7 @@ export default function SettingsPage() {
                                         <button type="button" onClick={handleTestSmtp} disabled={testingSmtp || !smtpForm.host}
                                             className="px-4 py-2 text-sm font-medium border border-border rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-50 flex items-center gap-2">
                                             {testingSmtp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-                                            Verbindung testen
+                                            {t('settings.testConnection')}
                                         </button>
                                         {smtpTestResult && (
                                             <span className={`text-xs ${smtpTestResult.success ? 'text-success' : 'text-danger'}`}>
@@ -770,7 +1010,7 @@ export default function SettingsPage() {
                                     <button type="submit" disabled={savingSmtp}
                                         className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all">
                                         {savingSmtp && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        Speichern
+                                        {t('common.save')}
                                     </button>
                                 </div>
                             </form>
@@ -784,8 +1024,8 @@ export default function SettingsPage() {
                                 <Send className="w-5 h-5 text-success" />
                             </div>
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">Test-E-Mail senden</h2>
-                                <p className="text-sm text-text-muted">Sende eine Test-E-Mail um sicherzustellen, dass alles funktioniert</p>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.testEmailTitle')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.testEmailSubtitle')}</p>
                             </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -810,32 +1050,31 @@ export default function SettingsPage() {
                                 <Download className="w-5 h-5 text-success" />
                             </div>
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">System aktualisieren</h2>
-                                <p className="text-sm text-text-muted">Hol dir die neuesten Funktionen von GitHub</p>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settingsMore.updateTitle')}</h2>
+                                <p className="text-sm text-text-muted">{t('settingsMore.updateSubtitle')}</p>
                             </div>
                         </div>
 
                         <div className="p-5 rounded-xl bg-bg-primary border border-border mb-8">
-                            <h3 className="text-sm font-semibold text-text-primary mb-3 text-accent-light">Wie aktualisiere ich das System?</h3>
+                            <h3 className="text-sm font-semibold text-text-primary mb-3 text-accent-light">{t('settingsMore.updateHowTitle')}</h3>
                             <p className="text-sm text-text-secondary mb-5 leading-relaxed">
-                                Aus Sicherheitsgründen (Docker-Isolierung) kann sich die Anwendung nicht durch einen Klick auf einen Button selbst neu installieren.
-                                Das wäre ein Sicherheitsrisiko.
+                                {t('settingsMore.updateSecurityPara')}
                                 <br /><br />
-                                Du kannst das System aber jederzeit ganz einfach über dein Server-Terminal aktualisieren:
+                                {t('settingsMore.updateTerminalPara')}
                             </p>
 
                             <div className="relative group">
                                 <div className="absolute inset-y-0 left-0 bg-accent w-1 rounded-l-lg"></div>
                                 <pre className="bg-bg-hover text-text-primary p-4 rounded-r-lg rounded-l-sm text-sm font-mono overflow-x-auto pl-6 border border-border/50 border-l-0">
-                                    <span className="text-text-muted"># 1. In den Ordner wechseln</span>{'\n'}
-                                    <span className="text-accent-light font-medium">cd</span> /pfad/zu/deinem/dns-manager{'\n\n'}
-                                    <span className="text-text-muted"># 2. Das Skript ausführen</span>{'\n'}
+                                    <span className="text-text-muted"># {t('settingsMore.updateStep1Comment')}</span>{'\n'}
+                                    <span className="text-accent-light font-medium">cd</span> {appInfo?.install_path || t('settingsMore.updatePathPlaceholder')}{'\n\n'}
+                                    <span className="text-text-muted"># {t('settingsMore.updateStep2Comment')}</span>{'\n'}
                                     <span className="text-accent-light font-medium">./update.sh</span>
                                 </pre>
                             </div>
 
                             <p className="text-xs text-text-muted mt-4">
-                                💡 Das Skript lädt automatisch die neuesten Updates herunter, baut das System komprimiert neu und startet es <strong className="text-text-secondary">ohne Datenverlust</strong>.
+                                💡 {t('settingsMore.updatesScriptHint')}
                             </p>
                         </div>
 
@@ -843,20 +1082,20 @@ export default function SettingsPage() {
                         <div>
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-                                    <Github className="w-4 h-4" /> Letzte Änderungen (GitHub)
+                                    <Github className="w-4 h-4" /> {t('settingsMore.lastChanges')}
                                 </h3>
                                 <button onClick={loadCommits} disabled={loadingCommits} className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1">
-                                    <RefreshCw className={`w-3 h-3 ${loadingCommits ? 'animate-spin' : ''}`} /> {loadingCommits ? 'Lade...' : 'Neu laden'}
+                                    <RefreshCw className={`w-3 h-3 ${loadingCommits ? 'animate-spin' : ''}`} /> {loadingCommits ? t('settings.loadingDot') : t('settings.reload')}
                                 </button>
                             </div>
 
                             {commitError ? (
                                 <div className="p-4 rounded-lg bg-bg-hover border border-border text-text-muted text-sm text-center flex flex-col items-center gap-2">
                                     <Lock className="w-5 h-5 opacity-50" />
-                                    Dein Repository ist auf <strong>Privat</strong> gestellt. Die öffentlichen Updates können hier nicht eingeblendet werden. Das ist aber <strong>gut für die Sicherheit!</strong>
+                                    {t('settings.updatesPrivateRepo')}
                                 </div>
                             ) : commits.length === 0 && !loadingCommits ? (
-                                <p className="text-sm text-text-muted">Keine Änderungen gefunden.</p>
+                                <p className="text-sm text-text-muted">{t('settingsMore.noChangesFound')}</p>
                             ) : (
                                 <div className="space-y-3">
                                     {commits.map((c, i) => (
@@ -871,7 +1110,7 @@ export default function SettingsPage() {
                                                 <div className="flex items-center gap-3 text-xs text-text-muted">
                                                     <span>{new Date(c.commit.author.date).toLocaleString('de-DE')}</span>
                                                     <span className="font-mono bg-bg-hover px-1.5 py-0.5 rounded border border-border">{c.sha.substring(0, 7)}</span>
-                                                    <span>von <strong className="text-text-secondary">{c.commit.author.name}</strong></span>
+                                                    <span>{t('settingsMore.by')} <strong className="text-text-secondary">{c.commit.author.name}</strong></span>
                                                 </div>
                                             </div>
                                         </div>
@@ -887,13 +1126,13 @@ export default function SettingsPage() {
             {activeTab === 'servers' && (
                 <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                        <h2 className="text-lg font-semibold text-text-primary">PowerDNS Server</h2>
+                        <h2 className="text-lg font-semibold text-text-primary">{t('settingsMore.powerDnsServers')}</h2>
                         <div className="flex gap-2">
                             <button onClick={loadServers} className="flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-colors border border-border">
-                                <RefreshCw className="w-4 h-4" /> Aktualisieren
+                                <RefreshCw className="w-4 h-4" /> {t('settingsMore.refresh')}
                             </button>
                             <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all">
-                                <Plus className="w-4 h-4" /> Server hinzufügen
+                                <Plus className="w-4 h-4" /> {t('settingsMore.addServer')}
                             </button>
                         </div>
                     </div>
@@ -901,22 +1140,20 @@ export default function SettingsPage() {
                     {/* Info-Box: DNS Server werden in der Datenbank gespeichert */}
                     <div className="p-4 rounded-xl bg-accent/5 border border-accent/20">
                         <p className="text-sm text-text-secondary">
-                            <strong className="text-accent-light">💡 Hinweis:</strong> Server-Konfigurationen werden in der <strong>Datenbank</strong> gespeichert, nicht in der .env Datei.
-                            Die .env-Variable <code className="px-1.5 py-0.5 bg-bg-hover rounded text-xs font-mono">PDNS_SERVERS</code> wird nur beim ersten Start importiert.
-                            Danach werden alle Änderungen hier über die Weboberfläche verwaltet.
+                            <strong className="text-accent-light">💡 {t('common.hint')}:</strong> {t('settings.serversHint')}
+                            {t('settingsMore.serversManagedHint')}
                         </p>
                     </div>
 
                     {servers.length === 0 ? (
                         <div className="glass-card p-12 text-center">
                             <Server className="w-16 h-16 mx-auto mb-4 text-text-muted opacity-30" />
-                            <h3 className="text-lg font-semibold text-text-primary mb-2">Kein Server konfiguriert</h3>
+                            <h3 className="text-lg font-semibold text-text-primary mb-2">{t('settingsMore.noServerConfigured')}</h3>
                             <p className="text-sm text-text-muted mb-4">
-                                Füge deinen ersten PowerDNS-Server hinzu, um loszulegen.<br />
-                                Du brauchst die URL und den API-Key deines PowerDNS-Servers.
+                                {t('settingsMore.noServerHint')}
                             </p>
                             <button onClick={openAdd} className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg font-medium text-sm">
-                                <Plus className="w-4 h-4 inline mr-2" /> Ersten Server hinzufügen
+                                <Plus className="w-4 h-4 inline mr-2" /> {t('settingsMore.addFirstServer')}
                             </button>
                         </div>
                     ) : (
@@ -944,14 +1181,14 @@ export default function SettingsPage() {
                                                 {!s.is_active && (
                                                     <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">Deaktiviert</span>
                                                 )}
-                                                <button type="button" onClick={() => toggleAllowWrites(s)} className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${s.allow_writes !== false ? 'bg-success/10 text-success border-success/30' : 'bg-bg-hover text-text-muted border-border'}`} title={s.allow_writes !== false ? 'Klicken: Speichern deaktivieren (nur Lesen)' : 'Klicken: Speichern aktivieren'}>
-                                                    {s.allow_writes !== false ? 'Speichern: Ja' : 'Speichern: Nein'}
+                                                <button type="button" onClick={() => toggleAllowWrites(s)} className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${s.allow_writes !== false ? 'bg-success/10 text-success border-success/30' : 'bg-bg-hover text-text-muted border-border'}`} title={s.allow_writes !== false ? t('settings.allowWritesTitleOn') : t('settings.allowWritesTitleOff')}>
+                                                    {s.allow_writes !== false ? t('settings.allowWritesYes') : t('settings.allowWritesNo')}
                                                 </button>
                                             </div>
                                             <p className="text-sm text-text-muted font-mono mt-1">{s.url}</p>
                                             <div className="flex items-center gap-4 mt-2 text-xs text-text-muted">
                                                 {s.version && <span>Version: <span className="text-text-secondary">{s.version}</span></span>}
-                                                {s.zone_count != null && <span>Zonen: <span className="text-text-secondary">{s.zone_count}</span></span>}
+                                                {s.zone_count != null && <span>{t('settings.zonesCount')}: <span className="text-text-secondary">{s.zone_count}</span></span>}
                                                 {s.description && <span className="italic">{s.description}</span>}
                                             </div>
                                         </div>
@@ -982,11 +1219,11 @@ export default function SettingsPage() {
                 <div className="space-y-4">
                     <div className="flex items-center justify-between">
                         <div>
-                            <h2 className="text-lg font-semibold text-text-primary">Zonen-Vorlagen</h2>
-                            <p className="text-sm text-text-muted">Erstelle Vorlagen mit Nameservern, SOA-Einstellungen und Standard-DNS-Einträgen, die beim Anlegen neuer Domains automatisch übernommen werden.</p>
+                            <h2 className="text-lg font-semibold text-text-primary">{t('settings.templatesTitle')}</h2>
+                            <p className="text-sm text-text-muted">{t('settings.templatesSubtitle')}</p>
                         </div>
                         <button onClick={openTemplateAdd} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all shrink-0">
-                            <Plus className="w-4 h-4" /> Neue Vorlage
+                            <Plus className="w-4 h-4" /> {t('templates.newTemplate')}
                         </button>
                     </div>
 
@@ -995,35 +1232,35 @@ export default function SettingsPage() {
                     ) : templates.length === 0 ? (
                         <div className="glass-card p-12 text-center">
                             <Copy className="w-16 h-16 mx-auto mb-4 text-text-muted opacity-30" />
-                            <h3 className="text-lg font-semibold text-text-primary mb-2">Keine Vorlagen vorhanden</h3>
-                            <p className="text-sm text-text-muted mb-4">Erstelle deine erste Vorlage, z.B. \"Standard\" mit deinen Nameservern und häufig genutzten DNS-Einträgen.</p>
+                            <h3 className="text-lg font-semibold text-text-primary mb-2">{t('templates.noTemplatesYet')}</h3>
+                            <p className="text-sm text-text-muted mb-4">{t('templates.createFirstTemplateHint')}</p>
                             <button onClick={openTemplateAdd} className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg font-medium text-sm">
-                                <Plus className="w-4 h-4 inline mr-2" /> Erste Vorlage erstellen
+                                <Plus className="w-4 h-4 inline mr-2" /> {t('templates.firstTemplateCreate')}
                             </button>
                         </div>
                     ) : (
                         <div className="space-y-3">
-                            {templates.map(t => (
-                                <div key={t.id} className="glass-card p-5">
+                            {templates.map(tmpl => (
+                                <div key={tmpl.id} className="glass-card p-5">
                                     <div className="flex items-start gap-4">
-                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${t.is_default ? 'bg-warning/20' : 'bg-accent/20'}`}>
-                                            {t.is_default ? <Star className="w-6 h-6 text-warning" /> : <Copy className="w-6 h-6 text-accent-light" />}
+                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${tmpl.is_default ? 'bg-warning/20' : 'bg-accent/20'}`}>
+                                            {tmpl.is_default ? <Star className="w-6 h-6 text-warning" /> : <Copy className="w-6 h-6 text-accent-light" />}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 flex-wrap">
-                                                <h3 className="font-semibold text-text-primary">{t.name}</h3>
-                                                {t.is_default && <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">Standard</span>}
+                                                <h3 className="font-semibold text-text-primary">{tmpl.name}</h3>
+                                                {tmpl.is_default && <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">{t('templates.defaultLabel')}</span>}
                                             </div>
-                                            {t.description && <p className="text-sm text-text-muted mt-0.5">{t.description}</p>}
+                                            {tmpl.description && <p className="text-sm text-text-muted mt-0.5">{tmpl.description}</p>}
                                             <div className="flex items-center gap-4 mt-2 text-xs text-text-muted flex-wrap">
-                                                <span>NS: <span className="text-text-secondary">{(t.nameservers || []).join(', ') || '–'}</span></span>
-                                                <span>Typ: <span className="text-text-secondary">{t.kind}</span></span>
-                                                <span>TTL: <span className="text-text-secondary">{t.default_ttl}s</span></span>
-                                                <span>Records: <span className="text-text-secondary">{(t.records || []).length}</span></span>
+                                                <span>NS: <span className="text-text-secondary">{(tmpl.nameservers || []).join(', ') || '–'}</span></span>
+                                                <span>Typ: <span className="text-text-secondary">{tmpl.kind}</span></span>
+                                                <span>TTL: <span className="text-text-secondary">{tmpl.default_ttl}s</span></span>
+                                                <span>Records: <span className="text-text-secondary">{(tmpl.records || []).length}</span></span>
                                             </div>
-                                            {(t.records || []).length > 0 && (
+                                            {(tmpl.records || []).length > 0 && (
                                                 <div className="mt-2 flex flex-wrap gap-1">
-                                                    {t.records.map((r, i) => (
+                                                    {tmpl.records.map((r, i) => (
                                                         <span key={i} className="text-xs px-2 py-0.5 rounded bg-bg-hover border border-border text-text-secondary font-mono">
                                                             {r.name} {r.type} {r.prio ? r.prio + ' ' : ''}{r.content}
                                                         </span>
@@ -1032,10 +1269,10 @@ export default function SettingsPage() {
                                             )}
                                         </div>
                                         <div className="flex items-center gap-1 shrink-0">
-                                            <button onClick={() => openTemplateEdit(t)} className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors" title="Bearbeiten">
+                                            <button onClick={() => openTemplateEdit(tmpl)} className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors" title={t('templates.editTitle')}>
                                                 <Pencil className="w-4 h-4" />
                                             </button>
-                                            <button onClick={() => handleDeleteTemplate(t.id, t.name)} className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors" title="Löschen">
+                                            <button onClick={() => handleDeleteTemplate(tmpl.id, tmpl.name)} className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors" title={t('templates.deleteTitle')}>
                                                 <Trash2 className="w-4 h-4" />
                                             </button>
                                         </div>
@@ -1053,7 +1290,7 @@ export default function SettingsPage() {
                     <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-5">
                             <h2 className="text-lg font-bold text-text-primary">
-                                {editTemplateId ? 'Vorlage bearbeiten' : 'Neue Vorlage erstellen'}
+                                {editTemplateId ? t('templates.editTemplate') : t('templates.createNewTemplate')}
                             </h2>
                             <button onClick={() => setShowTemplateForm(false)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
@@ -1064,29 +1301,29 @@ export default function SettingsPage() {
                             {/* Name & Beschreibung */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Vorlagen-Name *</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('templates.templateName')} *</label>
                                     <input type="text" value={templateForm.name} onChange={e => setTemplateForm({ ...templateForm, name: e.target.value })}
-                                        placeholder="z.B. Standard" className="w-full px-3 py-2 text-sm" required />
+                                        placeholder={t('templates.templateNamePlaceholder')} className="w-full px-3 py-2 text-sm" required />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Beschreibung</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('templates.description')}</label>
                                     <input type="text" value={templateForm.description} onChange={e => setTemplateForm({ ...templateForm, description: e.target.value })}
-                                        placeholder="Mein Standard-Setup" className="w-full px-3 py-2 text-sm" />
+                                        placeholder={t('templates.descriptionPlaceholder')} className="w-full px-3 py-2 text-sm" />
                                 </div>
                             </div>
 
                             {/* Nameservers */}
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Nameserver</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('templates.nameservers')}</label>
                                 <textarea value={templateForm.nameservers} onChange={e => setTemplateForm({ ...templateForm, nameservers: e.target.value })}
                                     placeholder="ns1.example.com., ns2.example.com." className="w-full px-3 py-2 text-sm min-h-[60px]" />
-                                <p className="text-xs text-text-muted mt-1">Getrennt durch Komma. Achte auf den Punkt am Ende.</p>
+                                <p className="text-xs text-text-muted mt-1">{t('templates.nameserversHint')}</p>
                             </div>
 
                             {/* Kind, SOA-EDIT-API, TTL */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Typ</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('dashboard.type')}</label>
                                     <select value={templateForm.kind} onChange={e => setTemplateForm({ ...templateForm, kind: e.target.value })} className="w-full px-3 py-2 text-sm">
                                         <option value="Native">Native</option>
                                         <option value="Master">Master</option>
@@ -1104,11 +1341,11 @@ export default function SettingsPage() {
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">Standard-TTL</label>
                                     <select value={templateForm.default_ttl} onChange={e => setTemplateForm({ ...templateForm, default_ttl: parseInt(e.target.value) })} className="w-full px-3 py-2 text-sm">
-                                        <option value={60}>1 Min</option>
-                                        <option value={300}>5 Min</option>
-                                        <option value={3600}>1 Std</option>
-                                        <option value={14400}>4 Std</option>
-                                        <option value={86400}>1 Tag</option>
+                                        <option value={60}>{t('templates.ttl1Min')}</option>
+                                        <option value={300}>{t('templates.ttl5Min')}</option>
+                                        <option value={3600}>{t('templates.ttl1Hour')}</option>
+                                        <option value={14400}>{t('templates.ttl4Hours')}</option>
+                                        <option value={86400}>{t('templates.ttl1Day')}</option>
                                     </select>
                                 </div>
                             </div>
@@ -1116,13 +1353,13 @@ export default function SettingsPage() {
                             {/* Standard-Vorlage Checkbox */}
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input type="checkbox" checked={templateForm.is_default} onChange={e => setTemplateForm({ ...templateForm, is_default: e.target.checked })} className="w-4 h-4 rounded" />
-                                <span className="text-sm text-text-secondary">Als <strong className="text-warning">Standard-Vorlage</strong> verwenden (wird automatisch vorausgewählt)</span>
+                                <span className="text-sm text-text-secondary">{t('settings.defaultTemplate')}</span>
                             </label>
 
                             {/* Records */}
                             <div className="border-t border-border pt-4">
-                                <h3 className="text-sm font-semibold text-text-primary mb-3">Standard DNS-Einträge</h3>
-                                <p className="text-xs text-text-muted mb-3">Diese Einträge werden automatisch erstellt, wenn du eine neue Domain mit dieser Vorlage anlegst. Nutze <code className="px-1 py-0.5 bg-bg-hover rounded">@</code> als Platzhalter für den Domainnamen.</p>
+                                <h3 className="text-sm font-semibold text-text-primary mb-3">{t('templates.standardDnsRecords')}</h3>
+                                <p className="text-xs text-text-muted mb-3">{t('settings.templateRecordsHint')}</p>
 
                                 {/* Existing records */}
                                 {templateForm.records.length > 0 && (
@@ -1147,31 +1384,31 @@ export default function SettingsPage() {
                                 {/* Add new record row */}
                                 <div className="grid grid-cols-12 gap-2 items-end">
                                     <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">Name</label>
+                                        <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.name')}</label>
                                         <input type="text" value={newRecord.name} onChange={e => setNewRecord({ ...newRecord, name: e.target.value })}
                                             placeholder="@" className="w-full px-2 py-1.5 text-xs" />
                                     </div>
                                     <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">Typ</label>
+                                        <label className="block text-xs text-text-muted mb-1">{t('dashboard.type')}</label>
                                         <select value={newRecord.type} onChange={e => setNewRecord({ ...newRecord, type: e.target.value })} className="w-full px-2 py-1.5 text-xs">
                                             {['A','AAAA','CNAME','MX','TXT','NS','SRV','CAA','PTR'].map(t => <option key={t} value={t}>{t}</option>)}
                                         </select>
                                     </div>
                                     <div className="col-span-3">
                                         <label className="block text-xs text-text-muted mb-1">
-                                            {{ A: 'IPv4-Adresse', AAAA: 'IPv6-Adresse', CNAME: 'Ziel-Domain', MX: 'Mailserver', TXT: 'Textinhalt', NS: 'Nameserver', SRV: 'Ziel', CAA: 'CA (z.B. letsencrypt.org)', PTR: 'Hostname' }[newRecord.type] || 'Inhalt'}
+                                            {t('templates.recordLabel' + newRecord.type, { defaultValue: t('templates.recordLabelContent') })}
                                         </label>
                                         <input type="text" value={newRecord.content} onChange={e => setNewRecord({ ...newRecord, content: e.target.value })}
                                             placeholder={{ A: '93.184.216.34', AAAA: '2001:db8::1', CNAME: 'example.com.', MX: 'mail.example.com.', TXT: 'v=spf1 include:... ~all', NS: 'ns1.example.com.', SRV: 'server.example.com.', CAA: '0 issue "letsencrypt.org"', PTR: 'host.example.com.' }[newRecord.type] || '...'} className="w-full px-2 py-1.5 text-xs" />
                                     </div>
                                     <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">TTL</label>
+                                        <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.ttl')}</label>
                                         <input type="number" value={newRecord.ttl} onChange={e => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 3600 })}
                                             className="w-full px-2 py-1.5 text-xs" />
                                     </div>
                                     {(newRecord.type === 'MX' || newRecord.type === 'SRV') && (
                                         <div className="col-span-1">
-                                            <label className="block text-xs text-text-muted mb-1">Prio</label>
+                                            <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.fieldPriority')}</label>
                                             <input type="number" value={newRecord.prio || ''} onChange={e => setNewRecord({ ...newRecord, prio: parseInt(e.target.value) || 0 })}
                                                 placeholder="10" className="w-full px-2 py-1.5 text-xs" />
                                         </div>
@@ -1179,7 +1416,7 @@ export default function SettingsPage() {
                                     <div className={newRecord.type === 'MX' || newRecord.type === 'SRV' ? 'col-span-2' : 'col-span-3'}>
                                         <button type="button" onClick={addRecordToTemplate}
                                             className="w-full px-2 py-1.5 text-xs font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 flex items-center justify-center gap-1">
-                                            <Plus className="w-3 h-3" /> Hinzufügen
+                                            <Plus className="w-3 h-3" /> {t('settings.add')}
                                         </button>
                                     </div>
                                 </div>
@@ -1187,11 +1424,11 @@ export default function SettingsPage() {
 
                             <div className="flex justify-end gap-3 pt-2 border-t border-border">
                                 <button type="button" onClick={() => setShowTemplateForm(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
-                                    Abbrechen
+                                    {t('common.cancel')}
                                 </button>
                                 <button type="submit" disabled={savingTemplate} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
                                     {savingTemplate && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    {editTemplateId ? 'Speichern' : 'Erstellen'}
+                                    {editTemplateId ? t('templates.saveButton') : t('templates.createButton')}
                                 </button>
                             </div>
                         </form>
@@ -1202,15 +1439,15 @@ export default function SettingsPage() {
             {/* =================== ABOUT TAB =================== */}
             {activeTab === 'about' && (
                 <div className="glass-card p-5">
-                    <h2 className="text-lg font-semibold text-text-primary mb-4">Über DNS Manager</h2>
+                    <h2 className="text-lg font-semibold text-text-primary mb-4">{t('settingsMore.aboutTitle')}</h2>
                     <div className="space-y-3">
                         {[
-                            ['Version', appInfo?.app_version || '–'],
-                            ['Frontend', 'React + Vite + Tailwind CSS'],
-                            ['Backend', 'Python FastAPI'],
-                            ['Datenbank', 'MariaDB 11'],
-                            ['DNS-Engine', 'PowerDNS Authoritative'],
-                            ['Auth', 'JWT (Bearer Token)'],
+                            [t('settingsMore.version'), appInfo?.app_version || '–'],
+                            [t('settingsMore.frontend'), 'React + Vite + Tailwind CSS'],
+                            [t('settingsMore.backend'), 'Python FastAPI'],
+                            [t('settingsMore.database'), 'MariaDB 11'],
+                            [t('settingsMore.dnsEngine'), 'PowerDNS Authoritative'],
+                            [t('settingsMore.auth'), 'JWT (Bearer Token)'],
                         ].map(([k, v]) => (
                             <div key={k} className="flex justify-between p-3 bg-bg-primary rounded-lg border border-border">
                                 <span className="text-sm text-text-muted">{k}</span>
@@ -1220,8 +1457,8 @@ export default function SettingsPage() {
                     </div>
                     <div className="mt-4 p-4 bg-accent/5 rounded-xl border border-accent/20">
                         <p className="text-sm text-text-secondary">
-                            DNS Manager ist ein selbst gehostetes Admin-Panel für PowerDNS.
-                            Open Source und kostenlos. 🚀
+                            {t('settings.aboutText')}
+                            {t('settingsMore.aboutOpenSource')} 🚀
                         </p>
                     </div>
                 </div>
@@ -1233,7 +1470,7 @@ export default function SettingsPage() {
                     <div className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-5">
                             <h2 className="text-lg font-bold text-text-primary">
-                                {editId ? 'Server bearbeiten' : 'Neuen Server hinzufügen'}
+                                {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
                             </h2>
                             <button onClick={() => setShowForm(false)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
@@ -1243,17 +1480,17 @@ export default function SettingsPage() {
                         <form onSubmit={handleSave} className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Server-Name *</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverName')} *</label>
                                     <input
                                         type="text" value={form.name}
                                         onChange={e => setForm({ ...form, name: e.target.value })}
                                         placeholder="server1" className="w-full px-3 py-2 text-sm"
                                         required disabled={!!editId} minLength={1}
                                     />
-                                    <p className="text-xs text-text-muted mt-0.5">Eindeutig, z.B. server1, server2</p>
+                                    <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.serverNameHint')}</p>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">Anzeigename</label>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverDisplayName')}</label>
                                     <input
                                         type="text" value={form.display_name}
                                         onChange={e => setForm({ ...form, display_name: e.target.value })}
@@ -1263,18 +1500,18 @@ export default function SettingsPage() {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">PowerDNS API URL *</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.powerDnsApiUrl')} *</label>
                                 <input
                                     type="url" value={form.url}
                                     onChange={e => setForm({ ...form, url: e.target.value })}
                                     placeholder="http://192.168.1.10:8081" className="w-full px-3 py-2 text-sm"
                                     required
                                 />
-                                <p className="text-xs text-text-muted mt-0.5">Die URL zum PowerDNS-Webserver (Standard-Port: 8081)</p>
+                                <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.powerDnsApiUrlHint')}</p>
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">API Key *</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.apiKey')} *</label>
                                 <div className="relative">
                                     <input
                                         type={showApiKey ? 'text' : 'password'} value={form.api_key}
@@ -1287,11 +1524,11 @@ export default function SettingsPage() {
                                         {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                     </button>
                                 </div>
-                                <p className="text-xs text-text-muted mt-0.5">Aus der PowerDNS-Konfiguration (api-key in pdns.conf)</p>
+                                <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.apiKeyHint')}</p>
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">Beschreibung</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.description')}</label>
                                 <input
                                     type="text" value={form.description}
                                     onChange={e => setForm({ ...form, description: e.target.value })}
@@ -1307,8 +1544,8 @@ export default function SettingsPage() {
                                     className="w-4 h-4 rounded"
                                 />
                                 <div>
-                                    <span className="text-sm font-medium text-text-primary">Auf diesem Server speichern</span>
-                                    <p className="text-xs text-text-muted mt-0.5">Zonen und Änderungen werden auf diesem Server geschrieben. Bei gemeinsamer Datenbank (z. B. zwei Server-Einträge auf eine DB) nur bei einem Server aktivieren.</p>
+                                    <span className="text-sm font-medium text-text-primary">{t('settingsMore.saveOnThisServer')}</span>
+                                    <p className="text-xs text-text-muted mt-0.5">{t('settings.writeToServerHint')}</p>
                                 </div>
                             </label>
 
@@ -1319,7 +1556,7 @@ export default function SettingsPage() {
                                     className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 disabled:opacity-50 transition-all"
                                 >
                                     {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                                    Verbindung testen
+                                    {t('settingsMore.testConnection')}
                                 </button>
 
                                 {testResult && (
@@ -1330,12 +1567,12 @@ export default function SettingsPage() {
                                         {testResult.success ? (
                                             <div>
                                                 <div className="flex items-center gap-2 font-medium mb-1">
-                                                    <CheckCircle2 className="w-4 h-4" /> Verbindung erfolgreich!
+                                                    <CheckCircle2 className="w-4 h-4" /> {t('settingsMore.connectionSuccess')}
                                                 </div>
                                                 <div className="text-xs space-y-0.5 text-text-secondary">
-                                                    <p>Version: {testResult.server_info.version}</p>
-                                                    <p>Typ: {testResult.server_info.daemon_type}</p>
-                                                    <p>Zonen: {testResult.server_info.zone_count}</p>
+                                                    <p>{t('settingsMore.version')}: {testResult.server_info.version}</p>
+                                                    <p>{t('dashboard.type')}: {testResult.server_info.daemon_type}</p>
+                                                    <p>{t('settings.zonesCount')}: {testResult.server_info.zone_count}</p>
                                                 </div>
                                             </div>
                                         ) : (
@@ -1350,11 +1587,11 @@ export default function SettingsPage() {
 
                             <div className="flex justify-end gap-3 pt-2 border-t border-border">
                                 <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
-                                    Abbrechen
+                                    {t('common.cancel')}
                                 </button>
                                 <button type="submit" disabled={saving} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
                                     {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    {editId ? 'Speichern' : 'Hinzufügen'}
+                                    {editId ? t('common.save') : t('settings.add')}
                                 </button>
                             </div>
                         </form>

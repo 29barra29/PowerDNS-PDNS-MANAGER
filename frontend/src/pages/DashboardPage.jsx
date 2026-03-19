@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Server, Globe, Activity, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
 import api from '../api'
 
 export default function DashboardPage() {
+    const { t } = useTranslation()
     const [servers, setServers] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
-    const [user, setUser] = useState(null)
+    const [user, setUser] = useState(() => api.getUser())
 
     useEffect(() => {
-        const stored = localStorage.getItem('user')
-        if (stored) setUser(JSON.parse(stored))
+        const u = api.getUser()
+        if (u) setUser(u)
         loadDashboard()
     }, [])
 
@@ -46,9 +48,9 @@ export default function DashboardPage() {
             <div className="space-y-6">
                 <div>
                     <h1 className="text-2xl font-bold text-text-primary">
-                        Willkommen, {user?.display_name || user?.username}!
+                        {t('dashboard.welcome', { name: user?.display_name || user?.username })}
                     </h1>
-                    <p className="text-text-muted text-sm mt-1">Dein DNS-Verwaltungspanel</p>
+                    <p className="text-text-muted text-sm mt-1">{t('dashboard.subtitle')}</p>
                 </div>
 
                 {/* Serverstatus - einfach */}
@@ -63,12 +65,12 @@ export default function DashboardPage() {
                         </div>
                         <div>
                             <h2 className="text-lg font-semibold text-text-primary">
-                                {allOnline ? 'Alles läuft!' : 'Eingeschränkter Betrieb'}
+                                {allOnline ? t('dashboard.allRunning') : t('dashboard.limitedOperation')}
                             </h2>
                             <p className="text-sm text-text-muted">
                                 {allOnline
-                                    ? 'Alle DNS-Server sind online und erreichbar.'
-                                    : `${onlineCount} von ${servers.length} Servern sind erreichbar.`
+                                    ? t('dashboard.allServersOnline')
+                                    : t('dashboard.serversReachable', { count: onlineCount, total: servers.length })
                                 }
                             </p>
                         </div>
@@ -77,7 +79,7 @@ export default function DashboardPage() {
 
                 {/* Schnellzugriff */}
                 <div>
-                    <h2 className="text-lg font-semibold text-text-primary mb-3">Schnellzugriff</h2>
+                    <h2 className="text-lg font-semibold text-text-primary mb-3">{t('dashboard.quickAccess')}</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <a href="/zones" className="glass-card p-5 hover:bg-bg-hover/50 transition-all group cursor-pointer block">
                             <div className="flex items-center gap-3">
@@ -85,8 +87,8 @@ export default function DashboardPage() {
                                     <Globe className="w-5 h-5 text-accent-light" />
                                 </div>
                                 <div>
-                                    <p className="font-medium text-text-primary">Meine Zonen</p>
-                                    <p className="text-xs text-text-muted">DNS-Einträge verwalten</p>
+                                    <p className="font-medium text-text-primary">{t('layout.myZones')}</p>
+                                    <p className="text-xs text-text-muted">{t('dashboard.manageRecords')}</p>
                                 </div>
                             </div>
                         </a>
@@ -96,8 +98,8 @@ export default function DashboardPage() {
                                     <Activity className="w-5 h-5 text-purple-400" />
                                 </div>
                                 <div>
-                                    <p className="font-medium text-text-primary">Suche</p>
-                                    <p className="text-xs text-text-muted">DNS-Einträge durchsuchen</p>
+                                    <p className="font-medium text-text-primary">{t('layout.search')}</p>
+                                    <p className="text-xs text-text-muted">{t('dashboard.searchRecords')}</p>
                                 </div>
                             </div>
                         </a>
@@ -113,8 +115,8 @@ export default function DashboardPage() {
     return (
         <div className="space-y-6">
             <div>
-                <h1 className="text-2xl font-bold text-text-primary">Übersicht</h1>
-                <p className="text-text-muted text-sm mt-1">Serverstatus und Statistiken</p>
+                <h1 className="text-2xl font-bold text-text-primary">{t('dashboard.overview')}</h1>
+                <p className="text-text-muted text-sm mt-1">{t('dashboard.serverStatus')}</p>
             </div>
 
             {error && (
@@ -133,7 +135,7 @@ export default function DashboardPage() {
                         </div>
                         <div>
                             <p className="text-2xl font-bold text-text-primary">{servers.length}</p>
-                            <p className="text-xs text-text-muted">Server</p>
+                            <p className="text-xs text-text-muted">{t('dashboard.servers')}</p>
                         </div>
                     </div>
                 </div>
@@ -145,7 +147,7 @@ export default function DashboardPage() {
                         </div>
                         <div>
                             <p className="text-2xl font-bold text-text-primary">{onlineCount} / {servers.length}</p>
-                            <p className="text-xs text-text-muted">Online</p>
+                            <p className="text-xs text-text-muted">{t('dashboard.online')}</p>
                         </div>
                     </div>
                 </div>
@@ -157,7 +159,7 @@ export default function DashboardPage() {
                         </div>
                         <div>
                             <p className="text-2xl font-bold text-text-primary">{totalZones}</p>
-                            <p className="text-xs text-text-muted">Zonen</p>
+                            <p className="text-xs text-text-muted">{t('dashboard.zones')}</p>
                         </div>
                     </div>
                 </div>
@@ -165,7 +167,7 @@ export default function DashboardPage() {
 
             {/* Server cards */}
             <div>
-                <h2 className="text-lg font-semibold text-text-primary mb-4">Server</h2>
+                <h2 className="text-lg font-semibold text-text-primary mb-4">{t('dashboard.servers')}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {servers.map(s => (
                         <div key={s.name} className="glass-card p-5">
@@ -178,24 +180,24 @@ export default function DashboardPage() {
                                         ? 'bg-success/10 text-success border border-success/30'
                                         : 'bg-danger/10 text-danger border border-danger/30'
                                     }`}>
-                                    {s.is_reachable ? 'Online' : 'Offline'}
+                                    {s.is_reachable ? t('dashboard.online') : t('dashboard.offline')}
                                 </span>
                             </div>
                             <div className="grid grid-cols-2 gap-3 text-sm">
                                 <div>
-                                    <p className="text-text-muted text-xs">Version</p>
+                                    <p className="text-text-muted text-xs">{t('dashboard.version')}</p>
                                     <p className="text-text-primary">{s.version || '-'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-text-muted text-xs">Zonen</p>
+                                    <p className="text-text-muted text-xs">{t('dashboard.zones')}</p>
                                     <p className="text-text-primary">{s.zone_count ?? '-'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-text-muted text-xs">Typ</p>
+                                    <p className="text-text-muted text-xs">{t('dashboard.type')}</p>
                                     <p className="text-text-primary">{s.daemon_type || '-'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-text-muted text-xs">URL</p>
+                                    <p className="text-text-muted text-xs">{t('dashboard.url')}</p>
                                     <p className="text-text-primary text-xs truncate">{s.url}</p>
                                 </div>
                             </div>
