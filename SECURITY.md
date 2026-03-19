@@ -10,7 +10,8 @@ Use this section to tell people about which versions of your project are current
 
 | Version | Supported          |
 | ------- | ------------------ |
-| v2.2.x  | :white_check_mark: |
+| v2.3.x  | :white_check_mark: |
+| v2.2.x  | :x: |
 | v2.1.x  | :x:                |
 | v2.0.x  | :x:                |
 | < 2.0   | :x:                |
@@ -40,7 +41,8 @@ Diese Tabelle zeigt, welche Versionen des Projekts mit Sicherheitsupdates unters
 
 | Version | Unterstützt         |
 | ------- | ------------------- |
-| v2.2.x  | :white_check_mark:  |
+| v2.3.x  | :white_check_mark:  |
+| v2.2.x  | :x:  |
 | v2.1.x  | :x:                 |
 | v2.0.x  | :x:                 |
 | < 2.0   | :x:                 |
