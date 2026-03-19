@@ -53,6 +53,10 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
+    # DNS für Auflösung externer Hosts (z. B. SMTP-Server wie smtp.gmail.com)
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     networks:
       - dns-manager-net
 
