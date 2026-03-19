@@ -46,7 +46,7 @@ export default function SetupWizard() {
     smtp_from: '',
   });
 
-  const [pdnsConfig, setPdnsConfig] = useState({
+  const [_pdnsConfig, _setPdnsConfig] = useState({
     enabled: false,
     name: 'server1',
     url: 'http://localhost:8081',
@@ -54,10 +54,9 @@ export default function SetupWizard() {
   });
 
   useEffect(() => {
-    // Check setup status
     checkSetupStatus();
     api.getAppInfo().then(setAppInfo).catch(() => {});
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
 
   const checkSetupStatus = async () => {
     try {

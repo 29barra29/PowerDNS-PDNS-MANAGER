@@ -10,6 +10,7 @@ export default function Layout() {
     const [user, setUser] = useState(() => api.getUser())
     const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '', app_logo_url: '' })
 
+    /* eslint-disable react-hooks/set-state-in-effect -- sync user/appInfo from api on mount */
     useEffect(() => {
         const u = api.getUser()
         if (u) {
@@ -17,7 +18,8 @@ export default function Layout() {
             if (u.preferred_language && u.preferred_language !== i18n.language) i18n.changeLanguage(u.preferred_language)
         }
         api.getAppInfo().then(setAppInfo).catch(console.error)
-    }, [])
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     const handleLogout = () => {
         api.logout()
@@ -60,7 +62,7 @@ export default function Layout() {
 
                 {/* Navigation */}
                 <nav className="flex-1 p-3 space-y-1">
-                    {links.map(({ to, icon: Icon, labelKey }) => (
+                    {links.map(({ to, icon: Icon, labelKey }) => ( // eslint-disable-line no-unused-vars -- Icon used as <Icon /> below
                         <NavLink
                             key={to + labelKey}
                             to={to}

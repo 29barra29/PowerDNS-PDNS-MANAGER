@@ -30,7 +30,7 @@ class APIClient {
     async logout() {
         try {
             await fetch(`${API_BASE}/auth/logout`, { method: 'POST', ...FETCH_OPTS });
-        } catch (_) { /* ignore */ }
+        } catch { /* ignore */ }
         this.clearUser();
         window.location.href = '/login';
     }

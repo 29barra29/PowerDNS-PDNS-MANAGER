@@ -39,7 +39,7 @@ export default function UsersPage() {
                                 zones.push({ name: z.name, server: s.name })
                             }
                         })
-                } catch { }
+                } catch { /* ignore */ }
             }
             setAllZones(zones)
         } catch (err) {

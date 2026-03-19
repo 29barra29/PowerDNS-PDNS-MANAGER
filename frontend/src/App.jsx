@@ -20,6 +20,7 @@ function ProtectedRoute({ children }) {
   const [authChecked, setAuthChecked] = useState(api.isLoggedIn())
   const [authorized, setAuthorized] = useState(api.isLoggedIn())
 
+  /* eslint-disable react-hooks/set-state-in-effect -- sync auth state from api on mount */
   useEffect(() => {
     if (api.isLoggedIn()) {
       setAuthorized(true)
@@ -37,6 +38,7 @@ function ProtectedRoute({ children }) {
         setAuthChecked(true)
       })
   }, [])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!authChecked) {
     return (

@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react'
 import api from '../api'
 
 export default function ResetPasswordPage() {
     const { t, i18n } = useTranslation()
-    const navigate = useNavigate()
     const [searchParams] = useSearchParams()
     const token = searchParams.get('token') || ''
     const [password, setPassword] = useState('')
@@ -26,7 +25,7 @@ export default function ResetPasswordPage() {
     useEffect(() => {
         api.getAppInfo().then(setAppInfo).catch(console.error)
         if (!token) setError(t('reset.invalidLink'))
-    }, [token])
+    }, [token]) // eslint-disable-line react-hooks/exhaustive-deps -- t from i18n stable
 
     const handleSubmit = async (e) => {
         e.preventDefault()

@@ -8,7 +8,7 @@ export default function ZonesPage() {
     const { t } = useTranslation()
     const navigate = useNavigate()
     const [zones, setZones] = useState([])
-    const [servers, setServers] = useState([])
+    const [_servers, setServers] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [showCreate, setShowCreate] = useState(false)
@@ -34,7 +34,7 @@ export default function ZonesPage() {
     const [templates, setTemplates] = useState([])
     const [selectedTemplateId, setSelectedTemplateId] = useState('')
 
-    useEffect(() => { loadZones(); loadTemplates() }, [])
+    useEffect(() => { loadZones(); loadTemplates() }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
 
     async function loadTemplates() {
         try {
@@ -47,7 +47,7 @@ export default function ZonesPage() {
                 setSelectedTemplateId(String(def.id))
                 applyTemplate(def)
             }
-        } catch (err) { /* ignore */ }
+        } catch { /* ignore */ }
     }
 
     function applyTemplate(t) {
@@ -88,7 +88,7 @@ export default function ZonesPage() {
                 try {
                     const zData = await api.listZones(s.name)
                         ; (zData.zones || []).forEach(z => allZones.push({ ...z, _server: s.name }))
-                } catch { }
+                } catch { /* ignore */ }
             }
             // Deduplicate
             const seen = new Set()

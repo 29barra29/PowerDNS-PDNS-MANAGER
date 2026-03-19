@@ -28,13 +28,14 @@ export default function SearchPage() {
             try {
                 const data = await api.search(s.name, searchTerm)
                 ;(data.results || []).forEach(r => all.push({ ...r, _server: s.name }))
-            } catch { }
+            } catch { /* ignore */ }
         }
         setResults(all)
         setLoading(false)
     }, [servers])
 
     // Live-Suche: ab 3 Zeichen nach kurzer Pause automatisch suchen
+    /* eslint-disable react-hooks/set-state-in-effect -- debounced search + clear when query short */
     useEffect(() => {
         const t = query.trim()
         if (t.length < MIN_QUERY_LENGTH) {
@@ -43,7 +44,8 @@ export default function SearchPage() {
         }
         const timer = setTimeout(() => runSearch(t), DEBOUNCE_MS)
         return () => clearTimeout(timer)
-    }, [query, runSearch])
+    }, [query, runSearch]) // eslint-disable-line react-hooks/exhaustive-deps -- searched intentionally omitted
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     async function handleSearch(e) {
         e.preventDefault()

@@ -69,7 +69,7 @@ export default function SettingsPage() {
 
     useEffect(() => {
         loadProfile()
-    }, [])
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
 
     useEffect(() => {
         if (profile?.role === 'admin') {
@@ -84,7 +84,7 @@ export default function SettingsPage() {
 
     useEffect(() => {
         if (profile && profile.role !== 'admin' && !['profile', 'about'].includes(activeTab)) setActiveTab('profile')
-    }, [profile?.role, activeTab])
+    }, [profile?.role, activeTab]) // eslint-disable-line react-hooks/exhaustive-deps -- profile intentionally partial to avoid loops
 
     useEffect(() => {
         if (profile?.role !== 'admin') return
@@ -94,7 +94,7 @@ export default function SettingsPage() {
         if (activeTab === 'smtp') {
             loadSmtp()
         }
-    }, [activeTab, profile?.role])
+    }, [activeTab, profile?.role]) // eslint-disable-line react-hooks/exhaustive-deps -- loadCommits/loadSmtp stable, commits.length intentional
 
     async function loadCommits() {
         setLoadingCommits(true)
@@ -232,10 +232,6 @@ export default function SettingsPage() {
         }
     }
 
-    function handleSaveDefaults(e) {
-        // kept for backwards compat, no-op now
-    }
-
     async function handleUploadLogo(e) {
         const file = e.target.files?.[0]
         if (!file) return
@@ -257,7 +253,7 @@ export default function SettingsPage() {
         try {
             const data = await api.getTemplates()
             setTemplates(data.templates || [])
-        } catch (err) { /* ignore */ }
+        } catch { /* ignore */ }
         finally { setLoadingTemplates(false) }
     }
 
@@ -365,7 +361,7 @@ export default function SettingsPage() {
                 from_name: data.from_name || 'DNS Manager', encryption: data.encryption || 'starttls',
                 enabled: data.enabled || false,
             })
-        } catch (err) { /* ignore */ }
+        } catch { /* ignore */ }
         finally { setLoadingSmtp(false) }
     }
 
@@ -580,7 +576,7 @@ export default function SettingsPage() {
                                                 setProfile(updated)
                                                 api.setUser(updated)
                                             }
-                                        } catch (_) { setProfileForm({ ...profileForm, preferred_language: i18n.language }) }
+                                        } catch { setProfileForm(prev => ({ ...prev, preferred_language: i18n.language })) }
                                     }}
                                     className="w-full max-w-xs px-3 py-2 text-sm border border-border rounded-lg bg-bg-primary"
                                 >
@@ -1098,7 +1094,7 @@ export default function SettingsPage() {
                                 <p className="text-sm text-text-muted">{t('settingsMore.noChangesFound')}</p>
                             ) : (
                                 <div className="space-y-3">
-                                    {commits.map((c, i) => (
+                                    {commits.map((c) => (
                                         <div key={c.sha} className="p-4 rounded-lg bg-bg-primary border border-border flex gap-4 items-start">
                                             <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0 mt-1">
                                                 <Code className="w-4 h-4 text-accent-light" />

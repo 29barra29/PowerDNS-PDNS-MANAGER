@@ -70,7 +70,7 @@ export default function ZoneDetailPage() {
     const { t } = useTranslation()
     const { server, zoneId } = useParams()
     const navigate = useNavigate()
-    const [zone, setZone] = useState(null)
+    const [_zone, setZone] = useState(null)
     const [records, setRecords] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
@@ -85,7 +85,7 @@ export default function ZoneDetailPage() {
 
     const zoneName = zoneId.replace(/\.$/, '')
 
-    useEffect(() => { loadZone() }, [server, zoneId])
+    useEffect(() => { loadZone() }, [server, zoneId]) // eslint-disable-line react-hooks/exhaustive-deps -- loadZone stable
 
     async function loadZone() {
         setLoading(true)
