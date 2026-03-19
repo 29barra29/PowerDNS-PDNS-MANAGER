@@ -46,6 +46,8 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 - **Logo überall:** Das eingestellte Logo erscheint auf Login, Registrierung, Passwort vergessen, Passwort-Reset und im Setup-Wizard – sowie in der **Sidebar** (Dashboard und alle eingeloggten Seiten).
 - **Mehrsprachigkeit (i18n):** Login-, Registrierungs-, Forgot-/Reset- und Setup-Seiten sowie Einstellungen nutzen vollständig die Übersetzungen (DE/EN). Sprachumschalter auf der Login-Seite; gewählte Sprache wird im Benutzerprofil gespeichert und beim nächsten Login übernommen.
 - **Locales:** Erweiterte `de.json` und `en.json` um alle Keys für Branding, Login, Register, Forgot, Reset und Setup.
+- **Projektstruktur:** README um `i18n.js`, `locales/`, Auth-Seiten (Register, Forgot, Reset), Branding und `static_new/uploads` ergänzt.
+- **Local Storage:** Nur die gewählte Sprache (z. B. `locale=de`) wird clientseitig gespeichert – keine Tokens oder sensiblen Daten; JWT bleibt in Memory/HttpOnly-Cookie-Konzept.
 
 ### v2.2.2
 
@@ -144,7 +146,7 @@ dns-manager/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py           # App-Einstiegspunkt
+│       ├── main.py           # App-Einstiegspunkt, Static Files (uploads)
 │       ├── core/
 │       │   ├── config.py     # Konfiguration
 │       │   ├── database.py   # DB-Verbindung
@@ -152,41 +154,53 @@ dns-manager/
 │       ├── models/
 │       │   └── models.py     # Datenbank-Models
 │       ├── routers/
-│       │   ├── auth.py       # Login / User-Verwaltung
+│       │   ├── auth.py       # Login, Registrierung, Passwort-Reset
 │       │   ├── servers.py    # Server-Info
 │       │   ├── zones.py      # Zonen-Verwaltung
 │       │   ├── records.py    # Record-Verwaltung
 │       │   ├── dnssec.py     # DNSSEC
 │       │   ├── search.py     # Suche + Audit-Log
 │       │   ├── setup.py      # Setup-Wizard API
-│       │   ├── settings.py   # Server-Konfiguration + SMTP
+│       │   ├── settings.py   # Server, SMTP, App-Info/Branding, Logo-Upload
 │       │   └── templates.py  # Zonen-Vorlagen (CRUD)
 │       ├── schemas/
 │       │   └── dns.py        # Pydantic-Schemas + Validierung
-│       └── services/
-│           ├── pdns_client.py # PowerDNS API Client
-│           └── email_service.py # SMTP E-Mail-Versand
+│       ├── services/
+│       │   ├── pdns_client.py # PowerDNS API Client
+│       │   └── email_service.py # SMTP E-Mail-Versand
+│       └── static_new/
+│           └── uploads/      # Hochgeladene Logos (custom-logo.*), persistent
 │
 └── frontend/             # React Frontend
     ├── package.json
     ├── vite.config.js
     ├── tailwind.config.js
     └── src/
+        ├── main.jsx           # Einstieg, i18n-Provider
         ├── App.jsx
-        ├── api.js            # API-Client
+        ├── api.js             # API-Client (inkl. getAppInfo, uploadAppLogo)
+        ├── i18n.js            # Mehrsprachigkeit (DE/EN), Local Storage für Sprache
+        ├── locales/
+        │   ├── de.json        # Deutsche Übersetzungen (Auth, Branding, UI)
+        │   └── en.json        # Englische Übersetzungen
         ├── components/
-        │   └── Layout.jsx    # Sidebar + Navigation
+        │   └── Layout.jsx     # Sidebar, Navigation, Custom-Logo (Branding)
         └── pages/
-            ├── LoginPage.jsx
-            ├── SetupWizard.jsx
+            ├── LoginPage.jsx        # Login + Sprachumschalter
+            ├── RegisterPage.jsx     # Registrierung
+            ├── ForgotPasswordPage.jsx   # Passwort vergessen
+            ├── ResetPasswordPage.jsx    # Passwort zurücksetzen (Token)
+            ├── SetupWizard.jsx       # Ersteinrichtungs-Assistent
             ├── DashboardPage.jsx
-            ├── ZonesPage.jsx      # + Vorlagen-Auswahl
-            ├── ZoneDetailPage.jsx # Records bearbeiten
+            ├── ZonesPage.jsx         # + Vorlagen-Auswahl
+            ├── ZoneDetailPage.jsx    # Records bearbeiten
             ├── SearchPage.jsx
             ├── AuditLogPage.jsx
             ├── UsersPage.jsx
-            └── SettingsPage.jsx   # Server, Vorlagen, SMTP
+            └── SettingsPage.jsx     # Server, Vorlagen, SMTP, Branding (Logo, Tagline, Creator)
 ```
+
+**Hinweis (v2.3.1):** Neu bzw. erweitert: `frontend/src/i18n.js`, `locales/` (DE/EN), Auth-Seiten Register/Forgot/Reset, Branding in Settings und Backend (`settings.py`, `static_new/uploads`). Sprache wird im Local Storage gespeichert (Sicherheit: nur UI-Präferenz, keine sensiblen Daten).
 
 ---
 
