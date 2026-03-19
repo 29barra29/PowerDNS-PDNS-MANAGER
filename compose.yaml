@@ -50,6 +50,9 @@ services:
       ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+    volumes:
+      # Logo und andere Uploads bleiben bei Updates erhalten
+      - backend_uploads:/app/app/static_new/uploads
     depends_on:
       mariadb:
         condition: service_healthy
@@ -62,6 +65,8 @@ services:
 
 volumes:
   mariadb_data:
+    driver: local
+  backend_uploads:
     driver: local
 
 networks:

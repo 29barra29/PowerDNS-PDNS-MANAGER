@@ -220,6 +220,7 @@ Das Update-Script macht folgendes:
 2. Baut die Container neu
 3. Startet die Anwendung neu
 4. Behält deine Datenbank und Einstellungen
+5. **Logo und Uploads** bleiben erhalten (persistentes Volume `backend_uploads` für `static_new/uploads`)
 
 ### Manuelles Update
 
