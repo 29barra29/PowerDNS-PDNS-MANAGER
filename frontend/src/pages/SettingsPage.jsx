@@ -1098,6 +1098,11 @@ export default function SettingsPage() {
                             <p className="text-xs text-text-muted mt-4">
                                 💡 {t('settingsMore.updatesScriptHint')}
                             </p>
+                            {!appInfo?.install_path && (
+                                <p className="text-xs text-amber-400/90 mt-2">
+                                    {t('settingsMore.updatePathMissingHint')}
+                                </p>
+                            )}
                         </div>
 
                         {/* Commits von GitHub */}

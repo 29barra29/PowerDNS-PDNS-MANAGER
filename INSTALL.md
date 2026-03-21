@@ -197,15 +197,22 @@ docker compose --env-file production.env up -d
 
 ### Automatisches Update
 
+Voraussetzung: Projektordner mit **Git** (z. B. nach `install.sh` oder `git clone`).
+
 ```bash
+cd /pfad/zu/dns-manager
 ./update.sh
 ```
+
+`update.sh` holt Referenzen von GitHub und setzt – wie die Installation – bevorzugt das **neueste Release-Tag** (`v*`), damit ein reines `git pull` nach Tag-Installation nicht „hängen bleibt“.
 
 ### Manuelles Update
 
 ```bash
-git pull origin main
-docker compose build --no-cache
+git fetch origin --tags --force
+git checkout main && git pull origin main
+# alternativ festes Release: git checkout v2.3.2
+docker compose build --no-cache backend
 docker compose up -d
 ```
 

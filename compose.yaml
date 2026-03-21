@@ -45,7 +45,10 @@ services:
       # App Settings (Version = eine Stelle: VERSION-Datei im Projektroot)
       APP_NAME: ${APP_NAME:-DNS Manager}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      
+      # Host-Pfad zum Projektordner (für Einstellungen → Updates: „cd …“) – aus .env (install.sh / setup.sh)
+      INSTALL_PATH: ${INSTALL_PATH:-}
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-de}
+
       # Generierte Passwörter / Secrets aus .env durchreichen
       ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}

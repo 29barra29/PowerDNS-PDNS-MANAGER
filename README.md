@@ -188,22 +188,25 @@ Nach einem Update: Änderungen und Neuerungen stehen oben unter **„Was ist neu
 ### Automatisches Update
 
 ```bash
-cd dns-manager
+cd /pfad/zu/dns-manager   # Ordner mit compose.yaml und .git
+chmod +x update.sh        # nur beim ersten Mal, falls nötig
 ./update.sh
 ```
 
-Das Update-Script macht folgendes:
-1. Holt die neueste Version von GitHub
-2. Baut die Container neu
-3. Startet die Anwendung neu
-4. Behält deine Datenbank und Einstellungen
-5. **Logo und Uploads** bleiben erhalten (persistentes Volume `backend_uploads` für `static_new/uploads`)
+**Voraussetzung:** Installation per **`git clone`** (wie bei `install.sh` / Option 2). Ohne `.git` (nur entpacktes Archiv) kann `update.sh` den Code nicht aktualisieren.
+
+Das Skript macht u. a.:
+1. **`git fetch`** inkl. Tags – nach der One-Click-Installation bist du oft auf einem **Release-Tag** (nicht auf `main`); ein nacktes `git pull` reicht dann nicht, das Skript wechselt deshalb auf das **neueste `v*`-Tag** (oder aktualisiert `main`, falls du darauf bist / keine Tags da sind).
+2. **`docker compose build --no-cache backend`** und **`up -d`**
+3. Datenbank und `.env` bleiben; **Logo/Uploads** über Volume `backend_uploads`
 
 ### Manuelles Update
 
 ```bash
 cd dns-manager
-git pull origin main
+git fetch origin --tags --force
+git checkout main && git pull origin main
+# Oder Release: git checkout v2.3.2   # gewünschtes Tag nach fetch
 docker compose build --no-cache backend
 docker compose up -d
 ```

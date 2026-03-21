@@ -426,7 +426,7 @@
     "rdataPhOPENPGPKEY": "mQCNAz… (Base64)"
   },
   "settingsMore": {
-    "updatesScriptHint": "The script automatically downloads the latest updates, rebuilds the system and restarts it without data loss.",
+    "updatesScriptHint": "Uses Git (fetch + latest v* release tag, or pull on main), rebuilds the backend image and restarts containers. Requires a .git folder (install.sh or git clone). A plain git pull often does nothing after a tag-based install—that’s what update.sh fixes.",
     "lastChanges": "Recent changes (GitHub)",
     "noChangesFound": "No changes found.",
     "by": "by",
@@ -459,7 +459,7 @@
     "testConnection": "Test connection",
     "connectionSuccess": "Connection successful!",
     "newVersionBannerTitle": "Newer version on GitHub",
-    "newVersionBannerBody": "Installed: {{current}} · GitHub has at least {{latest}}. Update on the server via update.sh or git pull.",
+    "newVersionBannerBody": "Installed: {{current}} · GitHub has at least {{latest}}. On the server, run ./update.sh in the project folder (not only git pull if you installed from a release tag).",
     "updateTitle": "Update system",
     "updateSubtitle": "Get the latest features from GitHub",
     "updateHowTitle": "How do I update the system?",
@@ -467,7 +467,8 @@
     "updateTerminalPara": "You can update the system at any time via your server terminal:",
     "updateStep1Comment": "1. Switch to folder",
     "updateStep2Comment": "2. Run the script",
-    "updatePathPlaceholder": "/path/to/your/dns-manager"
+    "updatePathPlaceholder": "/path/to/your/dns-manager",
+    "updatePathMissingHint": "No install path in .env (INSTALL_PATH). Add it next to compose.yaml, then docker compose up -d — or use install.sh/setup.sh, which set it automatically."
   },
   "templates": {
     "newTemplate": "New template",

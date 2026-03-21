@@ -426,7 +426,7 @@
     "rdataPhOPENPGPKEY": "mQCNAz… (Base64)"
   },
   "settingsMore": {
-    "updatesScriptHint": "Das Skript lädt automatisch die neuesten Updates herunter, baut das System komprimiert neu und startet es ohne Datenverlust.",
+    "updatesScriptHint": "Per Git (fetch + neuestes Release-Tag v*, sonst Pull auf main) wird der Code aktualisiert, danach Backend-Image neu bauen und Container starten. Voraussetzung: Ordner mit .git (install.sh oder git clone). Ein nacktes git pull reicht nach Tag-Installation oft nicht – dafür ist update.sh da.",
     "lastChanges": "Letzte Änderungen (GitHub)",
     "noChangesFound": "Keine Änderungen gefunden.",
     "by": "von",
@@ -459,7 +459,7 @@
     "testConnection": "Verbindung testen",
     "connectionSuccess": "Verbindung erfolgreich!",
     "newVersionBannerTitle": "Neuere Version auf GitHub",
-    "newVersionBannerBody": "Installiert ist {{current}} · Auf GitHub liegt mindestens {{latest}}. Bitte auf dem Server per update.sh oder git pull einspielen.",
+    "newVersionBannerBody": "Installiert ist {{current}} · Auf GitHub liegt mindestens {{latest}}. Auf dem Server im Projektordner ./update.sh ausführen (nicht nur git pull, wenn die Installation auf einem Release-Tag liegt).",
     "updateTitle": "System aktualisieren",
     "updateSubtitle": "Hol dir die neuesten Funktionen von GitHub",
     "updateHowTitle": "Wie aktualisiere ich das System?",
@@ -467,7 +467,8 @@
     "updateTerminalPara": "Du kannst das System aber jederzeit ganz einfach über dein Server-Terminal aktualisieren:",
     "updateStep1Comment": "1. In den Ordner wechseln",
     "updateStep2Comment": "2. Das Skript ausführen",
-    "updatePathPlaceholder": "/pfad/zu/deinem/dns-manager"
+    "updatePathPlaceholder": "/pfad/zu/deinem/dns-manager",
+    "updatePathMissingHint": "Kein Installationspfad in .env (INSTALL_PATH). Bitte in der .env im Projektordner setzen, mit docker compose up -d neu laden – oder install.sh/setup.sh nutzen, die den Pfad automatisch eintragen."
   },
   "templates": {
     "newTemplate": "Neue Vorlage",
