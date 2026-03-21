@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code, Sliders, Copy, Star, Send } from 'lucide-react'
 import api from '../api'
+import { ALL_RECORD_TYPE_KEYS, TEMPLATE_CONTENT_PLACEHOLDERS } from '../constants/dnsRecordTypes'
+import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
+import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
+import { compareSemver } from '../utils/semverCompare'
 
 const LANGUAGES = [
     { code: 'de', label: 'Deutsch' },
@@ -10,6 +14,7 @@ const LANGUAGES = [
 
 export default function SettingsPage() {
     const { t, i18n } = useTranslation()
+    const { updateAvailable, dismissUpdate, latestVersion, currentVersion } = useUpdateAvailability()
     const [activeTab, setActiveTab] = useState('profile')
     const [servers, setServers] = useState([])
     const [loading, setLoading] = useState(true)
@@ -95,6 +100,13 @@ export default function SettingsPage() {
             loadSmtp()
         }
     }, [activeTab, profile?.role]) // eslint-disable-line react-hooks/exhaustive-deps -- loadCommits/loadSmtp stable, commits.length intentional
+
+    // Roter Punkt entfernen, sobald der Reiter „Updates“ geöffnet wurde
+    useEffect(() => {
+        if (activeTab === 'updates' && updateAvailable) {
+            dismissUpdate()
+        }
+    }, [activeTab, updateAvailable, dismissUpdate])
 
     async function loadCommits() {
         setLoadingCommits(true)
@@ -283,7 +295,7 @@ export default function SettingsPage() {
     function addRecordToTemplate() {
         if (!newRecord.content.trim()) return
         const rec = { ...newRecord }
-        if (rec.type !== 'MX' && rec.type !== 'SRV') rec.prio = null
+        if (rec.type !== 'MX') rec.prio = null
         setTemplateForm({
             ...templateForm,
             records: [...templateForm.records, rec],
@@ -530,17 +542,25 @@ export default function SettingsPage() {
 
             {/* Tabs */}
             <div className="flex gap-1 p-1 bg-bg-secondary rounded-xl border border-border">
-                {tabs.map(tab => (
+                {tabs.map((tab) => (
                     <button
                         key={tab.id}
+                        type="button"
                         onClick={() => setActiveTab(tab.id)}
                         className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
                             ? 'bg-accent/20 text-accent-light'
                             : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
                             }`}
                     >
-                        <tab.icon className="w-4 h-4" />
-                        {t(tab.labelKey)}
+                        <tab.icon className="w-4 h-4 shrink-0" />
+                        <span className="flex-1 text-left">{t(tab.labelKey)}</span>
+                        {tab.id === 'updates' && updateAvailable ? (
+                            <span
+                                className="w-2 h-2 rounded-full bg-red-500 shrink-0"
+                                title={t('layout.newVersionDot')}
+                                aria-hidden
+                            />
+                        ) : null}
                     </button>
                 ))}
             </div>
@@ -1040,6 +1060,12 @@ export default function SettingsPage() {
             {/* =================== UPDATES TAB =================== */}
             {activeTab === 'updates' && (
                 <div className="space-y-6">
+                    {latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) > 0 && (
+                        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-sm text-text-secondary">
+                            <p className="font-medium text-amber-200 mb-1">{t('settingsMore.newVersionBannerTitle')}</p>
+                            <p>{t('settingsMore.newVersionBannerBody', { current: currentVersion, latest: latestVersion })}</p>
+                        </div>
+                    )}
                     <div className="glass-card p-6">
                         <div className="flex items-center gap-3 mb-6">
                             <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
@@ -1377,44 +1403,51 @@ export default function SettingsPage() {
                                     </div>
                                 )}
 
-                                {/* Add new record row */}
-                                <div className="grid grid-cols-12 gap-2 items-end">
-                                    <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.name')}</label>
-                                        <input type="text" value={newRecord.name} onChange={e => setNewRecord({ ...newRecord, name: e.target.value })}
-                                            placeholder="@" className="w-full px-2 py-1.5 text-xs" />
-                                    </div>
-                                    <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">{t('dashboard.type')}</label>
-                                        <select value={newRecord.type} onChange={e => setNewRecord({ ...newRecord, type: e.target.value })} className="w-full px-2 py-1.5 text-xs">
-                                            {['A','AAAA','CNAME','MX','TXT','NS','SRV','CAA','PTR'].map(t => <option key={t} value={t}>{t}</option>)}
-                                        </select>
-                                    </div>
-                                    <div className="col-span-3">
-                                        <label className="block text-xs text-text-muted mb-1">
-                                            {t('templates.recordLabel' + newRecord.type, { defaultValue: t('templates.recordLabelContent') })}
-                                        </label>
-                                        <input type="text" value={newRecord.content} onChange={e => setNewRecord({ ...newRecord, content: e.target.value })}
-                                            placeholder={{ A: '93.184.216.34', AAAA: '2001:db8::1', CNAME: 'example.com.', MX: 'mail.example.com.', TXT: 'v=spf1 include:... ~all', NS: 'ns1.example.com.', SRV: 'server.example.com.', CAA: '0 issue "letsencrypt.org"', PTR: 'host.example.com.' }[newRecord.type] || '...'} className="w-full px-2 py-1.5 text-xs" />
-                                    </div>
-                                    <div className="col-span-2">
-                                        <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.ttl')}</label>
-                                        <input type="number" value={newRecord.ttl} onChange={e => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 3600 })}
-                                            className="w-full px-2 py-1.5 text-xs" />
-                                    </div>
-                                    {(newRecord.type === 'MX' || newRecord.type === 'SRV') && (
-                                        <div className="col-span-1">
-                                            <label className="block text-xs text-text-muted mb-1">{t('zoneDetail.fieldPriority')}</label>
-                                            <input type="number" value={newRecord.prio || ''} onChange={e => setNewRecord({ ...newRecord, prio: parseInt(e.target.value) || 0 })}
-                                                placeholder="10" className="w-full px-2 py-1.5 text-xs" />
+                                {/* Add new record row – flex-wrap, genug Platz für Prio (nur MX) */}
+                                <div className="space-y-2">
+                                    <div className="flex flex-wrap items-end gap-3">
+                                        <div className="min-w-[7rem] w-[28%] max-w-[10rem] shrink-0">
+                                            <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.name')}</label>
+                                            <input type="text" value={newRecord.name} onChange={e => setNewRecord({ ...newRecord, name: e.target.value })}
+                                                placeholder="@" className="w-full h-9 px-2.5 text-xs rounded-lg border border-border bg-bg-primary" />
                                         </div>
-                                    )}
-                                    <div className={newRecord.type === 'MX' || newRecord.type === 'SRV' ? 'col-span-2' : 'col-span-3'}>
-                                        <button type="button" onClick={addRecordToTemplate}
-                                            className="w-full px-2 py-1.5 text-xs font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 flex items-center justify-center gap-1">
-                                            <Plus className="w-3 h-3" /> {t('settings.add')}
-                                        </button>
+                                        <div className="min-w-[5.5rem] w-24 shrink-0">
+                                            <label className="block text-xs font-medium text-text-secondary mb-1">{t('dashboard.type')}</label>
+                                            <select value={newRecord.type} onChange={e => setNewRecord({ ...newRecord, type: e.target.value })} className="w-full h-9 px-2 text-xs rounded-lg border border-border bg-bg-primary">
+                                                {ALL_RECORD_TYPE_KEYS.map((tp) => (
+                                                    <option key={tp} value={tp}>{tp}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div className="min-w-[12rem] flex-1 basis-[min(100%,18rem)]">
+                                            <label className="block text-xs font-medium text-text-secondary mb-1">
+                                                {t(`templates.recordLabel${newRecord.type}`, { defaultValue: t('templates.recordLabelRdata') })}
+                                            </label>
+                                            <input type="text" value={newRecord.content} onChange={e => setNewRecord({ ...newRecord, content: e.target.value })}
+                                                placeholder={TEMPLATE_CONTENT_PLACEHOLDERS[newRecord.type] || '…'}
+                                                className="w-full min-w-0 h-9 px-2.5 text-xs rounded-lg border border-border bg-bg-primary" />
+                                        </div>
+                                        <div className="min-w-[5.5rem] w-24 shrink-0">
+                                            <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.ttl')}</label>
+                                            <input type="number" value={newRecord.ttl} onChange={e => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value, 10) || 3600 })}
+                                                className="w-full h-9 px-2.5 text-xs rounded-lg border border-border bg-bg-primary" />
+                                        </div>
+                                        {newRecord.type === 'MX' && (
+                                            <div className="min-w-[6.5rem] w-28 shrink-0">
+                                                <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.fieldPriority')}</label>
+                                                <input type="number" value={newRecord.prio ?? ''} onChange={e => setNewRecord({ ...newRecord, prio: parseInt(e.target.value, 10) || 0 })}
+                                                    placeholder="10" className="w-full h-9 px-2.5 text-xs rounded-lg border border-border bg-bg-primary" />
+                                            </div>
+                                        )}
+                                        <div className="min-w-[8.5rem] shrink-0 pb-px">
+                                            <label className="block text-xs font-medium text-text-secondary mb-1 opacity-0 pointer-events-none select-none" aria-hidden="true">.</label>
+                                            <button type="button" onClick={addRecordToTemplate}
+                                                className="w-full h-9 px-3 text-xs font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 flex items-center justify-center gap-1">
+                                                <Plus className="w-3.5 h-3.5" /> {t('settings.add')}
+                                            </button>
+                                        </div>
                                     </div>
+                                    <DnsRecordTypeHint recordType={newRecord.type} compact />
                                 </div>
                             </div>
 

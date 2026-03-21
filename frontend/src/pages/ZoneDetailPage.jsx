@@ -3,6 +3,26 @@ import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, Shield } from 'lucide-react'
 import api from '../api'
+import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
+import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
+
+/** Ein Feld – freier RDATA-Text (PowerDNS-Format); placeholderKey = Kurzbeispiel */
+function rdataRecord(typeKey, labelKey) {
+    return {
+        labelKey,
+        rdataTypeKey: typeKey,
+        fields: [
+            {
+                id: 'raw',
+                labelKey: 'zoneDetail.fieldRdata',
+                textarea: true,
+                placeholderKey: `zoneDetail.rdataPh${typeKey}`,
+            },
+        ],
+        build: (f) => f.raw.trim(),
+        parse: (c) => ({ raw: c }),
+    }
+}
 
 const RECORD_TYPES = {
     A: { labelKey: 'zoneDetail.recordA', label: 'A – IPv4', fields: [{ id: 'ipv4', labelKey: 'zoneDetail.fieldIpv4', label: 'IPv4-Adresse', placeholder: '93.184.216.34' }], build: f => f.ipv4, parse: c => ({ ipv4: c }) },
@@ -64,6 +84,21 @@ const RECORD_TYPES = {
         ], build: f => `${f.algo} ${f.fptype} ${f.fp}`,
         parse: c => { const s = c.split(' '); return { algo: s[0], fptype: s[1], fp: s[2] } }
     },
+    // Weitere von PowerDNS unterstützte Typen – einheitlich als RDATA (Experten / RFC-Format)
+    ALIAS: rdataRecord('ALIAS', 'zoneDetail.recordALIAS'),
+    DNAME: rdataRecord('DNAME', 'zoneDetail.recordDNAME'),
+    LOC: rdataRecord('LOC', 'zoneDetail.recordLOC'),
+    NAPTR: rdataRecord('NAPTR', 'zoneDetail.recordNAPTR'),
+    DS: rdataRecord('DS', 'zoneDetail.recordDS'),
+    DNSKEY: rdataRecord('DNSKEY', 'zoneDetail.recordDNSKEY'),
+    NSEC: rdataRecord('NSEC', 'zoneDetail.recordNSEC'),
+    NSEC3: rdataRecord('NSEC3', 'zoneDetail.recordNSEC3'),
+    NSEC3PARAM: rdataRecord('NSEC3PARAM', 'zoneDetail.recordNSEC3PARAM'),
+    RRSIG: rdataRecord('RRSIG', 'zoneDetail.recordRRSIG'),
+    SPF: rdataRecord('SPF', 'zoneDetail.recordSPF'),
+    HTTPS: rdataRecord('HTTPS', 'zoneDetail.recordHTTPS'),
+    SVCB: rdataRecord('SVCB', 'zoneDetail.recordSVCB'),
+    OPENPGPKEY: rdataRecord('OPENPGPKEY', 'zoneDetail.recordOPENPGPKEY'),
 }
 
 export default function ZoneDetailPage() {
@@ -108,6 +143,11 @@ export default function ZoneDetailPage() {
         // PowerDNS requires trailing dot for FQDN
         if (!fqdn.endsWith('.')) fqdn = fqdn + '.';
         return fqdn;
+    }
+
+    /** Anzeige: wie der Record-Name in PowerDNS landet (kein „@.zone.zone“) */
+    function previewFqdn(name) {
+        return resolveName((name || '').trim() || '@')
     }
 
     function openEdit(record) {
@@ -201,7 +241,7 @@ export default function ZoneDetailPage() {
         if (!grouped[r.type]) grouped[r.type] = []
         grouped[r.type].push(r)
     })
-    const typeOrder = ['SOA', 'NS', 'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'TLSA', 'SSHFP', 'PTR']
+    const typeOrder = ALL_RECORD_TYPE_KEYS
     const sortedTypes = Object.keys(grouped).sort((a, b) => {
         const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b)
         return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
@@ -286,28 +326,40 @@ export default function ZoneDetailPage() {
             {/* Add Record Modal */}
             {showAdd && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
-                    <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                    <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <h2 className="text-lg font-bold text-text-primary mb-4">{isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}</h2>
                         <form onSubmit={handleAddRecord} className="space-y-4">
-                            {/* Type, Name, TTL */}
-                            <div className="grid grid-cols-3 gap-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.recordType')}</label>
-                                    <select value={addType} disabled={isEdit} onChange={e => { setAddType(e.target.value); setDynFields({}) }} className="w-full px-3 py-2 text-sm disabled:opacity-50">
-                                        {Object.entries(RECORD_TYPES).map(([k, v]) => <option key={k} value={k}>{v.labelKey ? t(v.labelKey) : v.label}</option>)}
+                            {/* Type, Name, TTL – gleiche Zeilenhöhe, kein Überlappen (min-w-0 in Grid) */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
+                                <div className="min-w-0 flex flex-col gap-1">
+                                    <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.recordType')}</label>
+                                    <select value={addType} disabled={isEdit} onChange={e => { setAddType(e.target.value); setDynFields({}) }} className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50">
+                                        {ALL_RECORD_TYPE_KEYS.filter((k) => RECORD_TYPES[k]).map((k) => {
+                                            const v = RECORD_TYPES[k]
+                                            return <option key={k} value={k}>{v.labelKey ? t(v.labelKey) : v.label}</option>
+                                        })}
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.name')}</label>
-                                    <div className="flex items-center gap-1">
-                                        <input value={addName} disabled={isEdit} onChange={e => setAddName(e.target.value)} className="flex-1 px-3 py-2 text-sm disabled:opacity-50" placeholder="@" />
-                                        <span className="text-xs text-text-muted whitespace-nowrap">.{zoneName}</span>
+                                <div className="min-w-0 flex flex-col gap-1.5">
+                                    <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.nameRelative')}</label>
+                                    <input
+                                        value={addName}
+                                        disabled={isEdit}
+                                        onChange={(e) => setAddName(e.target.value)}
+                                        className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50"
+                                        placeholder="@"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                    />
+                                    <div className="rounded-lg border border-accent/25 bg-accent/5 px-2.5 py-2">
+                                        <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted mb-0.5">{t('zoneDetail.namePreviewLabel')}</p>
+                                        <p className="font-mono text-sm text-accent-light break-all" title={previewFqdn(addName)}>{previewFqdn(addName)}</p>
                                     </div>
-                                    <p className="text-xs text-text-muted mt-0.5">{t('zoneDetail.mainDomainHint')}</p>
+                                    <p className="text-xs text-text-muted leading-snug">{t('zoneDetail.mainDomainHint')}</p>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1">{t('zoneDetail.ttl')}</label>
-                                    <select value={addTTL} onChange={e => setAddTTL(e.target.value)} className="w-full px-3 py-2 text-sm">
+                                <div className="min-w-0 flex flex-col gap-1">
+                                    <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.ttl')}</label>
+                                    <select value={addTTL} onChange={e => setAddTTL(e.target.value)} className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary">
                                         <option value="60">1 Min</option>
                                         <option value="300">5 Min</option>
                                         <option value="3600">1 Std</option>
@@ -319,15 +371,27 @@ export default function ZoneDetailPage() {
 
                             {/* Dynamic fields */}
                             <div className="border-t border-border pt-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    {RECORD_TYPES[addType]?.fields.map(f => (
-                                        <div key={f.id} className={f.textarea ? 'col-span-2' : ''}>
+                                <div className={`grid gap-4 ${
+                                    addType === 'SRV'
+                                        ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+                                        : RECORD_TYPES[addType]?.fields?.length === 1 && RECORD_TYPES[addType].fields[0].textarea
+                                            ? 'grid-cols-1'
+                                            : 'grid-cols-1 sm:grid-cols-2'
+                                }`}>
+                                    {RECORD_TYPES[addType]?.fields.map((f) => {
+                                        const fldList = RECORD_TYPES[addType]?.fields || []
+                                        const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
+                                        const textareaSpan = f.textarea
+                                            ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
+                                            : ''
+                                        return (
+                                        <div key={f.id} className={`min-w-0 ${textareaSpan}`}>
                                             <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
                                             {f.select ? (
                                                 <select
                                                     value={dynFields[f.id] || f.select[0]}
                                                     onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
-                                                    className="w-full px-3 py-2 text-sm"
+                                                    className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
                                                 >
                                                     {f.select.map(o => <option key={o} value={o}>{o}</option>)}
                                                 </select>
@@ -335,8 +399,8 @@ export default function ZoneDetailPage() {
                                                 <textarea
                                                     value={dynFields[f.id] || ''}
                                                     onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
-                                                    placeholder={f.placeholder}
-                                                    className="w-full px-3 py-2 text-sm min-h-[80px]"
+                                                    placeholder={f.placeholderKey ? t(f.placeholderKey) : f.placeholder}
+                                                    className="w-full min-h-[100px] rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm font-mono text-[13px] placeholder:font-sans placeholder:text-sm"
                                                 />
                                             ) : (
                                                 <input
@@ -344,12 +408,14 @@ export default function ZoneDetailPage() {
                                                     value={dynFields[f.id] || ''}
                                                     onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
                                                     placeholder={f.placeholder}
-                                                    className="w-full px-3 py-2 text-sm"
+                                                    className="w-full min-w-0 h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
                                                 />
                                             )}
                                         </div>
-                                    ))}
+                                        )
+                                    })}
                                 </div>
+                                <DnsRecordTypeHint recordType={addType} />
                             </div>
 
                             <div className="flex justify-end gap-3 pt-2 border-t border-border">

@@ -15,6 +15,7 @@ import SearchPage from './pages/SearchPage'
 import AuditLogPage from './pages/AuditLogPage'
 import UsersPage from './pages/UsersPage'
 import SettingsPage from './pages/SettingsPage'
+import { UpdateAvailabilityProvider } from './context/UpdateAvailabilityContext'
 
 function ProtectedRoute({ children }) {
   const [authChecked, setAuthChecked] = useState(api.isLoggedIn())
@@ -112,7 +113,9 @@ export default function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <Layout />
+            <UpdateAvailabilityProvider>
+              <Layout />
+            </UpdateAvailabilityProvider>
           </ProtectedRoute>
         }
       >

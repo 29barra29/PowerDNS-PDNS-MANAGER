@@ -3,12 +3,16 @@ import { useTranslation } from 'react-i18next'
 import { Globe, LayoutDashboard, Search, ScrollText, Users, LogOut, Shield, Settings } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import api from '../api'
+import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
+
+const SESSION_PING_MS = 30 * 60 * 1000 // Sitzung alle 30 Min. prüfen (Token/Cookie)
 
 export default function Layout() {
     const { t, i18n } = useTranslation()
     const navigate = useNavigate()
     const [user, setUser] = useState(() => api.getUser())
     const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '', app_logo_url: '' })
+    const { updateAvailable } = useUpdateAvailability()
 
     /* eslint-disable react-hooks/set-state-in-effect -- sync user/appInfo from api on mount */
     useEffect(() => {
@@ -20,6 +24,14 @@ export default function Layout() {
         api.getAppInfo().then(setAppInfo).catch(console.error)
     }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
     /* eslint-enable react-hooks/set-state-in-effect */
+
+    // Periodisch: Session gültig? (401 → api leitet zur Login-Seite)
+    useEffect(() => {
+        const id = setInterval(() => {
+            api.getMe().catch(() => {})
+        }, SESSION_PING_MS)
+        return () => clearInterval(id)
+    }, [])
 
     const handleLogout = () => {
         api.logout()
@@ -38,6 +50,8 @@ export default function Layout() {
         links.push({ to: '/users', icon: Users, labelKey: 'layout.users' })
     }
     links.push({ to: '/settings', icon: Settings, labelKey: 'layout.settings' })
+
+    const showSettingsUpdateDot = isAdmin && updateAvailable
 
     return (
         <div className="flex h-screen overflow-hidden">
@@ -74,8 +88,15 @@ export default function Layout() {
                                 }`
                             }
                         >
-                            <Icon className="w-4 h-4" />
-                            {t(labelKey)}
+                            <Icon className="w-4 h-4 shrink-0" />
+                            <span className="flex-1 min-w-0">{t(labelKey)}</span>
+                            {to === '/settings' && showSettingsUpdateDot ? (
+                                <span
+                                    className="w-2 h-2 rounded-full bg-red-500 shrink-0 shadow-sm"
+                                    title={t('layout.newVersionDot')}
+                                    aria-label={t('layout.newVersionDot')}
+                                />
+                            ) : null}
                         </NavLink>
                     ))}
                 </nav>
