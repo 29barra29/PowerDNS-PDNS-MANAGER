@@ -10,6 +10,11 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Kurze Timeouts nur für Status-/Listen-APIs (Dashboard, Einstellungen), damit die UI bei offline-Servern nicht Minuten wartet.
+# Volle Operationen (Zonen anlegen, …) nutzen weiterhin den Default in _request (30s).
+STATUS_PROBE_TIMEOUT = 8.0
+ZONES_LIST_PROBE_TIMEOUT = 25.0
+
 
 class PowerDNSClient:
     """Client for interacting with a single PowerDNS server's API."""
@@ -81,9 +86,9 @@ class PowerDNSClient:
     # ========================
     # Server Info
     # ========================
-    async def get_server_info(self) -> dict:
+    async def get_server_info(self, timeout: float = 30.0) -> dict:
         """Get PowerDNS server information."""
-        return await self._request("GET", "")
+        return await self._request("GET", "", timeout=timeout)
 
     async def get_statistics(self) -> list:
         """Get PowerDNS server statistics."""
@@ -96,9 +101,9 @@ class PowerDNSClient:
     # ========================
     # Zone Management
     # ========================
-    async def list_zones(self) -> list:
+    async def list_zones(self, timeout: float = 30.0) -> list:
         """List all zones."""
-        return await self._request("GET", "/zones")
+        return await self._request("GET", "/zones", timeout=timeout)
 
     async def get_zone(self, zone_id: str) -> dict:
         """Get a specific zone with all records."""

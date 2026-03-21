@@ -1,4 +1,5 @@
 """API routes for system settings and configuration management (Admin only)."""
+import asyncio
 import logging
 from pathlib import Path
 import httpx
@@ -11,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.auth import get_admin_user
 from app.models.models import User, ServerConfig
-from app.services.pdns_client import pdns_manager, PowerDNSClient
+from app.services.pdns_client import (
+    pdns_manager,
+    PowerDNSClient,
+    STATUS_PROBE_TIMEOUT,
+    ZONES_LIST_PROBE_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +223,40 @@ class TestConnectionRequest(BaseModel):
 # ========================
 # Server Configuration CRUD
 # ========================
+async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
+    """DB-Zeile + optional Live-Status mit kurzen Timeouts (kein Minuten-Laden bei offline PDNS)."""
+    is_online = False
+    version = None
+    zone_count = None
+    if cfg.is_active and cfg.name in pdns_manager.get_all_clients():
+        try:
+            client = pdns_manager.get_client(cfg.name)
+            info = await client.get_server_info(timeout=STATUS_PROBE_TIMEOUT)
+            zones = await client.list_zones(timeout=ZONES_LIST_PROBE_TIMEOUT)
+            is_online = True
+            version = info.get("version", "")
+            zone_count = len(zones) if zones else 0
+        except Exception:
+            pass
+
+    return {
+        "id": cfg.id,
+        "name": cfg.name,
+        "display_name": cfg.display_name,
+        "url": cfg.url,
+        "api_key": cfg.api_key[:8] + "..." if cfg.api_key else "",  # Maskiert
+        "api_key_full": cfg.api_key,  # Für Bearbeitung
+        "description": cfg.description,
+        "is_active": cfg.is_active,
+        "allow_writes": getattr(cfg, "allow_writes", True),
+        "is_online": is_online,
+        "version": version,
+        "zone_count": zone_count,
+        "created_at": cfg.created_at.isoformat() if cfg.created_at else None,
+        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+    }
+
+
 @router.get("/servers")
 async def list_server_configs(
     admin: User = Depends(get_admin_user),
@@ -225,42 +265,9 @@ async def list_server_configs(
     """List all server configurations from database."""
     result = await db.execute(select(ServerConfig).order_by(ServerConfig.sort_order, ServerConfig.name))
     configs = result.scalars().all()
-    
-    servers = []
-    for cfg in configs:
-        # Check live status
-        is_online = False
-        version = None
-        zone_count = None
-        if cfg.is_active and cfg.name in pdns_manager.get_all_clients():
-            try:
-                client = pdns_manager.get_client(cfg.name)
-                info = await client.get_server_info()
-                is_online = True
-                version = info.get("version", "")
-                zones = await client.list_zones()
-                zone_count = len(zones) if zones else 0
-            except Exception:
-                pass
-        
-        servers.append({
-            "id": cfg.id,
-            "name": cfg.name,
-            "display_name": cfg.display_name,
-            "url": cfg.url,
-            "api_key": cfg.api_key[:8] + "..." if cfg.api_key else "",  # Maskiert
-            "api_key_full": cfg.api_key,  # Für Bearbeitung
-            "description": cfg.description,
-            "is_active": cfg.is_active,
-            "allow_writes": getattr(cfg, "allow_writes", True),
-            "is_online": is_online,
-            "version": version,
-            "zone_count": zone_count,
-            "created_at": cfg.created_at.isoformat() if cfg.created_at else None,
-            "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
-        })
-    
-    return {"servers": servers}
+
+    servers = await asyncio.gather(*[_enrich_server_config_row(cfg) for cfg in configs])
+    return {"servers": list(servers)}
 
 
 @router.post("/servers", status_code=201)
