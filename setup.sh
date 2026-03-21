@@ -5,6 +5,9 @@
 
 set -e
 
+# Zuverlässiger Pfad zum Repo-Root (auch bei bash setup.sh / Aufruf aus anderem cwd)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "================================================"
 echo "   🌐 DNS Manager - Setup Assistent"
 echo "================================================"
@@ -168,7 +171,7 @@ cat > .env << EOF
 
 # App Settings (Version aus VERSION-Datei im Projektroot)
 APP_NAME=${APP_NAME}
-APP_VERSION=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | head -1 || echo "2.2.1")
+APP_VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null | head -1 | tr -d '\r' || echo "2.2.1")
 LOG_LEVEL=info
 DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-de}
 INSTALL_PATH=${INSTALL_PATH:-$(pwd)}

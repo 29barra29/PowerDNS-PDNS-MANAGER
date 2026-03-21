@@ -12,7 +12,7 @@ Ersetzt PowerDNS-Admin mit einer schlankeren, schnelleren und stabileren Lösung
 
 ## ✨ Features
 
-Fokus: **Was du mit PowerDNS und dem Panel machst** – nicht jedes UI-Detail.
+Fokus: **Was du mit PowerDNS und dem Panel machst** 
 
 - **Mehrere PowerDNS-Server (4.x)** – Beliebig viele Server im Panel anlegen; Zonen und Records zentral pflegen. **Verbindungstest** pro Ziel; Server-Einträge direkt in den **Einstellungen** bearbeiten.
 - **DNS-Records & Zonen** – Gängige Typen per Formular (A, AAAA, CNAME, MX, TXT, SRV, …); dazu ALIAS, DNAME, SVCB/HTTPS, **DNSSEC**-Records (DS, DNSKEY, RRSIG, …) und weitere PowerDNS-Typen als **RDATA-Text**. **DNSSEC** pro Zone ein-/ausschalten. **Suche** über alle Server (auch Teilnamen).
@@ -22,7 +22,6 @@ Fokus: **Was du mit PowerDNS und dem Panel machst** – nicht jedes UI-Detail.
 - **Benutzer** – Rollen **Admin** und **Benutzer**; mehrere Logins.
 - **Audit-Log** – Änderungen nachvollziehbar protokolliert.
 
-*UI (Dark Mode, Setup-Wizard, Sprachen, Branding, Update-Hinweis, zentrale `VERSION` usw.) – siehe Changelog und Einstellungen im laufenden Betrieb.*
 
 ---
 

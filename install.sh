@@ -237,6 +237,17 @@ git clone https://github.com/29barra29/dns-manager.git . 2>/dev/null || {
 }
 print_success "$M_DOWNLOAD_DONE"
 
+# Neuestes v*-Tag verwenden (entspricht GitHub-Release), falls vorhanden – vermeidet „alte“ main ohne aktuelle VERSION
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git fetch --tags --force 2>/dev/null || true
+    LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname 2>/dev/null | head -1)
+    if [ -n "$LATEST_TAG" ] && git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
+        if git checkout "$LATEST_TAG" 2>/dev/null; then
+            print_info "Release $LATEST_TAG"
+        fi
+    fi
+fi
+
 if [ -f "setup.sh" ]; then
     print_info "$M_START_SETUP"
     chmod +x setup.sh

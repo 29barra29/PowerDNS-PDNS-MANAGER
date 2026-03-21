@@ -185,7 +185,7 @@ export default function DashboardPage() {
                             </div>
                             <div className="grid grid-cols-2 gap-3 text-sm">
                                 <div>
-                                    <p className="text-text-muted text-xs">{t('dashboard.version')}</p>
+                                    <p className="text-text-muted text-xs">{t('dashboard.daemonVersion')}</p>
                                     <p className="text-text-primary">{s.version || '-'}</p>
                                 </div>
                                 <div>

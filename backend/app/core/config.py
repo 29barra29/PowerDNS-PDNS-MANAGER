@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 from typing import Optional
 import os
@@ -21,10 +22,15 @@ def _read_version_file() -> str:
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # App – Version aus VERSION-Datei (einmal eintragen, überall aktuell)
+    # App – Version **nur** aus VERSION-Datei (nie aus .env überschreiben; dort stand z. B. noch 2.0.0)
     APP_NAME: str = "DNS Manager"
-    APP_VERSION: str = _read_version_file()
+    APP_VERSION: str = Field(default_factory=_read_version_file)
     LOG_LEVEL: str = "info"
+
+    @model_validator(mode="after")
+    def _app_version_always_from_file(self) -> "Settings":
+        object.__setattr__(self, "APP_VERSION", _read_version_file())
+        return self
 
     # Database
     DATABASE_URL: str = "mysql+aiomysql://dns_admin:changeme-password@mariadb:3306/dns_manager"

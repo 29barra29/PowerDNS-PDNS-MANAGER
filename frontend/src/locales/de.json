@@ -212,6 +212,7 @@
     "offline": "Offline",
     "zones": "Zonen",
     "version": "Version",
+    "daemonVersion": "Daemon-Version (PowerDNS)",
     "type": "Typ",
     "url": "URL"
   },
