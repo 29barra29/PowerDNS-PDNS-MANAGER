@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, Key, Loader2, Shield, User, Globe, X, Check } from 'lucide-react'
+import { Plus, Trash2, Key, Loader2, Shield, User, Globe, X, Check, AlertCircle } from 'lucide-react'
 import api from '../api'
 
 export default function UsersPage() {
@@ -17,6 +17,17 @@ export default function UsersPage() {
     const [error, setError] = useState('')
     const [success, setSuccess] = useState('')
     const [saving, setSaving] = useState(false)
+    // Eigene Modal-Fehler-States, damit man die Ursache nicht hinter dem Overlay verliert
+    const [createError, setCreateError] = useState('')
+    const [passwordError, setPasswordError] = useState('')
+    const [zonesError, setZonesError] = useState('')
+
+    // Erfolgsmeldung nach 4 Sekunden ausblenden, damit sie die Sicht nicht versperrt
+    useEffect(() => {
+        if (!success) return
+        const timer = setTimeout(() => setSuccess(''), 4000)
+        return () => clearTimeout(timer)
+    }, [success])
 
     useEffect(() => { loadData() }, [])
 
@@ -52,14 +63,15 @@ export default function UsersPage() {
     async function handleCreate(e) {
         e.preventDefault()
         setSaving(true)
-        setError('')
+        setCreateError('')
         try {
             await api.createUser(form)
             setShowCreate(false)
             setForm({ username: '', password: '', display_name: '', role: 'user' })
+            setSuccess(t('users.userCreated', { name: form.username }))
             loadData()
         } catch (err) {
-            setError(err.message)
+            setCreateError(err.message)
         } finally {
             setSaving(false)
         }
@@ -69,6 +81,7 @@ export default function UsersPage() {
         if (!confirm(t('users.deleteConfirm', { name }))) return
         try {
             await api.deleteUser(id)
+            setSuccess(t('users.userDeleted', { name }))
             loadData()
         } catch (err) {
             setError(err.message)
@@ -78,15 +91,15 @@ export default function UsersPage() {
     async function handleSetPassword(e) {
         e.preventDefault()
         setSaving(true)
-        setError('')
-        setSuccess('')
+        setPasswordError('')
         try {
             await api.updateUser(editPasswordUser.id, { password: newPassword })
-            setSuccess(t('users.passwordChangedSuccess', { name: editPasswordUser.username }))
+            const name = editPasswordUser.username
             setEditPasswordUser(null)
             setNewPassword('')
+            setSuccess(t('users.passwordChangedSuccess', { name }))
         } catch (err) {
-            setError(err.message)
+            setPasswordError(err.message)
         } finally {
             setSaving(false)
         }
@@ -102,9 +115,38 @@ export default function UsersPage() {
         }
     }
 
+    function openCreateModal() {
+        setForm({ username: '', password: '', display_name: '', role: 'user' })
+        setCreateError('')
+        setShowCreate(true)
+    }
+
+    function closeCreateModal() {
+        setShowCreate(false)
+        setCreateError('')
+    }
+
+    function openPasswordModal(user) {
+        setEditPasswordUser(user)
+        setNewPassword('')
+        setPasswordError('')
+    }
+
+    function closePasswordModal() {
+        setEditPasswordUser(null)
+        setNewPassword('')
+        setPasswordError('')
+    }
+
     function openZoneEditor(user) {
         setEditZonesUser(user)
         setSelectedZones(user.zones || [])
+        setZonesError('')
+    }
+
+    function closeZoneEditor() {
+        setEditZonesUser(null)
+        setZonesError('')
     }
 
     function toggleZone(zoneName) {
@@ -118,12 +160,15 @@ export default function UsersPage() {
     async function saveZones() {
         if (!editZonesUser) return
         setSaving(true)
+        setZonesError('')
         try {
             await api.updateUserZones(editZonesUser.id, selectedZones)
+            const name = editZonesUser.username
             setEditZonesUser(null)
+            setSuccess(t('users.zonesAssigned', { name }))
             loadData()
         } catch (err) {
-            setError(err.message)
+            setZonesError(err.message)
         } finally {
             setSaving(false)
         }
@@ -139,7 +184,7 @@ export default function UsersPage() {
                     <p className="text-text-muted text-sm mt-1">{t('users.usersCount', { count: users.length })}</p>
                 </div>
                 <button
-                    onClick={() => setShowCreate(true)}
+                    onClick={openCreateModal}
                     className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
                 >
                     <Plus className="w-4 h-4" /> {t('users.newUser')}
@@ -229,7 +274,7 @@ export default function UsersPage() {
                                     <Shield className="w-4 h-4" />
                                 </button>
                                 <button
-                                    onClick={() => { setEditPasswordUser(u); setNewPassword(''); setError(''); setSuccess(''); }}
+                                    onClick={() => openPasswordModal(u)}
                                     className="p-2 rounded-lg text-text-muted hover:text-warning hover:bg-warning/10 transition-colors"
                                     title={t('users.changePassword')}
                                 >
@@ -250,14 +295,27 @@ export default function UsersPage() {
 
             {/* ===== Create User Modal ===== */}
             {showCreate && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!saving) closeCreateModal() }}
+                >
                     <div className="glass-card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
                         <h2 className="text-lg font-bold text-text-primary mb-4">{t('users.createUser')}</h2>
+
+                        {createError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <p className="text-sm flex-1 break-words">{createError}</p>
+                                <button type="button" onClick={() => setCreateError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
+
                         <form onSubmit={handleCreate} className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.username')}</label>
                                 <input type="text" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
-                                    placeholder="benutzername" className="w-full px-3 py-2 text-sm" required minLength={3} />
+                                    placeholder="benutzername" className="w-full px-3 py-2 text-sm" required minLength={3} pattern="[A-Za-z0-9._-]+" title={t('users.usernamePattern')} />
+                                <p className="text-xs text-text-muted mt-1">{t('users.usernameHint')}</p>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.displayName')}</label>
@@ -267,7 +325,8 @@ export default function UsersPage() {
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.password')}</label>
                                 <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
-                                    placeholder="••••••" className="w-full px-3 py-2 text-sm" required minLength={4} />
+                                    placeholder="••••••••" className="w-full px-3 py-2 text-sm" required minLength={8} maxLength={128} />
+                                <p className="text-xs text-text-muted mt-1">{t('users.passwordPolicy')}</p>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.role')}</label>
@@ -277,7 +336,7 @@ export default function UsersPage() {
                                 </select>
                             </div>
                             <div className="flex justify-end gap-3 pt-2">
-                                <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
+                                <button type="button" onClick={closeCreateModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
                                 <button type="submit" disabled={saving} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
                                     {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('settings.create')}
                                 </button>
@@ -289,17 +348,28 @@ export default function UsersPage() {
 
             {/* ===== Zone Assignment Modal ===== */}
             {editZonesUser && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditZonesUser(null)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!saving) closeZoneEditor() }}
+                >
                     <div className="glass-card p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-4">
                             <div>
                                 <h2 className="text-lg font-bold text-text-primary">{t('users.assignZones')}</h2>
                                 <p className="text-sm text-text-muted">{t('users.forUser')} <span className="text-text-primary font-medium">{editZonesUser.display_name || editZonesUser.username}</span></p>
                             </div>
-                            <button onClick={() => setEditZonesUser(null)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
+                            <button onClick={closeZoneEditor} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
+
+                        {zonesError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <p className="text-sm flex-1 break-words">{zonesError}</p>
+                                <button type="button" onClick={() => setZonesError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
 
                         <p className="text-xs text-text-muted mb-3">
                             {t('users.zonesSelectHint')}
@@ -336,7 +406,7 @@ export default function UsersPage() {
                         <div className="flex justify-between items-center mt-4 pt-4 border-t border-border">
                             <p className="text-xs text-text-muted">{t('users.zonesSelected', { count: selectedZones.length })}</p>
                             <div className="flex gap-3">
-                                <button onClick={() => setEditZonesUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
+                                <button onClick={closeZoneEditor} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
                                 <button
                                     onClick={saveZones}
                                     disabled={saving}
@@ -352,10 +422,21 @@ export default function UsersPage() {
 
             {/* ===== Change Password Modal ===== */}
             {editPasswordUser && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditPasswordUser(null)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!saving) closePasswordModal() }}
+                >
                     <div className="glass-card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
                         <h2 className="text-lg font-bold text-text-primary mb-4">{t('users.changePassword')}</h2>
                         <p className="text-sm text-text-muted mb-4">{t('users.newPasswordFor', { name: editPasswordUser.display_name || editPasswordUser.username })}</p>
+
+                        {passwordError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <p className="text-sm flex-1 break-words">{passwordError}</p>
+                                <button type="button" onClick={() => setPasswordError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
 
                         <form onSubmit={handleSetPassword} className="space-y-4">
                             <div>
@@ -364,15 +445,17 @@ export default function UsersPage() {
                                     type="password"
                                     value={newPassword}
                                     onChange={e => setNewPassword(e.target.value)}
-                                    placeholder="••••••"
+                                    placeholder="••••••••"
                                     className="w-full px-3 py-2 text-sm"
                                     required
-                                    minLength={4}
+                                    minLength={8}
+                                    maxLength={128}
                                 />
+                                <p className="text-xs text-text-muted mt-1">{t('users.passwordPolicy')}</p>
                             </div>
                             <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-border">
-                                <button type="button" onClick={() => setEditPasswordUser(null)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
-                                <button type="submit" disabled={saving || !newPassword} className="px-4 py-2 bg-gradient-to-r from-warning/80 to-orange-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                <button type="button" onClick={closePasswordModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
+                                <button type="submit" disabled={saving || !newPassword || newPassword.length < 8} className="px-4 py-2 bg-gradient-to-r from-warning/80 to-orange-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
                                     {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                                 </button>
                             </div>

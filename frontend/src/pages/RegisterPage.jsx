@@ -38,7 +38,7 @@ export default function RegisterPage() {
             setError(t('register.passwordsDoNotMatch'))
             return
         }
-        if (password.length < 4) {
+        if (password.length < 8) {
             setError(t('register.passwordMinLength'))
             return
         }
@@ -132,7 +132,8 @@ export default function RegisterPage() {
                                 className="w-full px-4 py-2.5 pr-10 text-sm"
                                 placeholder="••••••••"
                                 required
-                                minLength={4}
+                                minLength={8}
+                                maxLength={128}
                             />
                             <button
                                 type="button"
@@ -152,7 +153,8 @@ export default function RegisterPage() {
                             className="w-full px-4 py-2.5 text-sm"
                             placeholder="••••••••"
                             required
-                            minLength={4}
+                            minLength={8}
+                            maxLength={128}
                         />
                     </div>
 

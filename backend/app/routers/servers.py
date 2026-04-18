@@ -1,6 +1,8 @@
-"""API routes for server management."""
+"""API routes for server management (read-only status). Auth required."""
 import asyncio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.core.auth import get_current_user
+from app.models.models import User
 from app.services.pdns_client import (
     pdns_manager,
     PowerDNSAPIError,
@@ -34,8 +36,8 @@ async def _probe_server_status(name: str, client) -> ServerInfo:
 
 
 @router.get("", response_model=ServerListResponse)
-async def list_servers():
-    """List all configured PowerDNS servers and their status."""
+async def list_servers(_: User = Depends(get_current_user)):
+    """List all configured PowerDNS servers and their status (Auth)."""
     pairs = list(pdns_manager.get_all_clients().items())
     if not pairs:
         return ServerListResponse(servers=[])
@@ -44,37 +46,43 @@ async def list_servers():
 
 
 @router.get("/{server_name}")
-async def get_server_info(server_name: str):
-    """Get detailed information about a specific server."""
+async def get_server_info(
+    server_name: str,
+    _: User = Depends(get_current_user),
+):
+    """Get detailed information about a specific server (Auth)."""
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         info = await client.get_server_info()
         stats = await client.get_statistics()
         zones = await client.list_zones()
-        
+
         return {
             "name": server_name,
             "url": client.url,
             "info": info,
             "zone_count": len(zones),
-            "statistics": stats[:20],  # Top 20 stats
+            "statistics": stats[:20],
         }
     except PowerDNSAPIError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 @router.get("/{server_name}/statistics")
-async def get_server_statistics(server_name: str):
-    """Get full server statistics."""
+async def get_server_statistics(
+    server_name: str,
+    _: User = Depends(get_current_user),
+):
+    """Get full server statistics (Auth)."""
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         return await client.get_statistics()
     except PowerDNSAPIError as e:

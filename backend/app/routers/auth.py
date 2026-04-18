@@ -15,6 +15,7 @@ from app.core.auth import (
     hash_password, verify_password, create_access_token,
     create_password_reset_token, decode_password_reset_token,
     get_current_user, get_admin_user,
+    generate_random_password, MIN_PASSWORD_LENGTH,
 )
 from app.models.models import User, UserZoneAccess
 
@@ -26,26 +27,24 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # ========================
 # Schemas
 # ========================
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: dict
+# Anmerkung: Bewusst KEIN LoginResponse-Schema mit access_token mehr exportiert –
+# der Token lebt ausschließlich im HttpOnly-Cookie, das Frontend greift nie auf das JWT zu.
 
 
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=4, max_length=100)
+    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
     email: Optional[str] = None
-    display_name: Optional[str] = None
+    display_name: Optional[str] = Field(None, max_length=255)
     role: str = Field(default="user", pattern="^(admin|user)$")
 
 
 class UserUpdate(BaseModel):
     email: Optional[str] = None
-    display_name: Optional[str] = None
-    role: Optional[str] = None
+    display_name: Optional[str] = Field(None, max_length=255)
+    role: Optional[str] = Field(None, pattern="^(admin|user)$")
     is_active: Optional[bool] = None
-    password: Optional[str] = Field(None, min_length=4)
+    password: Optional[str] = Field(None, min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
 
 class ProfileUpdate(BaseModel):
@@ -80,7 +79,7 @@ class ProfileUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(..., min_length=4)
+    new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
 
 class ZoneAccessUpdate(BaseModel):
@@ -89,10 +88,10 @@ class ZoneAccessUpdate(BaseModel):
 
 class RegisterPublic(BaseModel):
     """Public registration (only when registration_enabled)."""
-    username: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=4, max_length=100)
+    username: str = Field(..., min_length=3, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
     email: Optional[str] = None
-    display_name: Optional[str] = None
+    display_name: Optional[str] = Field(None, max_length=255)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -101,8 +100,8 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    token: str = Field(..., description="Token aus der E-Mail")
-    new_password: str = Field(..., min_length=4)
+    token: str = Field(..., description="Token aus der E-Mail", max_length=4096)
+    new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
 
 async def _get_auth_setting(db: AsyncSession, key: str) -> bool:
@@ -175,11 +174,10 @@ async def login(
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
     user_dict = await _user_to_dict(user, db)
 
-    response = JSONResponse(content={
-        "access_token": token,
-        "token_type": "bearer",
-        "user": user_dict,
-    })
+    # Token wird NUR per HttpOnly-Cookie gesetzt – nicht mehr im JSON-Body,
+    # damit er nicht in Browser-DevTools/Logs sichtbar wird oder versehentlich
+    # vom Frontend in localStorage etc. gespeichert werden kann.
+    response = JSONResponse(content={"user": user_dict})
     response.set_cookie(
         key=app_settings.AUTH_COOKIE_NAME,
         value=token,
@@ -489,16 +487,27 @@ async def reset_user_password(
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reset a user's password. Admin only."""
+    """Reset a user's password to a fresh random value. Admin only.
+
+    Das neue Passwort wird genau einmal an den Admin zurückgegeben (für die Weitergabe an den
+    Nutzer). Es wird nicht mehr auf den Benutzernamen gesetzt – das war bei öffentlich bekannten
+    Benutzernamen ein Übernahmerisiko.
+    """
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
 
-    new_password = user.username
+    new_password = generate_random_password(16)
     user.hashed_password = hash_password(new_password)
     await db.flush()
-    return {"message": f"Passwort fuer '{user.username}' zurueckgesetzt (neues Passwort: {new_password})"}
+    logger.info(f"Admin '{admin.username}' reset password for user '{user.username}' (id={user.id})")
+    return {
+        "message": f"Passwort für '{user.username}' wurde zurückgesetzt.",
+        "username": user.username,
+        "new_password": new_password,  # nur dieses eine Mal
+        "hint": "Bitte unverzüglich an den Nutzer weitergeben – das Passwort wird nicht erneut angezeigt.",
+    }
 
 
 # ========================

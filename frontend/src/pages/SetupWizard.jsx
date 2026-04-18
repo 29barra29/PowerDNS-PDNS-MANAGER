@@ -54,9 +54,11 @@ export default function SetupWizard() {
   });
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- function declared below, called once on mount
     checkSetupStatus();
     api.getAppInfo().then(setAppInfo).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   const checkSetupStatus = async () => {
     try {
@@ -110,12 +112,26 @@ export default function SetupWizard() {
 
       const data = await res.json();
 
-      // Token wird per HttpOnly-Cookie gesetzt; User nur im Speicher
+      // Token wird per HttpOnly-Cookie gesetzt; User nur im Speicher.
+      // Es gibt absichtlich keinen access_token mehr im Body (Sicherheit gegen XSS).
       api.setUser(data.user);
 
-      // Configure email if enabled
+      // SMTP wird (falls konfiguriert) erst NACH dem Setup über Einstellungen → SMTP gesetzt.
+      // Hier nur eine Notiz im UI – wir reichen die Eingaben nicht weiter, weil der Setup-Endpoint sie nicht persistiert hätte.
       if (emailConfig.enabled) {
-        await configureEmail(data.access_token);
+        try {
+          await api.updateSmtpSettings({
+            smtp_host: emailConfig.smtp_host,
+            smtp_port: emailConfig.smtp_port,
+            smtp_user: emailConfig.smtp_user,
+            smtp_password: emailConfig.smtp_password,
+            smtp_from: emailConfig.smtp_from || emailConfig.smtp_user,
+            smtp_use_tls: true,
+          });
+        } catch (smtpErr) {
+          // SMTP-Setup-Fehler ist nicht kritisch – Admin kann das später manuell korrigieren.
+          console.warn('SMTP konnte nicht gespeichert werden:', smtpErr);
+        }
       }
 
       // Success - redirect to dashboard
@@ -128,27 +144,6 @@ export default function SetupWizard() {
       setError(err.message);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const configureEmail = async (token) => {
-    try {
-      await fetch('/api/v1/setup/configure-email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          smtp_host: emailConfig.smtp_host,
-          smtp_port: emailConfig.smtp_port,
-          smtp_user: emailConfig.smtp_user,
-          smtp_password: emailConfig.smtp_password,
-          smtp_from: emailConfig.smtp_from || emailConfig.smtp_user,
-        }),
-      });
-    } catch (err) {
-      console.error('Email configuration failed:', err);
     }
   };
 

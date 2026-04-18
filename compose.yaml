@@ -7,14 +7,19 @@ services:
     container_name: dns-manager-db
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-changeme-root}
+      # KEINE Default-Passwoerter! Wenn .env fehlt, soll MariaDB lieber
+      # mit "MARIADB_ROOT_PASSWORD is empty" stoppen als sich mit einem
+      # bekannten Default initialisieren.
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD ist leer – bitte .env aus .env.example anlegen oder ./setup.sh ausfuehren}
       MARIADB_DATABASE: ${DB_NAME:-dns_manager}
       MARIADB_USER: ${DB_USER:-dns_admin}
-      MARIADB_PASSWORD: ${DB_PASSWORD:-changeme-password}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD ist leer – bitte .env aus .env.example anlegen oder ./setup.sh ausfuehren}
     volumes:
       - mariadb_data:/var/lib/mysql
-    ports:
-      - "3307:3306"
+    # Bewusst KEIN ports:-Mapping nach außen.
+    # Die Datenbank wird ausschließlich über das interne Docker-Netz "dns-manager-net" vom Backend erreicht.
+    # Wenn du temporär von außen darauf zugreifen willst, lokal "ports: - 127.0.0.1:3307:3306" hinzufügen
+    # – aber niemals 0.0.0.0:3307:3306 (das macht die DB öffentlich erreichbar).
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -35,8 +40,8 @@ services:
     ports:
       - "5380:8000"
     environment:
-      # Datenbank-Verbindung
-      DATABASE_URL: mysql+aiomysql://${DB_USER:-dns_admin}:${DB_PASSWORD:-changeme-password}@mariadb:3306/${DB_NAME:-dns_manager}
+      # Datenbank-Verbindung – DB_PASSWORD muss in .env gesetzt sein.
+      DATABASE_URL: mysql+aiomysql://${DB_USER:-dns_admin}:${DB_PASSWORD:?DB_PASSWORD ist leer – bitte .env aus .env.example anlegen oder ./setup.sh ausfuehren}@mariadb:3306/${DB_NAME:-dns_manager}
 
       # PowerDNS Server (optional - kann auch über Admin-Panel eingerichtet werden)
       # Format: name|url|api_key,name|url|api_key
@@ -53,6 +58,15 @@ services:
       ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+
+      # Auth-Cookies (HTTPS / SameSite / Lebensdauer)
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+      AUTH_COOKIE_MAX_AGE: ${AUTH_COOKIE_MAX_AGE:-2592000}
+
+      # CORS + API-Doku
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      DOCS_ENABLED: ${DOCS_ENABLED:-false}
     volumes:
       # Logo und andere Uploads bleiben bei Updates erhalten
       - backend_uploads:/app/app/static_new/uploads

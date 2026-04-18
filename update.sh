@@ -11,8 +11,11 @@ if [ ! -d .git ]; then
     exit 1
 fi
 
+# Aktuelle Version (vor dem Pull) merken
+VERSION_BEFORE=$(cat VERSION 2>/dev/null | head -1 | tr -d '\r\n' || echo "?")
+
 # Immer neueste Referenzen von GitHub
-git fetch origin --tags --force
+git fetch origin --tags --force --prune --prune-tags
 
 # Nach install.sh: oft Release-Tag (detached HEAD) → „git pull origin main“ ändert den Checkout nicht.
 # Auf Branch main: nur pull. Sonst: wie install.sh → neuestes v*-Tag, sonst main.
@@ -37,6 +40,23 @@ else
         fi
         git pull origin main
     fi
+fi
+
+VERSION_AFTER=$(cat VERSION 2>/dev/null | head -1 | tr -d '\r\n' || echo "?")
+
+if [ "$VERSION_BEFORE" = "$VERSION_AFTER" ]; then
+    echo "ℹ️  Version unverändert: $VERSION_BEFORE"
+else
+    echo "⬆️  Version: $VERSION_BEFORE → $VERSION_AFTER"
+fi
+
+# Hinweis ausgeben, wenn JWT_SECRET_KEY in .env fehlt – sonst werden bei jedem Update alle User ausgeloggt.
+if [ -f .env ] && ! grep -qE '^JWT_SECRET_KEY=.+' .env; then
+    echo ""
+    echo "⚠️  Hinweis: JWT_SECRET_KEY ist in .env nicht gesetzt."
+    echo "    Folge: nach jedem Container-Restart sind alle Logins ungültig."
+    echo "    Fix:   echo \"JWT_SECRET_KEY=\$(openssl rand -hex 64)\" >> .env"
+    echo ""
 fi
 
 # Docker (optional mit sudo wie bei install.sh)

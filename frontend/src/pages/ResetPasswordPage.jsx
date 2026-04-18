@@ -24,8 +24,10 @@ export default function ResetPasswordPage() {
 
     useEffect(() => {
         api.getAppInfo().then(setAppInfo).catch(console.error)
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time error initialisation
         if (!token) setError(t('reset.invalidLink'))
-    }, [token]) // eslint-disable-line react-hooks/exhaustive-deps -- t from i18n stable
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- t from i18n stable
+    }, [token])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -34,7 +36,7 @@ export default function ResetPasswordPage() {
             setError(t('register.passwordsDoNotMatch'))
             return
         }
-        if (password.length < 4) {
+        if (password.length < 8) {
             setError(t('register.passwordMinLength'))
             return
         }
@@ -112,7 +114,8 @@ export default function ResetPasswordPage() {
                                         className="w-full px-4 py-2.5 pr-10 text-sm"
                                         placeholder="••••••••"
                                         required
-                                        minLength={4}
+                                        minLength={8}
+                                        maxLength={128}
                                     />
                                     <button
                                         type="button"
@@ -132,7 +135,8 @@ export default function ResetPasswordPage() {
                                     className="w-full px-4 py-2.5 text-sm"
                                     placeholder="••••••••"
                                     required
-                                    minLength={4}
+                                    minLength={8}
+                                    maxLength={128}
                                 />
                             </div>
 

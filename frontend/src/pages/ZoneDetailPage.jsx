@@ -1,10 +1,213 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, Shield } from 'lucide-react'
+import {
+    ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle,
+    Copy, X, Sparkles
+} from 'lucide-react'
 import api from '../api'
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
+
+/* ============================================================================
+ *  Validierung pro Eingabefeld – wird LIVE im Modal angezeigt.
+ *  Rückgabe: ''  → ok
+ *            'msg' → Hinweis (kein Blocker)  – wird gelb angezeigt
+ *            { error: 'msg' } → harter Fehler – wird rot angezeigt + blockt Save
+ * ========================================================================== */
+
+const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
+// Pragmatisches IPv6 – akzeptiert vollständige + komprimierte Schreibweise.
+const IPV6_RE = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|::)$/
+const FQDN_RE = /^(?=.{1,253}\.?$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$/i
+const HEX_RE = /^[0-9a-fA-F]+$/
+
+function validateIPv4(v) {
+    const s = (v || '').trim()
+    if (!s) return { error: 'Bitte IPv4-Adresse eingeben.' }
+    if (!IPV4_RE.test(s)) return { error: 'Keine gültige IPv4 (z. B. 93.184.216.34).' }
+    return ''
+}
+
+function validateIPv6(v) {
+    const s = (v || '').trim()
+    if (!s) return { error: 'Bitte IPv6-Adresse eingeben.' }
+    if (!IPV6_RE.test(s)) return { error: 'Keine gültige IPv6 (z. B. 2001:db8::1).' }
+    return ''
+}
+
+function validateFqdn(v, { allowTrailingDot = true } = {}) {
+    let s = (v || '').trim().replace(/\.$/, '')
+    if (!s) return { error: 'Bitte einen Hostnamen angeben.' }
+    if (!FQDN_RE.test(s + (allowTrailingDot ? '.' : ''))) {
+        return { error: 'Kein gültiger Hostname (z. B. mail.example.com).' }
+    }
+    return ''
+}
+
+function validateInt(v, { min, max } = {}) {
+    const s = String(v ?? '').trim()
+    if (!s) return { error: 'Bitte eine Zahl eingeben.' }
+    if (!/^\d+$/.test(s)) return { error: 'Nur ganze Zahlen erlaubt.' }
+    const n = parseInt(s, 10)
+    if (typeof min === 'number' && n < min) return { error: `Minimum: ${min}` }
+    if (typeof max === 'number' && n > max) return { error: `Maximum: ${max}` }
+    return ''
+}
+
+function validateHex(v) {
+    const s = (v || '').replace(/\s+/g, '')
+    if (!s) return { error: 'Bitte einen Hex-Wert eingeben.' }
+    if (!HEX_RE.test(s)) return { error: 'Nur 0-9 und a-f erlaubt.' }
+    if (s.length % 2 !== 0) return 'Länge sollte gerade sein.'
+    return ''
+}
+
+function validateTxt(v) {
+    const s = (v || '').trim()
+    if (!s) return { error: 'Bitte einen Text angeben.' }
+    if (s.length > 255) return `Lang (${s.length} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.`
+    return ''
+}
+
+function validateCaaTag(v) {
+    const ok = ['issue', 'issuewild', 'iodef', 'contactemail', 'contactphone']
+    if (!v) return { error: 'Tag fehlt.' }
+    if (!ok.includes(v)) return `Ungewöhnlicher Tag „${v}“ (üblich: ${ok.slice(0, 3).join(', ')}).`
+    return ''
+}
+
+const FIELD_VALIDATORS = {
+    A: { ipv4: validateIPv4 },
+    AAAA: { ipv6: validateIPv6 },
+    CNAME: { target: (v) => validateFqdn(v) },
+    NS: { ns: (v) => validateFqdn(v) },
+    PTR: { host: (v) => validateFqdn(v) },
+    MX: {
+        priority: (v) => validateInt(v, { min: 0, max: 65535 }),
+        mailserver: (v) => validateFqdn(v),
+    },
+    SRV: {
+        pri: (v) => validateInt(v, { min: 0, max: 65535 }),
+        weight: (v) => validateInt(v, { min: 0, max: 65535 }),
+        port: (v) => validateInt(v, { min: 1, max: 65535 }),
+        target: (v) => validateFqdn(v),
+    },
+    TXT: { text: validateTxt },
+    CAA: {
+        flag: (v) => validateInt(v, { min: 0, max: 255 }),
+        tag: validateCaaTag,
+    },
+    TLSA: {
+        usage: (v) => validateInt(v, { min: 0, max: 3 }),
+        sel: (v) => validateInt(v, { min: 0, max: 1 }),
+        match: (v) => validateInt(v, { min: 0, max: 2 }),
+        hash: validateHex,
+    },
+    SSHFP: {
+        algo: (v) => validateInt(v, { min: 1, max: 6 }),
+        fptype: (v) => validateInt(v, { min: 1, max: 2 }),
+        fp: validateHex,
+    },
+    SOA: {
+        mname: (v) => validateFqdn(v),
+        rname: (v) => validateFqdn(v),
+        serial: (v) => validateInt(v, { min: 0 }),
+        refresh: (v) => validateInt(v, { min: 0 }),
+        retry: (v) => validateInt(v, { min: 0 }),
+        expire: (v) => validateInt(v, { min: 0 }),
+        minimum: (v) => validateInt(v, { min: 0 }),
+    },
+}
+
+/* ============================================================================
+ *  Apex-Schutz: Welche Typen sind direkt am Zone-Apex (@) verboten / unüblich?
+ * ========================================================================== */
+const APEX_FORBIDDEN = {
+    CNAME: 'CNAME ist am Apex (Zonen-Wurzel) laut RFC nicht erlaubt. Nutze stattdessen ALIAS oder einen direkten A/AAAA-Record.',
+    DS: 'DS ist am Apex einer eigenen Zone nicht erlaubt – DS-Records gehören in die ELTERN-Zone (also bei deinem Domain-Registrar). Hier kannst du DNSKEY-Einträge anlegen.',
+    DNAME: 'DNAME am Apex ist meist falsch – nutze CNAME für Subdomains oder ALIAS am Apex.',
+}
+
+function getApexWarning(name, type) {
+    if (name !== '@') return null
+    const msg = APEX_FORBIDDEN[type]
+    if (msg) return { kind: 'error', text: msg }
+    if (type === 'PTR') return { kind: 'warn', text: 'PTR am Apex passt meist nur in Reverse-Zonen (in-addr.arpa).' }
+    return null
+}
+
+/* ============================================================================
+ *  Schnellvorlagen für oft genutzte Records
+ * ========================================================================== */
+function buildQuickTemplates(zoneName) {
+    return [
+        {
+            id: 'spf',
+            label: 'SPF (Mail-Spoof-Schutz)',
+            type: 'TXT',
+            name: '@',
+            ttl: '3600',
+            // Inhalt geht in den Text-Field; wird beim Save in "..." gewrappt
+            fields: { text: 'v=spf1 mx -all' },
+            note: 'Trag bei mx oder include die zum Mailversand berechtigten Hosts ein.',
+        },
+        {
+            id: 'dmarc',
+            label: 'DMARC (Reporting / Policy)',
+            type: 'TXT',
+            name: '_dmarc',
+            ttl: '3600',
+            fields: { text: `v=DMARC1; p=quarantine; rua=mailto:postmaster@${zoneName}` },
+            note: 'Mit p=none startest du im Monitor-Modus.',
+        },
+        {
+            id: 'dkim',
+            label: 'DKIM (Selector default._domainkey)',
+            type: 'TXT',
+            name: 'default._domainkey',
+            ttl: '3600',
+            fields: { text: 'v=DKIM1; k=rsa; p=DEIN_BASE64_PUBLIC_KEY' },
+            note: 'Den öffentlichen Schlüssel stellt dein Mailserver bereit.',
+        },
+        {
+            id: 'mta-sts',
+            label: 'MTA-STS (Mail-Transport-Sicherheit)',
+            type: 'TXT',
+            name: '_mta-sts',
+            ttl: '3600',
+            fields: { text: 'v=STSv1; id=20240101000000Z' },
+            note: 'Erfordert zusätzlich /.well-known/mta-sts.txt unter mta-sts.<deine-domain>.',
+        },
+        {
+            id: 'tls-rpt',
+            label: 'TLS-RPT (TLS-Reports per Mail)',
+            type: 'TXT',
+            name: '_smtp._tls',
+            ttl: '3600',
+            fields: { text: `v=TLSRPTv1; rua=mailto:postmaster@${zoneName}` },
+            note: '',
+        },
+        {
+            id: 'caa',
+            label: 'CAA (nur Let’s Encrypt darf Zertifikate ausstellen)',
+            type: 'CAA',
+            name: '@',
+            ttl: '3600',
+            fields: { flag: '0', tag: 'issue', val: 'letsencrypt.org' },
+            note: '',
+        },
+        {
+            id: 'tlsa-mail',
+            label: 'TLSA für SMTP (Port 25)',
+            type: 'TLSA',
+            name: '_25._tcp.mail',
+            ttl: '3600',
+            fields: { usage: '3', sel: '1', match: '1', hash: 'DEIN_SHA256_FINGERPRINT' },
+            note: 'usage=3, sel=1, match=1 = DANE-EE / SPKI / SHA-256',
+        },
+    ]
+}
 
 /** Ein Feld – freier RDATA-Text (PowerDNS-Format); placeholderKey = Kurzbeispiel */
 function rdataRecord(typeKey, labelKey) {
@@ -84,7 +287,6 @@ const RECORD_TYPES = {
         ], build: f => `${f.algo} ${f.fptype} ${f.fp}`,
         parse: c => { const s = c.split(' '); return { algo: s[0], fptype: s[1], fp: s[2] } }
     },
-    // Weitere von PowerDNS unterstützte Typen – einheitlich als RDATA (Experten / RFC-Format)
     ALIAS: rdataRecord('ALIAS', 'zoneDetail.recordALIAS'),
     DNAME: rdataRecord('DNAME', 'zoneDetail.recordDNAME'),
     LOC: rdataRecord('LOC', 'zoneDetail.recordLOC'),
@@ -101,6 +303,9 @@ const RECORD_TYPES = {
     OPENPGPKEY: rdataRecord('OPENPGPKEY', 'zoneDetail.recordOPENPGPKEY'),
 }
 
+/** Welche Typen erlauben mehrere Werte in EINEM Modal (Round-Robin / mehrere RRset-Einträge)? */
+const MULTI_VALUE_OK = new Set(['A', 'AAAA', 'NS', 'TXT', 'MX', 'CAA', 'SRV'])
+
 export default function ZoneDetailPage() {
     const { t } = useTranslation()
     const { server, zoneId } = useParams()
@@ -109,18 +314,93 @@ export default function ZoneDetailPage() {
     const [records, setRecords] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
+    const [modalError, setModalError] = useState('')
+    const [success, setSuccess] = useState('')
     const [showAdd, setShowAdd] = useState(false)
     const [isEdit, setIsEdit] = useState(false)
     const [oldContent, setOldContent] = useState('')
     const [addType, setAddType] = useState('A')
     const [addName, setAddName] = useState('@')
     const [addTTL, setAddTTL] = useState('3600')
-    const [dynFields, setDynFields] = useState({})
+    /** Liste von Wert-Sets (für Round-Robin). Beim Edit immer genau ein Set. */
+    const [dynFieldsList, setDynFieldsList] = useState([{}])
     const [saving, setSaving] = useState(false)
+    /** Ist beim Submit aktiv – verhindert nochmaliges Senden bei Strg+Enter */
+    const formRef = useRef(null)
+
+    useEffect(() => {
+        if (!success) return
+        const timer = setTimeout(() => setSuccess(''), 4000)
+        return () => clearTimeout(timer)
+    }, [success])
+
+    function closeModal() {
+        setShowAdd(false)
+        setModalError('')
+        setIsEdit(false)
+        setOldContent('')
+        setDynFieldsList([{}])
+    }
+
+    function openAddModal() {
+        setIsEdit(false)
+        setAddType('A')
+        setAddName('@')
+        setAddTTL('3600')
+        setDynFieldsList([{}])
+        setModalError('')
+        setShowAdd(true)
+    }
+
+    /** Bestehenden Record klonen → öffnet Add-Modal mit denselben Werten, aber ohne oldContent. */
+    function openClone(record) {
+        setIsEdit(false)
+        setOldContent('')
+        setAddType(record.type)
+        setAddTTL(record.ttl.toString())
+        setModalError('')
+
+        let name = record.name.replace(/\.$/, '')
+        if (name === zoneName) name = '@'
+        else if (name.endsWith(`.${zoneName}`)) name = name.substring(0, name.length - zoneName.length - 1)
+        setAddName(name)
+
+        const def = RECORD_TYPES[record.type] || { parse: () => ({}) }
+        try { setDynFieldsList([def.parse ? def.parse(record.content) : {}]) } catch { setDynFieldsList([{}]) }
+        setShowAdd(true)
+    }
+
+    /** Schnellvorlage einfügen */
+    function applyQuickTemplate(tpl) {
+        setIsEdit(false)
+        setOldContent('')
+        setAddType(tpl.type)
+        setAddName(tpl.name)
+        setAddTTL(tpl.ttl)
+        setDynFieldsList([{ ...tpl.fields }])
+        setModalError('')
+        setShowAdd(true)
+    }
 
     const zoneName = zoneId.replace(/\.$/, '')
+    const quickTemplates = useMemo(() => buildQuickTemplates(zoneName), [zoneName])
 
     useEffect(() => { loadZone() }, [server, zoneId]) // eslint-disable-line react-hooks/exhaustive-deps -- loadZone stable
+
+    /** ESC schließt Modal, Strg/Cmd+Enter speichert */
+    useEffect(() => {
+        if (!showAdd) return
+        function onKey(e) {
+            if (e.key === 'Escape') {
+                if (!saving) closeModal()
+            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault()
+                if (formRef.current && !saving) formRef.current.requestSubmit()
+            }
+        }
+        document.addEventListener('keydown', onKey)
+        return () => document.removeEventListener('keydown', onKey)
+    }, [showAdd, saving])  
 
     async function loadZone() {
         setLoading(true)
@@ -136,62 +416,117 @@ export default function ZoneDetailPage() {
     }
 
     function resolveName(name) {
-        let fqdn;
-        if (name === '@') fqdn = zoneName;
-        else if (!name.includes(zoneName)) fqdn = `${name}.${zoneName}`;
-        else fqdn = name;
-        // PowerDNS requires trailing dot for FQDN
-        if (!fqdn.endsWith('.')) fqdn = fqdn + '.';
-        return fqdn;
+        let fqdn
+        if (name === '@') fqdn = zoneName
+        else if (!name.includes(zoneName)) fqdn = `${name}.${zoneName}`
+        else fqdn = name
+        if (!fqdn.endsWith('.')) fqdn = fqdn + '.'
+        return fqdn
     }
 
-    /** Anzeige: wie der Record-Name in PowerDNS landet (kein „@.zone.zone“) */
     function previewFqdn(name) {
         return resolveName((name || '').trim() || '@')
     }
 
     function openEdit(record) {
-        setIsEdit(true);
-        setAddType(record.type);
-        setOldContent(record.content);
-        setAddTTL(record.ttl.toString());
-        
-        let name = record.name.replace(/\.$/, '');
-        if (name === zoneName) name = '@';
-        else if (name.endsWith(`.${zoneName}`)) name = name.substring(0, name.length - zoneName.length - 1);
-        setAddName(name);
-        
-        const def = RECORD_TYPES[record.type] || { parse: () => ({}) };
+        setIsEdit(true)
+        setAddType(record.type)
+        setOldContent(record.content)
+        setAddTTL(record.ttl.toString())
+        setModalError('')
+
+        let name = record.name.replace(/\.$/, '')
+        if (name === zoneName) name = '@'
+        else if (name.endsWith(`.${zoneName}`)) name = name.substring(0, name.length - zoneName.length - 1)
+        setAddName(name)
+
+        const def = RECORD_TYPES[record.type] || { parse: () => ({}) }
         try {
-            setDynFields(def.parse ? def.parse(record.content) : {});
+            setDynFieldsList([def.parse ? def.parse(record.content) : {}])
         } catch (e) {
-            console.warn('Could not parse record content:', e);
-            setDynFields({});
+            console.warn('Could not parse record content:', e)
+            setDynFieldsList([{}])
         }
-        setShowAdd(true);
+        setShowAdd(true)
     }
 
+    /* ----- Live-Validierung -------------------------------------------------*/
+    const apexWarning = getApexWarning(addName.trim() || '@', addType)
+
+    /** Validatoren für das aktuell ausgewählte Type – pro Field. */
+    const validators = FIELD_VALIDATORS[addType] || {}
+
+    function fieldHint(fieldId, value) {
+        const v = validators[fieldId]
+        if (!v) return ''
+        return v(value)
+    }
+
+    /** Existiert ein Record mit (name,type,content) bereits? */
+    function findDuplicate(name, type, content) {
+        const fqdn = resolveName(name)
+        return records.find(r => r.name === fqdn && r.type === type && r.content === content)
+    }
+
+    /* ----- Submit -----------------------------------------------------------*/
     async function handleAddRecord(e) {
         e.preventDefault()
+        if (saving) return
         setSaving(true)
-        setError('')
+        setModalError('')
+
         const def = RECORD_TYPES[addType]
-        if (!def) {
-            setSaving(false);
-            return;
+        if (!def) { setSaving(false); return }
+
+        if (apexWarning?.kind === 'error') {
+            setModalError(apexWarning.text)
+            setSaving(false)
+            return
         }
 
-        // Validate fields
-        for (const f of def.fields) {
-            if (dynFields[f.id] === undefined || dynFields[f.id].toString().trim() === '') {
-                setError(t('zoneDetail.fillField', { label: f.labelKey ? t(f.labelKey) : f.label }))
+        // Hartfehler in Feldern blocken den Submit
+        for (let i = 0; i < dynFieldsList.length; i++) {
+            const set = dynFieldsList[i] || {}
+            for (const f of def.fields) {
+                const val = set[f.id]
+                if (val === undefined || String(val).trim() === '') {
+                    setModalError(t('zoneDetail.fillField', { label: f.labelKey ? t(f.labelKey) : f.label }))
+                    setSaving(false)
+                    return
+                }
+                const hint = fieldHint(f.id, val)
+                if (hint && typeof hint === 'object' && hint.error) {
+                    const lbl = f.labelKey ? t(f.labelKey) : f.label
+                    setModalError(`${lbl}${dynFieldsList.length > 1 ? ` (Wert ${i + 1})` : ''}: ${hint.error}`)
+                    setSaving(false)
+                    return
+                }
+            }
+        }
+
+        // Werte bauen
+        const contents = []
+        for (const set of dynFieldsList) {
+            try { contents.push(def.build(set)) } catch (err) {
+                setModalError(`Wert konnte nicht gebaut werden: ${err.message || err}`)
                 setSaving(false)
                 return
             }
         }
 
-        const content = def.build(dynFields)
         const fqdn = resolveName(addName)
+
+        // Duplikat-Check (nur Add, nicht beim Edit eines bestehenden Eintrags)
+        if (!isEdit) {
+            for (const c of contents) {
+                const dup = findDuplicate(addName, addType, c)
+                if (dup) {
+                    setModalError(`Es existiert bereits ein ${addType}-Eintrag „${dup.name.replace(/\.$/, '')}“ mit dem Wert „${c}“.`)
+                    setSaving(false)
+                    return
+                }
+            }
+        }
 
         try {
             if (isEdit) {
@@ -200,24 +535,25 @@ export default function ZoneDetailPage() {
                     type: addType,
                     ttl: parseInt(addTTL),
                     old_content: oldContent,
-                    new_content: content,
-                    disabled: false
-                });
+                    new_content: contents[0],
+                    disabled: false,
+                })
             } else {
                 await api.createRecord(server, zoneId, {
                     name: fqdn,
                     type: addType,
                     ttl: parseInt(addTTL),
-                    records: [{ content, disabled: false }],
-                });
+                    records: contents.map(c => ({ content: c, disabled: false })),
+                })
             }
-            setShowAdd(false)
-            setDynFields({})
-            setAddName('@')
-            setIsEdit(false)
+            closeModal()
+            const displayName = fqdn.replace(/\.$/, '')
+            setSuccess(isEdit
+                ? t('zoneDetail.recordUpdated', { type: addType, name: displayName })
+                : t('zoneDetail.recordCreated', { type: addType, name: displayName }))
             loadZone()
         } catch (err) {
-            setError(err.message)
+            setModalError(err.message)
         } finally {
             setSaving(false)
         }
@@ -227,6 +563,7 @@ export default function ZoneDetailPage() {
         if (!confirm(t('zoneDetail.deleteRecordConfirm', { name, type }))) return
         try {
             await api.deleteRecord(server, zoneId, { name, type })
+            setSuccess(t('zoneDetail.recordDeleted', { type, name: name.replace(/\.$/, '') }))
             loadZone()
         } catch (err) {
             setError(err.message)
@@ -235,7 +572,6 @@ export default function ZoneDetailPage() {
 
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
 
-    // Group records by type
     const grouped = {}
     records.forEach(r => {
         if (!grouped[r.type]) grouped[r.type] = []
@@ -246,6 +582,9 @@ export default function ZoneDetailPage() {
         const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b)
         return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
     })
+
+    const canMulti = !isEdit && MULTI_VALUE_OK.has(addType)
+    const def = RECORD_TYPES[addType]
 
     return (
         <div className="space-y-6">
@@ -261,7 +600,7 @@ export default function ZoneDetailPage() {
                     </div>
                 </div>
                 <button
-                    onClick={() => { setShowAdd(true); setIsEdit(false); setAddType('A'); setAddName('@'); setAddTTL('3600'); setDynFields({}) }}
+                    onClick={openAddModal}
                     className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
                 >
                     <Plus className="w-4 h-4" /> {t('zoneDetail.addRecord')}
@@ -273,6 +612,14 @@ export default function ZoneDetailPage() {
                     <AlertCircle className="w-5 h-5 shrink-0" />
                     <p className="text-sm">{error}</p>
                     <button onClick={() => setError('')} className="ml-auto text-xs hover:underline">×</button>
+                </div>
+            )}
+
+            {success && (
+                <div className="p-4 rounded-xl bg-success/10 border border-success/30 text-success flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 shrink-0" />
+                    <p className="text-sm flex-1">{success}</p>
+                    <button onClick={() => setSuccess('')} className="text-xs hover:underline" aria-label={t('common.close')}>×</button>
                 </div>
             )}
 
@@ -289,7 +636,7 @@ export default function ZoneDetailPage() {
                                 <th className="text-left p-3 text-text-muted font-medium text-xs">{t('zoneDetail.name')}</th>
                                 <th className="text-left p-3 text-text-muted font-medium text-xs">{t('zoneDetail.value')}</th>
                                 <th className="text-left p-3 text-text-muted font-medium text-xs w-20">{t('zoneDetail.ttl')}</th>
-                                <th className="text-right p-3 text-text-muted font-medium text-xs w-20">{t('zones.actions')}</th>
+                                <th className="text-right p-3 text-text-muted font-medium text-xs w-28">{t('zones.actions')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -298,7 +645,7 @@ export default function ZoneDetailPage() {
                                     <td className="p-3 font-mono text-xs text-text-primary">{r.name.replace(/\.$/, '')}</td>
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{r.content}</td>
                                     <td className="p-3 text-text-muted text-xs">{r.ttl}</td>
-                                    <td className="p-3 text-right">
+                                    <td className="p-3 text-right whitespace-nowrap">
                                         <button
                                             onClick={() => openEdit(r)}
                                             className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1"
@@ -306,6 +653,15 @@ export default function ZoneDetailPage() {
                                         >
                                             <Pencil className="w-3.5 h-3.5" />
                                         </button>
+                                        {type !== 'SOA' && (
+                                            <button
+                                                onClick={() => openClone(r)}
+                                                className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1"
+                                                title={t('zoneDetail.clone')}
+                                            >
+                                                <Copy className="w-3.5 h-3.5" />
+                                            </button>
+                                        )}
                                         {type !== 'SOA' && type !== 'NS' && (
                                             <button
                                                 onClick={() => handleDelete(r.name, r.type)}
@@ -323,17 +679,87 @@ export default function ZoneDetailPage() {
                 </div>
             ))}
 
-            {/* Add Record Modal */}
+            {/* Add / Edit Record Modal */}
             {showAdd && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                    onClick={() => { if (!saving) closeModal() }}
+                >
                     <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-lg font-bold text-text-primary mb-4">{isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}</h2>
-                        <form onSubmit={handleAddRecord} className="space-y-4">
-                            {/* Type, Name, TTL – gleiche Zeilenhöhe, kein Überlappen (min-w-0 in Grid) */}
+                        <div className="flex items-start justify-between mb-4">
+                            <h2 className="text-lg font-bold text-text-primary">
+                                {isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={() => { if (!saving) closeModal() }}
+                                className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+                                title={t('common.close')}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Schnellvorlagen-Leiste (nur beim Anlegen) */}
+                        {!isEdit && (
+                            <div className="mb-4 rounded-xl border border-accent/20 bg-accent/5 p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Sparkles className="w-4 h-4 text-accent" />
+                                    <span className="text-xs font-medium text-text-secondary">{t('zoneDetail.quickTemplates')}</span>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {quickTemplates.map(tpl => (
+                                        <button
+                                            key={tpl.id}
+                                            type="button"
+                                            onClick={() => applyQuickTemplate(tpl)}
+                                            className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-primary hover:bg-bg-hover transition-colors"
+                                            title={tpl.note || tpl.label}
+                                        >
+                                            {tpl.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Modal-weiter Fehler (Submit / Backend) */}
+                        {modalError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium">
+                                        {isEdit ? t('zoneDetail.updateErrorTitle') : t('zoneDetail.createErrorTitle')}
+                                    </p>
+                                    <p className="text-sm mt-1 break-words">{modalError}</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setModalError('')}
+                                    className="text-xs hover:underline shrink-0"
+                                    aria-label={t('common.close')}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Apex-Warnung (live, nicht erst beim Submit) */}
+                        {apexWarning && (
+                            <div className={`mb-4 p-3 rounded-xl border flex items-start gap-2 ${apexWarning.kind === 'error' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+                                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                <div className="text-xs">
+                                    <p className="font-medium mb-0.5">{t('zoneDetail.apexWarningTitle')}</p>
+                                    <p>{apexWarning.text}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        <form ref={formRef} onSubmit={handleAddRecord} className="space-y-4">
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
                                 <div className="min-w-0 flex flex-col gap-1">
                                     <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.recordType')}</label>
-                                    <select value={addType} disabled={isEdit} onChange={e => { setAddType(e.target.value); setDynFields({}) }} className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50">
+                                    <select value={addType} disabled={isEdit} onChange={e => { setAddType(e.target.value); setDynFieldsList([{}]) }} className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50">
                                         {ALL_RECORD_TYPE_KEYS.filter((k) => RECORD_TYPES[k]).map((k) => {
                                             const v = RECORD_TYPES[k]
                                             return <option key={k} value={k}>{v.labelKey ? t(v.labelKey) : v.label}</option>
@@ -369,60 +795,103 @@ export default function ZoneDetailPage() {
                                 </div>
                             </div>
 
-                            {/* Dynamic fields */}
-                            <div className="border-t border-border pt-4">
-                                <div className={`grid gap-4 ${
-                                    addType === 'SRV'
-                                        ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
-                                        : RECORD_TYPES[addType]?.fields?.length === 1 && RECORD_TYPES[addType].fields[0].textarea
-                                            ? 'grid-cols-1'
-                                            : 'grid-cols-1 sm:grid-cols-2'
-                                }`}>
-                                    {RECORD_TYPES[addType]?.fields.map((f) => {
-                                        const fldList = RECORD_TYPES[addType]?.fields || []
-                                        const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
-                                        const textareaSpan = f.textarea
-                                            ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
-                                            : ''
-                                        return (
-                                        <div key={f.id} className={`min-w-0 ${textareaSpan}`}>
-                                            <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
-                                            {f.select ? (
-                                                <select
-                                                    value={dynFields[f.id] || f.select[0]}
-                                                    onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
-                                                    className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
-                                                >
-                                                    {f.select.map(o => <option key={o} value={o}>{o}</option>)}
-                                                </select>
-                                            ) : f.textarea ? (
-                                                <textarea
-                                                    value={dynFields[f.id] || ''}
-                                                    onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
-                                                    placeholder={f.placeholderKey ? t(f.placeholderKey) : f.placeholder}
-                                                    className="w-full min-h-[100px] rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm font-mono text-[13px] placeholder:font-sans placeholder:text-sm"
-                                                />
-                                            ) : (
-                                                <input
-                                                    type={f.type || 'text'}
-                                                    value={dynFields[f.id] || ''}
-                                                    onChange={e => setDynFields({ ...dynFields, [f.id]: e.target.value })}
-                                                    placeholder={f.placeholder}
-                                                    className="w-full min-w-0 h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
-                                                />
+                            {/* Dynamische Werte – ggf. mehrere für Round-Robin */}
+                            <div className="border-t border-border pt-4 space-y-4">
+                                {dynFieldsList.map((set, idx) => {
+                                    const fldList = def?.fields || []
+                                    return (
+                                        <div key={idx} className={dynFieldsList.length > 1 ? 'rounded-lg border border-border/60 p-3 bg-bg-primary/50' : ''}>
+                                            {dynFieldsList.length > 1 && (
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <span className="text-xs font-medium text-text-muted">{t('zoneDetail.valueIndex', { n: idx + 1 })}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDynFieldsList(list => list.filter((_, i) => i !== idx))}
+                                                        className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                                                        title={t('zoneDetail.removeValue')}
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
                                             )}
+                                            <div className={`grid gap-4 ${
+                                                addType === 'SRV'
+                                                    ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+                                                    : fldList.length === 1 && fldList[0].textarea
+                                                        ? 'grid-cols-1'
+                                                        : 'grid-cols-1 sm:grid-cols-2'
+                                            }`}>
+                                                {fldList.map((f) => {
+                                                    const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
+                                                    const textareaSpan = f.textarea
+                                                        ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
+                                                        : ''
+                                                    const value = set[f.id] || ''
+                                                    const hint = fieldHint(f.id, value)
+                                                    const hintText = typeof hint === 'object' && hint?.error ? hint.error : (typeof hint === 'string' ? hint : '')
+                                                    const isError = typeof hint === 'object' && !!hint?.error
+                                                    return (
+                                                        <div key={f.id} className={`min-w-0 ${textareaSpan}`}>
+                                                            <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
+                                                            {f.select ? (
+                                                                <select
+                                                                    value={value || f.select[0]}
+                                                                    onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                    className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
+                                                                >
+                                                                    {f.select.map(o => <option key={o} value={o}>{o}</option>)}
+                                                                </select>
+                                                            ) : f.textarea ? (
+                                                                <textarea
+                                                                    value={value}
+                                                                    onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                    placeholder={f.placeholderKey ? t(f.placeholderKey) : f.placeholder}
+                                                                    className={`w-full min-h-[100px] rounded-lg border bg-bg-primary px-3 py-2 text-sm font-mono text-[13px] placeholder:font-sans placeholder:text-sm ${isError ? 'border-danger/60' : 'border-border'}`}
+                                                                />
+                                                            ) : (
+                                                                <input
+                                                                    type={f.type || 'text'}
+                                                                    value={value}
+                                                                    onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                    placeholder={f.placeholder}
+                                                                    className={`w-full min-w-0 h-10 px-3 text-sm rounded-lg border bg-bg-primary ${isError ? 'border-danger/60' : 'border-border'}`}
+                                                                    autoComplete="off"
+                                                                    spellCheck={false}
+                                                                />
+                                                            )}
+                                                            {hintText && (
+                                                                <p className={`mt-1 text-xs ${isError ? 'text-danger' : 'text-amber-300'}`}>{hintText}</p>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
                                         </div>
-                                        )
-                                    })}
-                                </div>
+                                    )
+                                })}
+
+                                {/* "+ Weiteren Wert" für Multi-Value-Typen */}
+                                {canMulti && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setDynFieldsList(list => [...list, {}])}
+                                        className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-dashed border-border hover:border-accent/60 hover:text-accent-light text-text-muted transition-colors"
+                                    >
+                                        <Plus className="w-3.5 h-3.5" /> {t('zoneDetail.addValue')}
+                                    </button>
+                                )}
+
                                 <DnsRecordTypeHint recordType={addType} />
                             </div>
 
-                            <div className="flex justify-end gap-3 pt-2 border-t border-border">
-                                <button type="button" onClick={() => setShowAdd(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">{t('common.cancel')}</button>
-                                <button type="submit" disabled={saving} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
-                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
-                                </button>
+                            <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">
+                                <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
+                                <div className="flex justify-end gap-3">
+                                    <button type="button" onClick={closeModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
+                                    <button type="submit" disabled={saving || apexWarning?.kind === 'error'} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                        {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
+                                    </button>
+                                </div>
                             </div>
                         </form>
                     </div>

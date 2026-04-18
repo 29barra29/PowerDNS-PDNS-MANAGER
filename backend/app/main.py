@@ -84,41 +84,56 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down DNS Manager")
 
 
-# Create FastAPI app
+# Create FastAPI app – /docs, /redoc und /openapi.json sind standardmäßig AUS,
+# damit die API-Struktur nicht ungewollt im Internet einsehbar ist. Aktivieren via DOCS_ENABLED=true.
+_docs_url = "/docs" if settings.DOCS_ENABLED else None
+_redoc_url = "/redoc" if settings.DOCS_ENABLED else None
+_openapi_url = "/openapi.json" if settings.DOCS_ENABLED else None
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="""
-# DNS Manager API
-
-A custom backend for managing PowerDNS servers. 
-
-## Features
-- **Zone Management**: Create, update, delete, import/export zones
-- **Record Management**: Full CRUD for all DNS record types
-- **DNSSEC**: Enable/disable DNSSEC, manage cryptographic keys, get DS records
-- **Multi-Server**: Manage multiple PowerDNS servers from one API
-- **Audit Log**: Track all changes for accountability
-- **Search**: Search across zones and records on all servers
-
-## Quick Start
-1. Configure your PowerDNS servers via the `PDNS_SERVERS` environment variable
-2. Use the `/api/v1/servers` endpoint to verify connectivity
-3. Start managing your DNS zones!
-    """,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    description="DNS Manager backend for PowerDNS.",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
     lifespan=lifespan,
 )
 
-# CORS - allow all origins for now (restrict later for production)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS – nur konfigurierte Origins erlaubt; "*" mit Cookies wäre unsicher (Browser blockt es ohnehin).
+# Wenn keine Origin gesetzt ist, deaktivieren wir CORS komplett – die SPA wird vom gleichen Origin geliefert.
+_cors_origins = settings.get_allowed_origins()
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
+    )
+
+
+# Security-Header für *alle* Antworten. Hilft gegen Clickjacking, MIME-Sniffing,
+# unkontrolliertes Browser-Feature-Loading und versehentliche Referer-Lecks.
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "interest-cohort=(), camera=(), microphone=(), geolocation=()",
+    )
+    # Cross-Origin-Hardening (für die SPA + API gleichermaßen sicher).
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    # Wenn das Backend hinter HTTPS läuft, sorgt HSTS dafür, dass Browser das nicht vergessen.
+    if settings.AUTH_COOKIE_SECURE:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 # ========================
@@ -180,7 +195,7 @@ async def api_info():
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "docs": "/docs",
+        "docs": "/docs" if settings.DOCS_ENABLED else None,
         "api_prefix": API_PREFIX,
         "servers_configured": len(pdns_manager.list_servers()),
     }

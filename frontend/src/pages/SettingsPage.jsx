@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, Github, Code, Sliders, Copy, Star, Send } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, GitCommit, Code, Sliders, Copy, Check, Star, Send } from 'lucide-react'
 import api from '../api'
 import { ALL_RECORD_TYPE_KEYS, TEMPLATE_CONTENT_PLACEHOLDERS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
@@ -44,6 +44,11 @@ export default function SettingsPage() {
 
     // Über-Tab: Version kommt aus API (eine zentrale Quelle: VERSION-Datei)
     const [appInfo, setAppInfo] = useState(null)
+    // Admin-only Daten (install_path, app_base_url) – nicht öffentlich
+    const [adminInfo, setAdminInfo] = useState(null)
+    // API-Key on-demand: { [serverId]: 'plaintext-key' }
+    const [revealedKeys, setRevealedKeys] = useState({})
+    const [revealingKey, setRevealingKey] = useState(false)
 
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
@@ -56,6 +61,11 @@ export default function SettingsPage() {
     const [testing, setTesting] = useState(false)
     const [testResult, setTestResult] = useState(null)
     const [uploadingLogo, setUploadingLogo] = useState(false)
+    // Modal-spezifische Fehler – damit man sie nicht hinter dem Overlay verliert
+    const [serverModalError, setServerModalError] = useState('')
+    const [templateModalError, setTemplateModalError] = useState('')
+    // "Befehl kopiert"-Toast für den Update-Tab
+    const [updateCmdCopied, setUpdateCmdCopied] = useState(false)
 
     // Templates
     const [templates, setTemplates] = useState([])
@@ -80,6 +90,13 @@ export default function SettingsPage() {
         if (profile?.role === 'admin') {
             loadServers()
             loadTemplates()
+            // install_path / app_base_url nur für Admins laden – steht nicht mehr im öffentlichen /app-info
+            api.getAdminInfo()
+                .then((info) => {
+                    setAdminInfo(info)
+                    setProfileForm((prev) => ({ ...prev, app_base_url: info.app_base_url || prev.app_base_url || '' }))
+                })
+                .catch(() => setAdminInfo(null))
         }
     }, [profile?.role])
 
@@ -88,8 +105,10 @@ export default function SettingsPage() {
     }, [activeTab])
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- guard rail to keep non-admins on allowed tab
         if (profile && profile.role !== 'admin' && !['profile', 'about'].includes(activeTab)) setActiveTab('profile')
-    }, [profile?.role, activeTab]) // eslint-disable-line react-hooks/exhaustive-deps -- profile intentionally partial to avoid loops
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- profile intentionally partial to avoid loops
+    }, [profile?.role, activeTab])
 
     useEffect(() => {
         if (profile?.role !== 'admin') return
@@ -100,6 +119,20 @@ export default function SettingsPage() {
             loadSmtp()
         }
     }, [activeTab, profile?.role]) // eslint-disable-line react-hooks/exhaustive-deps -- loadCommits/loadSmtp stable, commits.length intentional
+
+    // Erfolgsmeldung verschwindet nach 4 s automatisch (verdeckt nichts dauerhaft)
+    useEffect(() => {
+        if (!success) return
+        const timer = setTimeout(() => setSuccess(''), 4000)
+        return () => clearTimeout(timer)
+    }, [success])
+
+    // "Befehl kopiert"-Toast nach 2 s zurücksetzen
+    useEffect(() => {
+        if (!updateCmdCopied) return
+        const t = setTimeout(() => setUpdateCmdCopied(false), 2000)
+        return () => clearTimeout(t)
+    }, [updateCmdCopied])
 
     // Roter Punkt entfernen, sobald der Reiter „Updates“ geöffnet wurde
     useEffect(() => {
@@ -135,7 +168,8 @@ export default function SettingsPage() {
                 display_name: data.display_name || '',
                 email: data.email || '',
                 app_name: app.app_name || 'DNS Manager',
-                app_base_url: app.app_base_url || '',
+                // app_base_url wird gleich für Admins aus getAdminInfo nachgereicht (siehe useEffect oben)
+                app_base_url: '',
                 registration_enabled: !!app.registration_enabled,
                 forgot_password_enabled: !!app.forgot_password_enabled,
                 app_tagline: app.app_tagline || 'PowerDNS Admin Panel',
@@ -221,7 +255,7 @@ export default function SettingsPage() {
             setError('Die neuen Passwörter stimmen nicht überein!')
             return
         }
-        if (passwordForm.new_password.length < 4) {
+        if (passwordForm.new_password.length < 8) {
             setError(t('settings.passwordMinLength'))
             return
         }
@@ -273,6 +307,7 @@ export default function SettingsPage() {
         setEditTemplateId(null)
         setTemplateForm({ ...emptyTemplate })
         setNewRecord({ ...emptyRecord })
+        setTemplateModalError('')
         setShowTemplateForm(true)
     }
 
@@ -289,7 +324,13 @@ export default function SettingsPage() {
             is_default: t.is_default || false,
         })
         setNewRecord({ ...emptyRecord })
+        setTemplateModalError('')
         setShowTemplateForm(true)
+    }
+
+    function closeTemplateModal() {
+        setShowTemplateForm(false)
+        setTemplateModalError('')
     }
 
     function addRecordToTemplate() {
@@ -313,7 +354,7 @@ export default function SettingsPage() {
     async function handleSaveTemplate(e) {
         e.preventDefault()
         setSavingTemplate(true)
-        setError('')
+        setTemplateModalError('')
         try {
             const nsArray = templateForm.nameservers.split(/[\n,]+/).map(n => n.trim()).filter(Boolean)
             const payload = {
@@ -333,10 +374,10 @@ export default function SettingsPage() {
                 await api.createTemplate(payload)
                 setSuccess('Vorlage erstellt!')
             }
-            setShowTemplateForm(false)
+            closeTemplateModal()
             loadTemplates()
         } catch (err) {
-            setError(err.message)
+            setTemplateModalError(err.message)
         } finally {
             setSavingTemplate(false)
         }
@@ -415,6 +456,7 @@ export default function SettingsPage() {
         setForm({ name: '', display_name: '', url: '', api_key: '', description: '', allow_writes: true })
         setTestResult(null)
         setShowApiKey(false)
+        setServerModalError('')
         setShowForm(true)
     }
 
@@ -424,13 +466,44 @@ export default function SettingsPage() {
             name: s.name,
             display_name: s.display_name || '',
             url: s.url,
-            api_key: s.api_key_full || '',
+            // API-Key wird beim Bearbeiten NIE vorausgefüllt. Leeres Feld = Backend behält den bestehenden Schlüssel.
+            // Admin kann auf "Anzeigen" klicken, um den aktuellen Schlüssel auf Anforderung zu sehen (audit-loggt).
+            api_key: '',
             description: s.description || '',
             allow_writes: s.allow_writes !== false,
         })
         setTestResult(null)
         setShowApiKey(false)
+        setServerModalError('')
         setShowForm(true)
+    }
+
+    function closeServerModal() {
+        setShowForm(false)
+        setServerModalError('')
+        setTestResult(null)
+    }
+
+    async function handleRevealApiKey() {
+        if (!editId) return
+        if (revealedKeys[editId]) {
+            // Bereits geladen → einfach ins Form übernehmen und sichtbar machen
+            setForm((prev) => ({ ...prev, api_key: revealedKeys[editId] }))
+            setShowApiKey(true)
+            return
+        }
+        setRevealingKey(true)
+        try {
+            const res = await api.revealServerApiKey(editId)
+            const key = res?.api_key || ''
+            setRevealedKeys((prev) => ({ ...prev, [editId]: key }))
+            setForm((prev) => ({ ...prev, api_key: key }))
+            setShowApiKey(true)
+        } catch (err) {
+            setError(err.message || 'API-Key konnte nicht geladen werden')
+        } finally {
+            setRevealingKey(false)
+        }
     }
 
     async function handleTest() {
@@ -453,7 +526,7 @@ export default function SettingsPage() {
     async function handleSave(e) {
         e.preventDefault()
         setSaving(true)
-        setError('')
+        setServerModalError('')
         try {
             if (editId) {
                 await api.updateServerConfig(editId, {
@@ -468,10 +541,10 @@ export default function SettingsPage() {
                 await api.addServerConfig(form)
                 setSuccess('Server hinzugefügt!')
             }
-            setShowForm(false)
+            closeServerModal()
             loadServers()
         } catch (err) {
-            setError(err.message)
+            setServerModalError(err.message)
         } finally {
             setSaving(false)
         }
@@ -877,7 +950,8 @@ export default function SettingsPage() {
                                             placeholder="••••••••"
                                             className="w-full px-3 py-2 pr-10 text-sm"
                                             required
-                                            minLength={4}
+                                            minLength={8}
+                                            maxLength={128}
                                         />
                                         <button type="button" onClick={() => setShowNewPw(!showNewPw)}
                                             className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
@@ -896,7 +970,8 @@ export default function SettingsPage() {
                                         placeholder="••••••••"
                                         className="w-full px-3 py-2 text-sm"
                                         required
-                                        minLength={4}
+                                        minLength={8}
+                                        maxLength={128}
                                     />
                                 </div>
                             </div>
@@ -1060,12 +1135,48 @@ export default function SettingsPage() {
             {/* =================== UPDATES TAB =================== */}
             {activeTab === 'updates' && (
                 <div className="space-y-6">
-                    {latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) > 0 && (
-                        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-sm text-text-secondary">
-                            <p className="font-medium text-amber-200 mb-1">{t('settingsMore.newVersionBannerTitle')}</p>
-                            <p>{t('settingsMore.newVersionBannerBody', { current: currentVersion, latest: latestVersion })}</p>
-                        </div>
-                    )}
+                    {(() => {
+                        const isUpToDate = !!(latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) <= 0)
+                        const hasUpdate = !!(latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) > 0)
+                        return (
+                            <div className={`p-4 rounded-xl border text-sm ${
+                                hasUpdate
+                                    ? 'border-amber-500/40 bg-amber-500/10 text-text-secondary'
+                                    : isUpToDate
+                                        ? 'border-success/40 bg-success/10 text-text-secondary'
+                                        : 'border-border bg-bg-hover/40 text-text-muted'
+                            }`}>
+                                <div className="flex items-center justify-between gap-4 flex-wrap">
+                                    <div className="flex-1 min-w-0">
+                                        {hasUpdate ? (
+                                            <>
+                                                <p className="font-medium text-amber-200 mb-1">{t('settingsMore.newVersionBannerTitle')}</p>
+                                                <p>{t('settingsMore.newVersionBannerBody', { current: currentVersion, latest: latestVersion })}</p>
+                                            </>
+                                        ) : isUpToDate ? (
+                                            <>
+                                                <p className="font-medium text-success mb-1">{t('settingsMore.upToDateTitle')}</p>
+                                                <p>{t('settingsMore.upToDateBody', { current: currentVersion })}</p>
+                                            </>
+                                        ) : (
+                                            <p>{t('settingsMore.versionUnknown')}</p>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-3 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-text-muted">{t('settingsMore.versionInstalled')}:</span>
+                                            <code className="font-mono text-text-primary">{currentVersion || '–'}</code>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-text-muted">{t('settingsMore.versionLatest')}:</span>
+                                            <code className="font-mono text-text-primary">{latestVersion || '–'}</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    })()}
+
                     <div className="glass-card p-6">
                         <div className="flex items-center gap-3 mb-6">
                             <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
@@ -1085,20 +1196,63 @@ export default function SettingsPage() {
                                 {t('settingsMore.updateTerminalPara')}
                             </p>
 
-                            <div className="relative group">
-                                <div className="absolute inset-y-0 left-0 bg-accent w-1 rounded-l-lg"></div>
-                                <pre className="bg-bg-hover text-text-primary p-4 rounded-r-lg rounded-l-sm text-sm font-mono overflow-x-auto pl-6 border border-border/50 border-l-0">
-                                    <span className="text-text-muted"># {t('settingsMore.updateStep1Comment')}</span>{'\n'}
-                                    <span className="text-accent-light font-medium">cd</span> {appInfo?.install_path || t('settingsMore.updatePathPlaceholder')}{'\n\n'}
-                                    <span className="text-text-muted"># {t('settingsMore.updateStep2Comment')}</span>{'\n'}
-                                    <span className="text-accent-light font-medium">./update.sh</span>
-                                </pre>
-                            </div>
+                            {(() => {
+                                const installPath = adminInfo?.install_path || ''
+                                const updateCmd = installPath
+                                    ? `cd ${installPath} && ./update.sh`
+                                    : `cd <DEIN-INSTALLATIONS-PFAD> && ./update.sh`
+                                const onCopy = async () => {
+                                    try {
+                                        if (navigator.clipboard?.writeText) {
+                                            await navigator.clipboard.writeText(updateCmd)
+                                        } else {
+                                            const ta = document.createElement('textarea')
+                                            ta.value = updateCmd
+                                            ta.style.position = 'fixed'
+                                            ta.style.opacity = '0'
+                                            document.body.appendChild(ta)
+                                            ta.select()
+                                            document.execCommand('copy')
+                                            document.body.removeChild(ta)
+                                        }
+                                        setUpdateCmdCopied(true)
+                                    } catch { /* clipboard blockiert – egal */ }
+                                }
+                                return (
+                                    <div className="relative">
+                                        <div className="absolute inset-y-0 left-0 bg-accent w-1 rounded-l-lg"></div>
+                                        <pre className="bg-bg-hover text-text-primary p-4 pr-28 rounded-r-lg rounded-l-sm text-sm font-mono overflow-x-auto pl-6 border border-border/50 border-l-0">
+                                            <span className="text-text-muted"># {t('settingsMore.updateStep1Comment')}</span>{'\n'}
+                                            <span className="text-accent-light font-medium">cd</span> {installPath || t('settingsMore.updatePathPlaceholder')}{'\n\n'}
+                                            <span className="text-text-muted"># {t('settingsMore.updateStep2Comment')}</span>{'\n'}
+                                            <span className="text-accent-light font-medium">./update.sh</span>
+                                        </pre>
+                                        <button
+                                            type="button"
+                                            onClick={onCopy}
+                                            className="absolute top-2 right-2 px-2.5 py-1.5 text-xs rounded-md bg-bg-primary border border-border text-text-secondary hover:text-text-primary hover:border-accent/50 flex items-center gap-1.5 transition-colors"
+                                            title={t('common.copy')}
+                                        >
+                                            {updateCmdCopied ? (
+                                                <>
+                                                    <Check className="w-3.5 h-3.5 text-success" />
+                                                    {t('common.copied')}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Copy className="w-3.5 h-3.5" />
+                                                    {t('common.copy')}
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                )
+                            })()}
 
                             <p className="text-xs text-text-muted mt-4">
                                 💡 {t('settingsMore.updatesScriptHint')}
                             </p>
-                            {!appInfo?.install_path && (
+                            {!adminInfo?.install_path && (
                                 <p className="text-xs text-amber-400/90 mt-2">
                                     {t('settingsMore.updatePathMissingHint')}
                                 </p>
@@ -1109,7 +1263,7 @@ export default function SettingsPage() {
                         <div>
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-                                    <Github className="w-4 h-4" /> {t('settingsMore.lastChanges')}
+                                    <GitCommit className="w-4 h-4" /> {t('settingsMore.lastChanges')}
                                 </h3>
                                 <button onClick={loadCommits} disabled={loadingCommits} className="text-xs text-text-muted hover:text-text-primary flex items-center gap-1">
                                     <RefreshCw className={`w-3 h-3 ${loadingCommits ? 'animate-spin' : ''}`} /> {loadingCommits ? t('settings.loadingDot') : t('settings.reload')}
@@ -1313,16 +1467,27 @@ export default function SettingsPage() {
 
             {/* =================== TEMPLATE FORM MODAL =================== */}
             {showTemplateForm && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowTemplateForm(false)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!savingTemplate) closeTemplateModal() }}
+                >
                     <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-5">
                             <h2 className="text-lg font-bold text-text-primary">
                                 {editTemplateId ? t('templates.editTemplate') : t('templates.createNewTemplate')}
                             </h2>
-                            <button onClick={() => setShowTemplateForm(false)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
+                            <button onClick={closeTemplateModal} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
+
+                        {templateModalError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <p className="text-sm flex-1 break-words">{templateModalError}</p>
+                                <button type="button" onClick={() => setTemplateModalError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
 
                         <form onSubmit={handleSaveTemplate} className="space-y-4">
                             {/* Name & Beschreibung */}
@@ -1457,7 +1622,7 @@ export default function SettingsPage() {
                             </div>
 
                             <div className="flex justify-end gap-3 pt-2 border-t border-border">
-                                <button type="button" onClick={() => setShowTemplateForm(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+                                <button type="button" onClick={closeTemplateModal} disabled={savingTemplate} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">
                                     {t('common.cancel')}
                                 </button>
                                 <button type="submit" disabled={savingTemplate} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
@@ -1500,16 +1665,32 @@ export default function SettingsPage() {
 
             {/* =================== ADD/EDIT SERVER MODAL =================== */}
             {showForm && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowForm(false)}>
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!saving) closeServerModal() }}
+                >
                     <div className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-5">
                             <h2 className="text-lg font-bold text-text-primary">
                                 {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
                             </h2>
-                            <button onClick={() => setShowForm(false)} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
+                            <button onClick={closeServerModal} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
+
+                        {serverModalError && (
+                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium">
+                                        {editId ? t('settingsMore.updateErrorTitle') : t('settingsMore.createErrorTitle')}
+                                    </p>
+                                    <p className="text-sm mt-1 break-words">{serverModalError}</p>
+                                </div>
+                                <button type="button" onClick={() => setServerModalError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
 
                         <form onSubmit={handleSave} className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
@@ -1545,19 +1726,33 @@ export default function SettingsPage() {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.apiKey')} *</label>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">
+                                    {t('settingsMore.apiKey')}{!editId ? ' *' : ''}
+                                </label>
                                 <div className="relative">
                                     <input
                                         type={showApiKey ? 'text' : 'password'} value={form.api_key}
                                         onChange={e => setForm({ ...form, api_key: e.target.value })}
-                                        placeholder="dein-api-key" className="w-full px-3 py-2 pr-10 text-sm"
-                                        required
+                                        placeholder={editId ? '••••••••  (leer lassen, um den bestehenden Schlüssel zu behalten)' : 'dein-api-key'}
+                                        className="w-full px-3 py-2 pr-20 text-sm"
+                                        required={!editId}
                                     />
                                     <button type="button" onClick={() => setShowApiKey(!showApiKey)}
                                         className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
                                         {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                     </button>
                                 </div>
+                                {editId && (
+                                    <button
+                                        type="button"
+                                        onClick={handleRevealApiKey}
+                                        disabled={revealingKey}
+                                        className="mt-1 text-xs text-accent-light hover:text-accent flex items-center gap-1"
+                                    >
+                                        {revealingKey ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                                        Bestehenden API-Key anzeigen (wird im Audit-Log vermerkt)
+                                    </button>
+                                )}
                                 <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.apiKeyHint')}</p>
                             </div>
 
@@ -1620,7 +1815,7 @@ export default function SettingsPage() {
                             </div>
 
                             <div className="flex justify-end gap-3 pt-2 border-t border-border">
-                                <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+                                <button type="button" onClick={closeServerModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">
                                     {t('common.cancel')}
                                 </button>
                                 <button type="submit" disabled={saving} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">

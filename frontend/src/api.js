@@ -6,6 +6,51 @@ const API_BASE = '/api/v1';
 
 const FETCH_OPTS = { credentials: 'include' };
 
+/**
+ * Extrahiert eine lesbare Fehlermeldung aus einer beliebigen Backend-Antwort.
+ * Behandelt:
+ *  - FastAPI-Standard:    { detail: "..." }
+ *  - PowerDNS-Wrapper:    { error: "PowerDNS API Error", server: "ns1", detail: "..." }
+ *  - Pydantic-Validierung: { detail: [{loc:[...], msg:"..."}] }
+ *  - Reine Strings:       "Fehlertext"
+ *  - HTTP-Statustexte als Fallback.
+ */
+function extractErrorMessage(payload, statusText, status) {
+    if (payload == null) return statusText || `HTTP ${status || ''}`.trim();
+    if (typeof payload === 'string') return payload;
+
+    const detail = payload.detail;
+    // Pydantic-Validierungsfehler: Liste mit { loc, msg, type }
+    if (Array.isArray(detail) && detail.length > 0) {
+        return detail
+            .map((d) => {
+                if (typeof d === 'string') return d;
+                if (d && typeof d === 'object') {
+                    const loc = Array.isArray(d.loc) ? d.loc.filter((x) => x !== 'body').join('.') : '';
+                    const msg = d.msg || d.message || JSON.stringify(d);
+                    return loc ? `${loc}: ${msg}` : msg;
+                }
+                return String(d);
+            })
+            .join(' · ');
+    }
+    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (detail && typeof detail === 'object') {
+        if (typeof detail.message === 'string') return detail.message;
+    }
+
+    // PowerDNS-Wrapper aus dem Backend (pdns_error_handler):
+    //   { error: "PowerDNS API Error", server: "ns1", detail: "..." }
+    if (payload.error && payload.detail) {
+        const srv = payload.server ? `${payload.server}: ` : '';
+        return `${srv}${typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail)}`;
+    }
+    if (typeof payload.error === 'string' && payload.error.trim()) return payload.error.trim();
+    if (typeof payload.message === 'string' && payload.message.trim()) return payload.message.trim();
+
+    return statusText || `HTTP ${status || ''}`.trim();
+}
+
 class APIClient {
     constructor() {
         this._userCache = null; // Nur im Speicher, nie in localStorage
@@ -42,20 +87,39 @@ class APIClient {
             opts.body = JSON.stringify(data);
         }
 
-        const res = await fetch(`${API_BASE}${path}`, opts);
+        let res;
+        try {
+            res = await fetch(`${API_BASE}${path}`, opts);
+        } catch (networkErr) {
+            // Netzwerkfehler/CORS/Server offline – wirf eine sprechende Meldung
+            throw new Error(`Server nicht erreichbar (${networkErr.message || networkErr})`, { cause: networkErr });
+        }
 
         if (res.status === 401) {
             this.clearUser();
-            window.location.href = '/login';
+            // Setup/Login-Seiten nicht ungewollt verlassen
+            if (!['/login', '/setup'].some((p) => window.location.pathname.startsWith(p))) {
+                window.location.href = '/login';
+            }
             throw new Error('Sitzung abgelaufen – bitte erneut anmelden');
         }
 
+        // 204 No Content
+        if (res.status === 204) return null;
+
+        const ct = res.headers.get('content-type') || '';
+        const isJson = ct.includes('application/json');
+        const payload = isJson ? await res.json().catch(() => null) : await res.text().catch(() => null);
+
         if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: res.statusText }));
-            throw new Error(err.detail || err.error || `HTTP ${res.status}`);
+            const msg = extractErrorMessage(payload, res.statusText, res.status);
+            const err = new Error(msg);
+            err.status = res.status;
+            err.payload = payload;
+            throw err;
         }
 
-        return res.json();
+        return payload;
     }
 
     // ========== Auth ==========
@@ -64,59 +128,50 @@ class APIClient {
         form.append('username', username);
         form.append('password', password);
 
-        const res = await fetch(`${API_BASE}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: form,
-            ...FETCH_OPTS,
-        });
-
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.detail || 'Login fehlgeschlagen');
+        let res;
+        try {
+            res = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: form,
+                ...FETCH_OPTS,
+            });
+        } catch (e) {
+            throw new Error(`Server nicht erreichbar (${e.message || e})`, { cause: e });
         }
 
-        const data = await res.json();
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+            throw new Error(extractErrorMessage(data, res.statusText, res.status) || 'Login fehlgeschlagen');
+        }
         this.setUser(data.user);
+        return data;
+    }
+
+    async _publicJson(path, body, fallbackMsg) {
+        let res;
+        try {
+            res = await fetch(`${API_BASE}${path}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        } catch (e) {
+            throw new Error(`Server nicht erreichbar (${e.message || e})`, { cause: e });
+        }
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+            throw new Error(extractErrorMessage(data, res.statusText, res.status) || fallbackMsg);
+        }
         return data;
     }
 
     getMe() { return this.request('GET', '/auth/me'); }
     updateProfile(data) { return this.request('PUT', '/auth/me', data); }
     changePassword(data) { return this.request('PUT', '/auth/me/password', data); }
-    register(data) {
-        return fetch(`${API_BASE}/auth/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || 'Registrierung fehlgeschlagen');
-            return data;
-        });
-    }
-    requestPasswordReset(data) {
-        return fetch(`${API_BASE}/auth/forgot-password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || 'Anfrage fehlgeschlagen');
-            return data;
-        });
-    }
-    resetPassword(data) {
-        return fetch(`${API_BASE}/auth/reset-password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || 'Zurücksetzen fehlgeschlagen');
-            return data;
-        });
-    }
+    register(data) { return this._publicJson('/auth/register', data, 'Registrierung fehlgeschlagen'); }
+    requestPasswordReset(data) { return this._publicJson('/auth/forgot-password', data, 'Anfrage fehlgeschlagen'); }
+    resetPassword(data) { return this._publicJson('/auth/reset-password', data, 'Zurücksetzen fehlgeschlagen'); }
     listUsers() { return this.request('GET', '/auth/users'); }
     createUser(data) { return this.request('POST', '/auth/users', data); }
     updateUser(id, data) { return this.request('PUT', `/auth/users/${id}`, data); }
@@ -165,6 +220,8 @@ class APIClient {
     updateServerConfig(id, data) { return this.request('PUT', `/settings/servers/${id}`, data); }
     deleteServerConfig(id) { return this.request('DELETE', `/settings/servers/${id}`); }
     testConnection(data) { return this.request('POST', '/settings/servers/test', data); }
+    // Holt den vollen API-Key eines Servers nur auf Admin-Anforderung (auditiert).
+    revealServerApiKey(id) { return this.request('GET', `/settings/servers/${id}/api-key`); }
 
     // ========== SMTP ==========
     getSmtpSettings() { return this.request('GET', '/settings/smtp'); }
@@ -172,20 +229,23 @@ class APIClient {
     testSmtpConnection() { return this.request('POST', '/settings/smtp/test'); }
     sendTestEmail(data) { return this.request('POST', '/settings/smtp/test-email', data); }
     // ========== App Info ==========
+    // Öffentliche, unkritische App-Daten (Name, Logo, Sprache).
     getAppInfo() { return this.request('GET', '/settings/app-info'); }
+    // Admin-only: install_path, app_base_url etc.
+    getAdminInfo() { return this.request('GET', '/settings/admin-info'); }
     updateAppInfo(data) { return this.request('PUT', '/settings/app-info', data); }
-    uploadAppLogo(file) {
+    async uploadAppLogo(file) {
         const form = new FormData();
         form.append('file', file);
-        return fetch(`${API_BASE}/settings/app-logo`, {
-            method: 'POST',
-            body: form,
-            ...FETCH_OPTS,
-        }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || 'Logo-Upload fehlgeschlagen');
-            return data;
-        });
+        let res;
+        try {
+            res = await fetch(`${API_BASE}/settings/app-logo`, { method: 'POST', body: form, ...FETCH_OPTS });
+        } catch (e) {
+            throw new Error(`Server nicht erreichbar (${e.message || e})`, { cause: e });
+        }
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(extractErrorMessage(data, res.statusText, res.status) || 'Logo-Upload fehlgeschlagen');
+        return data;
     }
 }
 const api = new APIClient();

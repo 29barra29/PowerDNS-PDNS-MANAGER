@@ -12,7 +12,9 @@ export default function DashboardPage() {
 
     useEffect(() => {
         const u = api.getUser()
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time mount sync from localStorage
         if (u) setUser(u)
+        // eslint-disable-next-line react-hooks/immutability -- loadDashboard declared below, runs once
         loadDashboard()
     }, [])
 

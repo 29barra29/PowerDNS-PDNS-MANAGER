@@ -76,7 +76,7 @@ export default function Layout() {
 
                 {/* Navigation */}
                 <nav className="flex-1 p-3 space-y-1">
-                    {links.map(({ to, icon: Icon, labelKey }) => ( // eslint-disable-line no-unused-vars -- Icon used as <Icon /> below
+                    {links.map(({ to, icon: Icon, labelKey }) => (  
                         <NavLink
                             key={to + labelKey}
                             to={to}

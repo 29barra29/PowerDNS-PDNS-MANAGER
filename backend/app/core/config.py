@@ -1,6 +1,6 @@
 from pathlib import Path
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 import os
 import secrets
@@ -67,17 +67,27 @@ class Settings(BaseSettings):
     INSTALL_PATH: Optional[str] = None
     # Standard-Sprache der Oberfläche (de/en), z.B. aus install.sh gesetzt.
     DEFAULT_LANGUAGE: Optional[str] = None
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-    
+
+    # Web-Sicherheit
+    # Komma-getrennte Liste erlaubter Origins für CORS, z.B.
+    # "https://dns.example.com,https://dns2.example.com".
+    # Leer -> kein Cross-Origin (gleicher Origin reicht für die SPA, weil sie vom gleichen Backend gehostet wird).
+    ALLOWED_ORIGINS: str = ""
+    # OpenAPI-/ReDoc-/Swagger-UI nur einschalten, wenn explizit gewünscht (Default: aus).
+    DOCS_ENABLED: bool = False
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     def get_pdns_servers(self) -> list[dict]:
         """Parse PDNS_SERVERS env var into list of server configs."""
         servers = []
         if not self.PDNS_SERVERS:
             return servers
-        
+
         for entry in self.PDNS_SERVERS.split(","):
             entry = entry.strip()
             if not entry:
@@ -90,6 +100,18 @@ class Settings(BaseSettings):
                     "api_key": parts[2].strip(),
                 })
         return servers
+
+    def get_allowed_origins(self) -> list[str]:
+        """ALLOWED_ORIGINS aus Env in Liste – '*' wird ignoriert (mit Cookies inkompatibel)."""
+        if not self.ALLOWED_ORIGINS:
+            return []
+        out: list[str] = []
+        for entry in self.ALLOWED_ORIGINS.split(","):
+            o = entry.strip().rstrip("/")
+            if not o or o == "*":
+                continue
+            out.append(o)
+        return out
 
 
 # Initialisiere Settings und generiere JWT Secret wenn nötig

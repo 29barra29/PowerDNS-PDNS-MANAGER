@@ -253,15 +253,39 @@ if [ -f "setup.sh" ]; then
     chmod +x setup.sh
     ./setup.sh --from-install "$LANG_APP"
 else
+    # Fallback: setup.sh nicht vorhanden -> minimale, aber sichere .env selbst erzeugen.
+    # Achtung: Niemals auf vorhandene Platzhalter in .env.example verlassen
+    # (Namen ändern sich) -> wir setzen jede Variable zeilenweise.
     print_info "$M_NO_SETUP"
-    cp .env.example .env 2>/dev/null || true
-    [ ! -f .env ] && touch .env
-    sed -i.bak "s/changeme-root/$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-25)/g" .env 2>/dev/null || true
-    sed -i.bak "s/changeme-password/$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-25)/g" .env 2>/dev/null || true
-    grep -q '^ENABLE_REGISTRATION=' .env && sed -i.bak "s/^ENABLE_REGISTRATION=.*/ENABLE_REGISTRATION=true/" .env || echo "ENABLE_REGISTRATION=true" >> .env
-    grep -q '^DEFAULT_LANGUAGE=' .env && sed -i.bak "s|^DEFAULT_LANGUAGE=.*|DEFAULT_LANGUAGE=$LANG_APP|" .env || echo "DEFAULT_LANGUAGE=$LANG_APP" >> .env
-    grep -q '^INSTALL_PATH=' .env && sed -i.bak "s|^INSTALL_PATH=.*|INSTALL_PATH=$INSTALL_PATH_ABS|" .env || echo "INSTALL_PATH=$INSTALL_PATH_ABS" >> .env
+
+    DB_ROOT_PW=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
+    DB_PW=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
+    JWT_SECRET=$(openssl rand -hex 64)
+
+    # Variable zeilenweise setzen (insert oder update).
+    set_env() {
+        local key="$1" val="$2"
+        if grep -q "^${key}=" .env 2>/dev/null; then
+            sed -i.bak "s|^${key}=.*|${key}=${val}|" .env
+        else
+            echo "${key}=${val}" >> .env
+        fi
+    }
+
+    cp .env.example .env 2>/dev/null || touch .env
+
+    set_env DB_ROOT_PASSWORD     "$DB_ROOT_PW"
+    set_env DB_PASSWORD          "$DB_PW"
+    set_env JWT_SECRET_KEY       "$JWT_SECRET"
+    set_env ENABLE_REGISTRATION  "true"
+    set_env DEFAULT_LANGUAGE     "$LANG_APP"
+    set_env INSTALL_PATH         "$INSTALL_PATH_ABS"
+    set_env AUTH_COOKIE_SECURE   "false"
+    set_env AUTH_COOKIE_SAMESITE "lax"
+    set_env DOCS_ENABLED         "false"
+
     rm -f .env.bak 2>/dev/null || true
+    chmod 600 .env 2>/dev/null || true
     print_success "$M_ENV_CREATED"
 fi
 

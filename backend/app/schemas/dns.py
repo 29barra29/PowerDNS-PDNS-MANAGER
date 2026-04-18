@@ -1,5 +1,5 @@
 """Pydantic schemas for request/response validation."""
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from datetime import datetime
 import re
@@ -87,8 +87,7 @@ class ZoneResponse(BaseModel):
     masters: list[str] = []
     rrsets: Optional[list] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ZoneListResponse(BaseModel):

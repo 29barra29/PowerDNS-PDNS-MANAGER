@@ -19,7 +19,8 @@ generate_password() {
 }
 
 generate_secret() {
-    openssl rand -hex 32
+    # 64 Bytes Entropie -> 128 Hex-Zeichen, deutlich mehr als HS256 verlangt.
+    openssl rand -hex 64
 }
 
 # Prüfe ob .env bereits existiert
@@ -138,6 +139,19 @@ echo "✅ JWT Secret generiert (${#JWT_SECRET} Zeichen)"
 echo "✅ Datenbank-Passwörter generiert"
 
 echo ""
+echo "Wirst du das Panel hinter einem Reverse-Proxy mit HTTPS betreiben?"
+echo "(Caddy, nginx, Traefik, Cloudflare Tunnel, …)"
+read -p "HTTPS aktivieren? (j/n) [n]: " -n 1 -r HTTPS_REPLY
+echo
+if [[ $HTTPS_REPLY =~ ^[Jj]$ ]]; then
+    AUTH_COOKIE_SECURE="true"
+    echo "✅ AUTH_COOKIE_SECURE=true (Cookies nur über HTTPS gültig)"
+else
+    AUTH_COOKIE_SECURE="false"
+    echo "ℹ️  AUTH_COOKIE_SECURE=false (in der .env später auf true setzen, sobald HTTPS steht)"
+fi
+
+echo ""
 echo "🔌 PowerDNS Server (optional)"
 echo "-----------------------------"
 echo "Du kannst PowerDNS Server auch später über das Web-Interface hinzufügen."
@@ -167,23 +181,30 @@ cat > .env << EOF
 # ====================================
 # DNS Manager - Konfiguration
 # Generiert: $(date)
+# Hinweis: APP_VERSION wird ausschliesslich aus der Datei VERSION gelesen.
 # ====================================
 
-# App Settings (Version aus VERSION-Datei im Projektroot)
+# App Settings
 APP_NAME=${APP_NAME}
-APP_VERSION=$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null | head -1 | tr -d '\r' || echo "2.2.1")
 LOG_LEVEL=info
 DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-de}
 INSTALL_PATH=${INSTALL_PATH:-$(pwd)}
 
 # Sicherheit
 JWT_SECRET_KEY=${JWT_SECRET}
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=1440
 
 # First-Run Settings
 ENABLE_REGISTRATION=${ENABLE_REGISTRATION}
 ${ADMIN_PASSWORD:+INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}}
+
+# Auth-Cookies (auf true setzen, sobald HTTPS via Reverse-Proxy aktiv ist)
+AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+AUTH_COOKIE_SAMESITE=lax
+AUTH_COOKIE_MAX_AGE=2592000
+
+# CORS / API-Doku (Defaults: leer / aus -> sicher)
+ALLOWED_ORIGINS=
+DOCS_ENABLED=false
 
 # Datenbank
 DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
@@ -203,7 +224,10 @@ ${SMTP_FROM:+SMTP_FROM=${SMTP_FROM}}
 PDNS_SERVERS=${PDNS_SERVERS}
 EOF
 
-echo "✅ .env Datei erstellt!"
+# .env Datei nur fuer den User lesbar machen (enthaelt Geheimnisse)
+chmod 600 .env 2>/dev/null || true
+
+echo "✅ .env Datei erstellt (chmod 600)!"
 
 echo ""
 echo "================================================"

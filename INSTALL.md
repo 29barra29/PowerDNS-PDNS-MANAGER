@@ -61,9 +61,20 @@ ENABLE_REGISTRATION=true
 ENABLE_REGISTRATION=false
 INITIAL_ADMIN_PASSWORD=dein-sicheres-passwort
 
-# Sicherheit (wird automatisch generiert wenn leer)
-JWT_SECRET_KEY=
+# Sicherheit – Pflicht in Production!
+# (Wenn leer, wird bei jedem Container-Restart ein neuer Schlüssel erzeugt
+# und alle Logins sind ungültig.)
+JWT_SECRET_KEY=$(openssl rand -hex 64)
+
+# Auth-Cookies: auf "true" sobald HTTPS via Reverse-Proxy aktiv ist
+AUTH_COOKIE_SECURE=false
+AUTH_COOKIE_SAMESITE=lax
+
+# OpenAPI/Swagger öffentlich erreichbar? In Production "false" lassen
+DOCS_ENABLED=false
 ```
+
+> **Tipp:** Wer `setup.sh` nutzt, bekommt all das automatisch befüllt – und die `.env` zusätzlich mit `chmod 600` abgesichert.
 
 ### 3. Container starten
 
@@ -81,14 +92,17 @@ docker compose up -d
 ## 🔒 Sicherheits-Checkliste
 
 ### Minimal (Pflicht)
-- [ ] Admin-Passwort geändert
-- [ ] `.env` Datei gesichert
-- [ ] Firewall konfiguriert
+- [ ] Admin-Passwort nach erstem Login geändert
+- [ ] `.env` ist nur für den eigenen User lesbar (`chmod 600 .env`)
+- [ ] `JWT_SECRET_KEY` ist in der `.env` gesetzt (sonst Logout bei jedem Restart)
+- [ ] Firewall konfiguriert / Port 5380 nicht öffentlich
 
 ### Empfohlen
 - [ ] HTTPS mit Reverse Proxy (siehe unten)
+- [ ] **Nach** HTTPS-Aktivierung: `AUTH_COOKIE_SECURE=true` in `.env` und `docker compose up -d` erneut
+- [ ] `ENABLE_REGISTRATION=false` setzen, sobald alle Accounts angelegt sind
 - [ ] Fail2Ban installiert
-- [ ] Regelmäßige Backups
+- [ ] Regelmäßige Backups (siehe „Backup & Restore" weiter unten)
 
 ---
 
@@ -209,9 +223,9 @@ cd /pfad/zu/dns-manager
 ### Manuelles Update
 
 ```bash
-git fetch origin --tags --force
+git fetch origin --tags --force --prune --prune-tags
 git checkout main && git pull origin main
-# alternativ festes Release: git checkout v2.3.2
+# alternativ festes Release: git checkout v2.3.3
 docker compose build --no-cache backend
 docker compose up -d
 ```
@@ -292,7 +306,7 @@ asyncio.run(reset())
 - [GitHub Repository](https://github.com/29barra29/dns-manager)
 - [Wiki / Dokumentation](https://github.com/29barra29/dns-manager/wiki)
 - [Issue Tracker](https://github.com/29barra29/dns-manager/issues)
-- [Discord Community](https://discord.gg/dns-manager)
+- [Security Policy](https://github.com/29barra29/dns-manager/security)
 
 ---
 

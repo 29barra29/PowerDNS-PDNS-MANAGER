@@ -40,6 +40,20 @@ COPY backend/app/ ./app/
 # Frontend build vom ersten Stage kopieren
 COPY --from=frontend-build /frontend/dist ./app/static_new/
 
+# Uploads-Ordner sicherstellen (damit das Volume vom richtigen User beschreibbar ist)
+RUN mkdir -p /app/app/static_new/uploads
+
+# ============================
+# Non-root User anlegen
+# ============================
+# Wenn der Container kompromittiert wird, beschränkt das den Schaden:
+# Der Prozess kann weder System-Dateien manipulieren noch root-Container-Privilegien missbrauchen.
+RUN groupadd --system --gid 1001 dnsmgr \
+    && useradd --system --uid 1001 --gid dnsmgr --no-create-home --shell /usr/sbin/nologin dnsmgr \
+    && chown -R dnsmgr:dnsmgr /app
+
+USER dnsmgr
+
 # Port
 EXPOSE 8000
 

@@ -3,9 +3,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.auth import get_current_user, assert_zone_access
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
-from app.schemas.dns import DNSSECEnable, CryptoKeyResponse, MessageResponse
-from app.models.models import AuditLog
+from app.schemas.dns import DNSSECEnable, MessageResponse  # CryptoKeyResponse currently unused
+from app.models.models import AuditLog, User
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +16,10 @@ router = APIRouter(prefix="/dnssec", tags=["DNSSEC"])
 async def _log_action(
     db: AsyncSession, action: str, resource_name: str,
     server_name: str = None, details: dict = None,
-    status: str = "success", error_message: str = None
+    status: str = "success", error_message: str = None,
+    user_id: int = None,
 ):
-    """Helper to create audit log entries."""
+    """Helper to create audit log entries (mit user_id)."""
     log = AuditLog(
         action=action,
         resource_type="dnssec_key",
@@ -26,19 +28,26 @@ async def _log_action(
         details=details,
         status=status,
         error_message=error_message,
+        user_id=user_id,
     )
     db.add(log)
     await db.flush()
 
 
 @router.get("/{server_name}/{zone_id:path}/keys")
-async def list_cryptokeys(server_name: str, zone_id: str):
-    """List all DNSSEC keys for a zone."""
+async def list_cryptokeys(
+    server_name: str,
+    zone_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all DNSSEC keys for a zone (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         keys = await client.get_cryptokeys(zone_id)
         return {
@@ -52,13 +61,20 @@ async def list_cryptokeys(server_name: str, zone_id: str):
 
 
 @router.get("/{server_name}/{zone_id:path}/keys/{key_id}")
-async def get_cryptokey(server_name: str, zone_id: str, key_id: int):
-    """Get a specific DNSSEC key with full details."""
+async def get_cryptokey(
+    server_name: str,
+    zone_id: str,
+    key_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a specific DNSSEC key with full details (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         key = await client.get_cryptokey(zone_id, key_id)
         return {
@@ -75,38 +91,38 @@ async def enable_dnssec(
     server_name: str,
     zone_id: str,
     config: DNSSECEnable = DNSSECEnable(),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Enable DNSSEC for a zone.
-    
-    This creates a CSK (Combined Signing Key), sets NSEC3 parameters,
-    and rectifies the zone.
+    """Enable DNSSEC for a zone (Auth + Zone-ACL).
+
+    Creates a CSK (Combined Signing Key), sets NSEC3 parameters and rectifies the zone.
     """
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         result = await client.enable_dnssec(
             zone_id,
             algorithm=config.algorithm,
             nsec3param=config.nsec3param,
         )
-        
-        # Get DS records for the registrar
+
         keys = await client.get_cryptokeys(zone_id)
         ds_records = []
         for key in keys:
             if key.get("ds"):
                 ds_records.extend(key["ds"])
-        
+
         await _log_action(db, "DNSSEC_ENABLE", zone_id, server_name, {
             "algorithm": config.algorithm,
             "nsec3param": config.nsec3param,
             "key_id": result.get("id") if isinstance(result, dict) else None,
-        })
-        
+        }, user_id=current_user.id)
+
         return MessageResponse(
             message=f"DNSSEC enabled for zone '{zone_id}' on '{server_name}'",
             details={
@@ -119,6 +135,7 @@ async def enable_dnssec(
         await _log_action(
             db, "DNSSEC_ENABLE", zone_id, server_name,
             status="error", error_message=e.detail,
+            user_id=current_user.id,
         )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -127,19 +144,21 @@ async def enable_dnssec(
 async def disable_dnssec(
     server_name: str,
     zone_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Disable DNSSEC for a zone by removing all crypto keys."""
+    """Disable DNSSEC for a zone (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     try:
         await client.disable_dnssec(zone_id)
-        
-        await _log_action(db, "DNSSEC_DISABLE", zone_id, server_name)
-        
+
+        await _log_action(db, "DNSSEC_DISABLE", zone_id, server_name, user_id=current_user.id)
+
         return MessageResponse(
             message=f"DNSSEC disabled for zone '{zone_id}' on '{server_name}'",
             details={
@@ -150,6 +169,7 @@ async def disable_dnssec(
         await _log_action(
             db, "DNSSEC_DISABLE", zone_id, server_name,
             status="error", error_message=e.detail,
+            user_id=current_user.id,
         )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
@@ -159,15 +179,17 @@ async def activate_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Activate a DNSSEC key."""
+    """Activate a DNSSEC key (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
         await client.activate_cryptokey(zone_id, key_id)
-        
-        await _log_action(db, "KEY_ACTIVATE", zone_id, server_name, {"key_id": key_id})
-        
+
+        await _log_action(db, "KEY_ACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+
         return MessageResponse(
             message=f"Key {key_id} activated for zone '{zone_id}'"
         )
@@ -182,15 +204,17 @@ async def deactivate_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Deactivate a DNSSEC key."""
+    """Deactivate a DNSSEC key (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
         await client.deactivate_cryptokey(zone_id, key_id)
-        
-        await _log_action(db, "KEY_DEACTIVATE", zone_id, server_name, {"key_id": key_id})
-        
+
+        await _log_action(db, "KEY_DEACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+
         return MessageResponse(
             message=f"Key {key_id} deactivated for zone '{zone_id}'"
         )
@@ -205,15 +229,17 @@ async def delete_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a DNSSEC key."""
+    """Delete a DNSSEC key (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
         await client.delete_cryptokey(zone_id, key_id)
-        
-        await _log_action(db, "KEY_DELETE", zone_id, server_name, {"key_id": key_id})
-        
+
+        await _log_action(db, "KEY_DELETE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+
         return MessageResponse(
             message=f"Key {key_id} deleted from zone '{zone_id}'"
         )
@@ -224,12 +250,18 @@ async def delete_key(
 
 
 @router.get("/{server_name}/{zone_id:path}/ds")
-async def get_ds_records(server_name: str, zone_id: str):
-    """Get DS records for a zone (needed for registrar)."""
+async def get_ds_records(
+    server_name: str,
+    zone_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get DS records for a zone (Auth + Zone-ACL)."""
+    await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
         keys = await client.get_cryptokeys(zone_id)
-        
+
         ds_records = []
         for key in keys:
             if key.get("ds"):
@@ -240,7 +272,7 @@ async def get_ds_records(server_name: str, zone_id: str):
                         "active": key.get("active"),
                         "ds": ds,
                     })
-        
+
         return {
             "zone": zone_id,
             "server": server_name,

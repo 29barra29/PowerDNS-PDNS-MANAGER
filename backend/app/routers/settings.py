@@ -2,9 +2,10 @@
 import asyncio
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 # App Info
 # ========================
 class AppInfoUpdate(BaseModel):
-    app_name: str = Field(..., description="Name der Anwendung")
+    app_name: str = Field(..., min_length=1, max_length=100, description="Name der Anwendung")
     app_base_url: Optional[str] = Field(None, max_length=500, description="Öffentliche Basis-URL für E-Mail-Links (nur Admin)")
     registration_enabled: Optional[bool] = Field(None, description="Registrierung auf der Login-Seite erlauben")
     forgot_password_enabled: Optional[bool] = Field(None, description="Passwort vergessen-Link anzeigen und erlauben")
@@ -36,10 +37,34 @@ class AppInfoUpdate(BaseModel):
     app_creator: Optional[str] = Field(None, max_length=200, description="Creator-/Branding-Hinweis unter dem Footer")
     app_logo_url: Optional[str] = Field(None, max_length=500, description="URL zum Logo für Login-/Setup-Seiten")
 
+    @field_validator("app_base_url")
+    @classmethod
+    def _validate_base_url(cls, v: Optional[str]) -> Optional[str]:
+        # Wir verhindern, dass jemand https://evil.example/?phishing= als app_base_url speichert
+        # und so den Reset-Link in E-Mails kapert. Erlaubt: http(s)://host[:port][/path?...]
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        if any(c in v for c in ("\r", "\n", "\t", " ")):
+            raise ValueError("Basis-URL darf keine Leer-/Steuerzeichen enthalten")
+        try:
+            parsed = urlparse(v)
+        except Exception:
+            raise ValueError("Ungültige Basis-URL")
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("Basis-URL muss http(s)://host[:port] enthalten")
+        return v
+
 
 @router.get("/app-info", include_in_schema=False)
 async def get_app_info(db: AsyncSession = Depends(get_db)):
-    """Get public app info like app name, version, and auth feature flags."""
+    """Get *public* app info: name, version, branding, auth feature flags.
+
+    Admin-only data (z.B. INSTALL_PATH, app_base_url für E-Mail-Links) wird hier NICHT mehr ausgeliefert,
+    sondern unter /settings/admin-info, der eine eingeloggte Admin-Sitzung verlangt.
+    """
     from app.models.models import SystemSetting
     from app.core.config import settings
 
@@ -47,7 +72,6 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
         select(SystemSetting.key, SystemSetting.value).where(
             SystemSetting.key.in_((
                 "app_name",
-                "app_base_url",
                 "registration_enabled",
                 "forgot_password_enabled",
                 "app_tagline",
@@ -57,19 +81,39 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
         )
     )
     rows = {r[0]: r[1] for r in result.all()}
-    base_url = (rows.get("app_base_url") or "").strip()
 
     return {
         "app_name": rows.get("app_name") or settings.APP_NAME,
         "app_version": settings.APP_VERSION,
-        "app_base_url": base_url or None,
         "registration_enabled": (rows.get("registration_enabled") or "false").lower() == "true",
         "forgot_password_enabled": (rows.get("forgot_password_enabled") or "false").lower() == "true",
         "app_tagline": (rows.get("app_tagline") or "").strip() or "PowerDNS Admin Panel",
         "app_creator": (rows.get("app_creator") or "").strip() or "Created by GemTec Games • Barra",
         "app_logo_url": (rows.get("app_logo_url") or "").strip() or None,
-        "install_path": (settings.INSTALL_PATH or "").strip() or None,
         "default_language": (settings.DEFAULT_LANGUAGE or "").strip() or "de",
+    }
+
+
+@router.get("/admin-info")
+async def get_admin_info(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Liefert sensible/operative Felder (INSTALL_PATH, app_base_url) – nur für Admins."""
+    from app.models.models import SystemSetting
+    from app.core.config import settings
+
+    result = await db.execute(
+        select(SystemSetting.key, SystemSetting.value).where(
+            SystemSetting.key.in_(("app_base_url",))
+        )
+    )
+    rows = {r[0]: r[1] for r in result.all()}
+    base_url = (rows.get("app_base_url") or "").strip()
+
+    return {
+        "install_path": (settings.INSTALL_PATH or "").strip() or None,
+        "app_base_url": base_url or None,
     }
 
 
@@ -145,6 +189,20 @@ async def update_app_info(
     return {"message": "Einstellungen aktualisiert"}
 
 
+def _detect_image_ext(blob: bytes) -> str | None:
+    """Wir vertrauen nicht dem Client-Content-Type. Prüfung anhand der ersten Bytes (Magic Numbers)."""
+    if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if blob.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp"
+    head = blob[:512].lstrip().lower()
+    if head.startswith(b"<?xml") or head.startswith(b"<svg"):
+        return ".svg"
+    return None
+
+
 @router.post("/app-logo")
 async def upload_app_logo(
     file: UploadFile = File(...),
@@ -154,25 +212,18 @@ async def upload_app_logo(
     """Upload custom logo for login/setup pages (admin only)."""
     from app.models.models import SystemSetting
 
-    allowed = {
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-        "image/webp": ".webp",
-        "image/svg+xml": ".svg",
-    }
-    ext = allowed.get((file.content_type or "").lower())
-    if not ext:
-        raise HTTPException(status_code=400, detail="Nur PNG, JPG, WEBP oder SVG erlaubt")
-
     content = await file.read()
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Logo ist zu groß (max. 2 MB)")
+
+    ext = _detect_image_ext(content)
+    if not ext:
+        raise HTTPException(status_code=400, detail="Nur PNG, JPG, WEBP oder SVG erlaubt")
 
     static_dir = Path(__file__).resolve().parent.parent / "static_new"
     uploads_dir = static_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
-    # Delete older custom logos with different extensions
     for old in uploads_dir.glob("custom-logo.*"):
         try:
             old.unlink()
@@ -191,6 +242,7 @@ async def upload_app_logo(
     else:
         db.add(SystemSetting(key="app_logo_url", value=logo_url))
     await db.commit()
+    logger.info(f"Logo uploaded by admin '{admin.username}' ({ext}, {len(content)} bytes)")
 
     return {"message": "Logo hochgeladen", "app_logo_url": logo_url}
 
@@ -224,7 +276,11 @@ class TestConnectionRequest(BaseModel):
 # Server Configuration CRUD
 # ========================
 async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
-    """DB-Zeile + optional Live-Status mit kurzen Timeouts (kein Minuten-Laden bei offline PDNS)."""
+    """DB-Zeile + optional Live-Status mit kurzen Timeouts.
+
+    Sicherheit: Der vollständige API-Key wird hier NIE ausgeliefert, nur eine kurze Maske.
+    Zum Bearbeiten kann der Admin den Key über `GET /settings/servers/{id}/api-key` einmalig anfordern.
+    """
     is_online = False
     version = None
     zone_count = None
@@ -244,8 +300,8 @@ async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
         "name": cfg.name,
         "display_name": cfg.display_name,
         "url": cfg.url,
-        "api_key": cfg.api_key[:8] + "..." if cfg.api_key else "",  # Maskiert
-        "api_key_full": cfg.api_key,  # Für Bearbeitung
+        "api_key": (cfg.api_key[:4] + "…") if cfg.api_key else "",  # Maskiert (auch length wird nicht offengelegt)
+        "has_api_key": bool(cfg.api_key),
         "description": cfg.description,
         "is_active": cfg.is_active,
         "allow_writes": getattr(cfg, "allow_writes", True),
@@ -318,7 +374,9 @@ async def update_server_config(
         cfg.display_name = data.display_name
     if data.url is not None:
         cfg.url = data.url.rstrip("/")
-    if data.api_key is not None:
+    if data.api_key is not None and data.api_key.strip():
+        # Leerer/whitespace-Wert wird ignoriert -> Bestand bleibt erhalten (verhindert,
+        # dass das Frontend versehentlich beim Speichern einer Edit-Form ohne Reveal den Key löscht).
         cfg.api_key = data.api_key
     if data.description is not None:
         cfg.description = data.description
@@ -361,6 +419,35 @@ async def delete_server_config(
     
     logger.info(f"Server config '{server_name}' deleted by admin '{admin.username}'")
     return {"message": f"Server '{server_name}' geloescht"}
+
+
+@router.get("/servers/{server_id}/api-key")
+async def reveal_server_api_key(
+    server_id: int,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gibt den vollständigen API-Key eines Servers genau einmal an einen eingeloggten Admin zurück.
+
+    Wird ins Audit-Log geschrieben, damit die Aufdeckung nachvollziehbar ist.
+    """
+    from app.models.models import AuditLog
+    result = await db.execute(select(ServerConfig).where(ServerConfig.id == server_id))
+    cfg = result.scalar_one_or_none()
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Server-Konfiguration nicht gefunden")
+
+    db.add(AuditLog(
+        action="REVEAL_API_KEY",
+        resource_type="server_config",
+        resource_name=cfg.name,
+        server_name=cfg.name,
+        user_id=admin.id,
+        status="success",
+    ))
+    await db.flush()
+    logger.info(f"API key revealed for server '{cfg.name}' by admin '{admin.username}'")
+    return {"id": cfg.id, "name": cfg.name, "api_key": cfg.api_key}
 
 
 # ========================

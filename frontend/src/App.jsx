@@ -68,6 +68,7 @@ export default function App() {
 
   useEffect(() => {
     // Check setup status on app load
+    // eslint-disable-next-line react-hooks/immutability -- function declared below, called once on mount
     checkSetupStatus()
   }, [])
 
