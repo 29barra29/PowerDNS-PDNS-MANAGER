@@ -187,8 +187,6 @@ dns-manager/
 └── frontend/              # React-App (wird im Backend-Image als Static ausgeliefert)
 ```
 
-Detail-Tree und Modul-Erklärungen siehe [Wiki](https://github.com/29barra29/dns-manager/wiki).
-
 ---
 
 ## Troubleshooting

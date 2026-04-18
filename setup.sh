@@ -261,6 +261,7 @@ if [ "$1" != "--from-install" ]; then
     echo ""
     echo "📚 Weitere Hilfe:"
     echo "   GitHub: https://github.com/29barra29/dns-manager"
-    echo "   Docs:   https://github.com/29barra29/dns-manager/wiki"
+    echo "   Setup:  https://github.com/29barra29/dns-manager/blob/main/INSTALL.md"
+    echo "   Issues: https://github.com/29barra29/dns-manager/issues"
     echo ""
 fi

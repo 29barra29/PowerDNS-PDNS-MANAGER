@@ -469,7 +469,7 @@ export default function SetupWizard() {
 
           {/* Help text */}
           <div className="mt-8 text-center text-xs text-text-muted">
-            <p>{t('setup.needHelp')} <a href="https://github.com/29barra29/dns-manager/wiki" className="text-accent hover:text-accent-hover transition-colors">{t('setup.documentation')}</a></p>
+            <p>{t('setup.needHelp')} <a href="https://github.com/29barra29/dns-manager/blob/main/INSTALL.md" target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent-hover transition-colors">{t('setup.documentation')}</a></p>
             <p className="mt-2">{(appInfo.app_tagline || t('login.tagline'))}{appInfo.app_version ? ` • v${appInfo.app_version}` : ''}</p>
             {appInfo.app_creator ? <p>{appInfo.app_creator}</p> : null}
           </div>

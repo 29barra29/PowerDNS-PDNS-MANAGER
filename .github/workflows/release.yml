@@ -115,8 +115,9 @@ jobs:
           - Check the [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.get_version.outputs.VERSION }}) for details
 
           ### Full Documentation
+          - [README](https://github.com/${{ github.repository }}/blob/main/README.md)
           - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/INSTALL.md)
-          - [Wiki](https://github.com/${{ github.repository }}/wiki)
+          - [Security Policy](https://github.com/${{ github.repository }}/blob/main/SECURITY.md)
           EOF
 
       - name: Create Release

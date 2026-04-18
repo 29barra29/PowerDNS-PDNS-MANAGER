@@ -1,14 +1,14 @@
 blank_issues_enabled: false
 contact_links:
   - name: Sicherheitsprobleme
-    url: mailto:security@dns-manager.example
-    about: Bitte melde Sicherheitsprobleme NICHT öffentlich, sondern per E-Mail
-  - name: Discord Community
-    url: https://discord.gg/dns-manager
-    about: Stelle Fragen und diskutiere mit der Community
-  - name: Dokumentation
-    url: https://github.com/29barra29/dns-manager/wiki
-    about: Schaue zuerst in die Dokumentation
+    url: https://github.com/29barra29/dns-manager/blob/main/SECURITY.md
+    about: Bitte melde Sicherheitsprobleme NICHT öffentlich, sondern dem im SECURITY.md genannten Weg folgen
+  - name: Dokumentation (README)
+    url: https://github.com/29barra29/dns-manager/blob/main/README.md
+    about: Übersicht und häufige Fragen findest du im README
+  - name: Installation & Konfiguration
+    url: https://github.com/29barra29/dns-manager/blob/main/INSTALL.md
+    about: Schritt-für-Schritt-Anleitung für Installation, Update und Reverse-Proxy
   - name: Diskussionen
     url: https://github.com/29barra29/dns-manager/discussions
     about: Für allgemeine Fragen und Diskussionen

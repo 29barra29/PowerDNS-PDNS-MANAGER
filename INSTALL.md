@@ -304,7 +304,7 @@ asyncio.run(reset())
 ## 📚 Weitere Ressourcen
 
 - [GitHub Repository](https://github.com/29barra29/dns-manager)
-- [Wiki / Dokumentation](https://github.com/29barra29/dns-manager/wiki)
+- [README](https://github.com/29barra29/dns-manager/blob/main/README.md)
 - [Issue Tracker](https://github.com/29barra29/dns-manager/issues)
 - [Security Policy](https://github.com/29barra29/dns-manager/security)
 
