@@ -867,7 +867,7 @@ export default function SettingsPage() {
                                             {uploadingLogo && <p className="text-xs text-text-muted mt-1">{t('settings.logoUploading')}</p>}
                                             {profileForm.app_logo_url && (
                                                 <div className="mt-2 flex items-center gap-3">
-                                                    <img src={profileForm.app_logo_url} alt="App logo" className="w-10 h-10 rounded-lg object-cover border border-border" />
+                                                    <img src={profileForm.app_logo_url} alt="App logo" className="w-10 h-10 rounded-lg object-contain bg-bg-secondary border border-border" />
                                                     <button
                                                         type="button"
                                                         onClick={() => setProfileForm({ ...profileForm, app_logo_url: '' })}

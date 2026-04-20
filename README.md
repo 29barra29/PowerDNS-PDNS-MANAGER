@@ -5,7 +5,7 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.3.3-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.3.4-blue.svg)
 
 ---
 
@@ -132,7 +132,7 @@ Manuell auf eine bestimmte Version wechseln:
 ```bash
 cd dns-manager
 git fetch origin --tags --force --prune --prune-tags
-git checkout v2.3.3              # oder: git checkout main && git pull
+git checkout v2.3.4              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
 ```

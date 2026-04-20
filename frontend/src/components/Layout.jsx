@@ -61,7 +61,7 @@ export default function Layout() {
                 <div className="p-5 border-b border-border">
                     <div className="flex items-center gap-3">
                         {appInfo.app_logo_url ? (
-                            <img src={appInfo.app_logo_url} alt="" className="w-9 h-9 rounded-lg object-cover shadow-lg shadow-accent/10" />
+                            <img src={appInfo.app_logo_url} alt="" className="w-9 h-9 rounded-lg object-contain bg-bg-secondary shadow-lg shadow-accent/10" />
                         ) : (
                             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center shadow-lg shadow-accent/10">
                                 <Shield className="w-5 h-5 text-white" />

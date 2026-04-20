@@ -46,7 +46,7 @@ fi
 if [ "$LANG_APP" = "en" ]; then
     M_BANNER_TITLE="DNS Manager - Installation"
     M_CHECK_PREREQ="Checking prerequisites..."
-    M_NO_ROOT="Do not run as root!"
+    M_NO_ROOT="Do not run this installer as root. Use a regular user with sudo rights - Docker commands will use sudo automatically when needed."
     M_DOCKER_MISSING="Docker is not installed!"
     M_DOCKER_INSTALL="Install Docker with: curl -fsSL https://get.docker.com | sh"
     M_DOCKER_FOUND="Docker found"
@@ -95,7 +95,7 @@ if [ "$LANG_APP" = "en" ]; then
 else
     M_BANNER_TITLE="DNS Manager - Automatische Installation"
     M_CHECK_PREREQ="Prüfe Voraussetzungen..."
-    M_NO_ROOT="Bitte nicht als root ausführen!"
+    M_NO_ROOT="Bitte nicht als root ausführen. Nutze einen normalen Benutzer mit sudo-Rechten - Docker-Befehle verwenden sudo automatisch, wenn nötig."
     M_DOCKER_MISSING="Docker ist nicht installiert!"
     M_DOCKER_INSTALL="Installiere Docker mit: curl -fsSL https://get.docker.com | sh"
     M_DOCKER_FOUND="Docker gefunden"

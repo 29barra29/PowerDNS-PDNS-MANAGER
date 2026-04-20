@@ -57,7 +57,7 @@ export default function LoginPage() {
                 {/* Logo */}
                 <div className="text-center mb-8">
                     {appInfo.app_logo_url ? (
-                        <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-cover mx-auto mb-4 shadow-lg shadow-accent/20" />
+                        <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-contain bg-bg-secondary mx-auto mb-4 shadow-lg shadow-accent/20" />
                     ) : (
                         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
                             <Shield className="w-8 h-8 text-white" />

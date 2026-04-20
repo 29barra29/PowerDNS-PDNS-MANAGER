@@ -604,18 +604,19 @@ async def send_test_email(
 ):
     """Send a test email to verify SMTP works end-to-end."""
     from app.services.email_service import get_smtp_settings as _get, send_email
-    
-    settings = await _get(db)
-    
+    from app.services.email_templates import pick_language, test_email
+    from app.core.config import settings as app_settings
+
+    smtp_settings = await _get(db)
+
+    lang = pick_language(admin.preferred_language, app_settings.DEFAULT_LANGUAGE)
+    subject, body_html, body_text = test_email(lang)
+
     try:
-        send_email(
-            settings,
-            data.to_email,
-            "DNS Manager – Test-E-Mail",
-            "<h2>✅ Test erfolgreich!</h2><p>Diese E-Mail wurde vom DNS Manager gesendet.</p><p>Dein SMTP ist korrekt konfiguriert.</p>",
-            "Test erfolgreich! Diese E-Mail wurde vom DNS Manager gesendet."
-        )
-        return {"success": True, "message": f"Test-E-Mail an {data.to_email} gesendet!"}
+        send_email(smtp_settings, data.to_email, subject, body_html, body_text)
+        msg_de = f"Test-E-Mail an {data.to_email} gesendet!"
+        msg_en = f"Test email sent to {data.to_email}!"
+        return {"success": True, "message": msg_de if lang == "de" else msg_en}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

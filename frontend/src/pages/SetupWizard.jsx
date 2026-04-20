@@ -170,7 +170,7 @@ export default function SetupWizard() {
                 <Shield className="w-8 h-8 text-white" />
               </div>
             ) : (
-              <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-cover mx-auto mb-4 shadow-lg shadow-accent/20" />
+              <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-contain bg-bg-secondary mx-auto mb-4 shadow-lg shadow-accent/20" />
             )}
             <h1 className="text-3xl font-bold text-text-primary mb-2">
               {appInfo.app_name || t('setup.welcomeTitle')}

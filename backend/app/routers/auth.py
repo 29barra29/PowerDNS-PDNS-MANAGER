@@ -271,20 +271,19 @@ async def forgot_password(
     reset_url = f"{base_url.rstrip('/')}/reset-password?token={token}"
 
     from app.services.email_service import get_smtp_settings, send_email
+    from app.services.email_templates import pick_language, password_reset
     smtp = await get_smtp_settings(db)
     if not smtp.get("enabled") or not smtp.get("host"):
         logger.warning("SMTP not configured - cannot send password reset email")
         return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
 
-    subject = "Passwort zurücksetzen – DNS Manager"
-    body_html = f"""
-    <p>Hallo {user.display_name or user.username},</p>
-    <p>du hast eine Zurücksetzung deines Passworts angefordert.</p>
-    <p>Klicke auf den folgenden Link, um ein neues Passwort zu setzen (der Link ist 1 Stunde gültig):</p>
-    <p><a href="{reset_url}">{reset_url}</a></p>
-    <p>Falls du das nicht warst, ignoriere diese E-Mail.</p>
-    """
-    body_text = f"Passwort zurücksetzen: {reset_url}"
+    # Sprache: erst Nutzer-Preferenz, sonst App-Default (DEFAULT_LANGUAGE), sonst en.
+    lang = pick_language(user.preferred_language, app_settings.DEFAULT_LANGUAGE)
+    subject, body_html, body_text = password_reset(
+        lang,
+        user.display_name or user.username,
+        reset_url,
+    )
     try:
         send_email(smtp, user.email, subject, body_html, body_text)
     except Exception as e:
