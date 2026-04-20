@@ -248,6 +248,14 @@ asyncio.run(reset())
 
 Hier die letzten beiden Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/dns-manager/releases).
 
+### v2.3.4
+
+Kleines Patch-Release aus einem User-Issue auf GitHub. Drei Kleinigkeiten, kein Breaking Change – `./update.sh` reicht.
+
+- **Logo-Darstellung:** nicht-quadratische Logos (SVG/PNG) wurden durch `object-cover` ins Quadrat geschnitten. Jetzt mit `object-contain`, das Seitenverhältnis bleibt erhalten – überall, wo das Logo auftaucht (Sidebar, Login, Register, Forgot/Reset-Password, Setup-Wizard, Settings-Vorschau).
+- **E-Mail-Sprache:** Passwort-Reset- und Test-Mail waren hart auf Deutsch. Jetzt folgen beide der Sprache des jeweiligen Nutzers (`preferred_language` im Profil), dann `DEFAULT_LANGUAGE` aus der `.env`, dann Englisch. Neues Modul `backend/app/services/email_templates.py` – weitere Sprachen landen dort zentral.
+- **Installer-Hinweis:** die Meldung „Do not run as root" / „Bitte nicht als root ausführen" erklärt jetzt selbst, was man stattdessen tun soll (normaler User mit sudo-Rechten; Docker-Befehle nutzen `sudo` automatisch, wenn nötig).
+
 ### v2.3.3
 
 Hauptsächlich Sicherheits- und Aufräumarbeit, keine sichtbaren neuen Features. Bestehende Installationen können einfach `./update.sh` laufen lassen, ohne dass etwas in der DB anders wird.
@@ -259,13 +267,6 @@ Hauptsächlich Sicherheits- und Aufräumarbeit, keine sichtbaren neuen Features.
 - **Setup-Wizard:** fragt jetzt nach HTTPS-Reverse-Proxy und setzt `AUTH_COOKIE_SECURE` entsprechend, schreibt die neuen Variablen (`AUTH_COOKIE_*`, `ALLOWED_ORIGINS`, `DOCS_ENABLED`) automatisch mit, setzt `chmod 600` auf die `.env`. Das alte verwirrende `APP_VERSION` in der `.env` ist raus – die Version kommt nur noch aus der `VERSION`-Datei.
 - **`install.sh`-Fallback** (wenn `setup.sh` fehlt) generiert jetzt korrekt Passwörter und JWT-Secret. Vorher konnten Platzhalter im Worst Case stehen bleiben.
 - **`update.sh`** zeigt vorher → nachher die Version und warnt, falls `JWT_SECRET_KEY` in der `.env` fehlt.
-
-### v2.3.2
-
-- Update-Check gegen GitHub (`releases/latest`, sonst neuester Tag) alle ca. 30 Minuten; bei neuerer Version: roter Hinweis in der Sidebar (nur Admin). Öffnet man den Reiter „Updates", gilt die Version als gesehen. Session-Check im selben Takt (`getMe`).
-- Docker-Volume `backend_uploads` für `static_new/uploads` – Custom-Logo überlebt Image-Updates.
-- Zusätzliche Record-Typen (ALIAS, DNAME, SVCB/HTTPS, DNSSEC-RRs) als RDATA mit Hilfetexten und Beispielen, gleich auch in den Vorlagen. Layout-Fixes (Zone-Name mit FQDN-Vorschau, SRV-Zeilen).
-- `SECURITY.md` um v2.3.x ergänzt, Frontend-ESLint bereinigt.
 
 ---
 
