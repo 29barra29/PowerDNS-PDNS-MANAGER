@@ -9,14 +9,15 @@ import hu from './locales/hu.json'
 
 // Zentrale Sprachliste – einmal hier pflegen, in UI ueberall importieren.
 // flag = Unicode-Flag-Emoji (kein externes Asset noetig).
-// "wip" markiert Sprachen, deren Locale noch nicht uebersetzt ist (faellt per fallbackLng auf en).
+// Das "wip"-Flag war fuer Skeleton-Sprachen gedacht (faellt per fallbackLng auf en);
+// seit v2.3.5 sind alle Sprachen uebersetzt, deshalb nicht mehr noetig.
 export const LANGUAGES = [
   { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
   { code: 'en', label: 'English', flag: '🇬🇧' },
-  { code: 'sr', label: 'Srpski', flag: '🇷🇸', wip: true },
-  { code: 'hr', label: 'Hrvatski', flag: '🇭🇷', wip: true },
-  { code: 'bs', label: 'Bosanski', flag: '🇧🇦', wip: true },
-  { code: 'hu', label: 'Magyar', flag: '🇭🇺', wip: true },
+  { code: 'sr', label: 'Srpski', flag: '🇷🇸' },
+  { code: 'hr', label: 'Hrvatski', flag: '🇭🇷' },
+  { code: 'bs', label: 'Bosanski', flag: '🇧🇦' },
+  { code: 'hu', label: 'Magyar', flag: '🇭🇺' },
 ]
 
 const resources = {

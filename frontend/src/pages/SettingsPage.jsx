@@ -755,19 +755,21 @@ export default function SettingsPage() {
             )}
 
             {/* Tabs */}
-            <div className="flex gap-1 p-1 bg-bg-secondary rounded-xl border border-border">
+            {/* overflow-x-auto + shrink-0/whitespace-nowrap auf den Buttons:
+                auf Mobile scrollt die Tab-Leiste selbst, nicht die ganze Seite. */}
+            <div className="flex gap-1 p-1 bg-bg-secondary rounded-xl border border-border overflow-x-auto">
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap shrink-0 ${activeTab === tab.id
                             ? 'bg-accent/20 text-accent-light'
                             : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
                             }`}
                     >
                         <tab.icon className="w-4 h-4 shrink-0" />
-                        <span className="flex-1 text-left">{t(tab.labelKey)}</span>
+                        <span className="text-left">{t(tab.labelKey)}</span>
                         {tab.id === 'updates' && updateAvailable ? (
                             <span
                                 className="w-2 h-2 rounded-full bg-red-500 shrink-0"
@@ -1685,9 +1687,9 @@ export default function SettingsPage() {
             {/* =================== SERVERS TAB =================== */}
             {activeTab === 'servers' && (
                 <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <h2 className="text-lg font-semibold text-text-primary">{t('settingsMore.powerDnsServers')}</h2>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-wrap">
                             <button onClick={loadServers} className="flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-colors border border-border">
                                 <RefreshCw className="w-4 h-4" /> {t('settingsMore.refresh')}
                             </button>
@@ -1777,12 +1779,12 @@ export default function SettingsPage() {
             {/* =================== TEMPLATES TAB =================== */}
             {activeTab === 'templates' && (
                 <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                             <h2 className="text-lg font-semibold text-text-primary">{t('settings.templatesTitle')}</h2>
                             <p className="text-sm text-text-muted">{t('settings.templatesSubtitle')}</p>
                         </div>
-                        <button onClick={openTemplateAdd} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all shrink-0">
+                        <button onClick={openTemplateAdd} className="self-start sm:self-auto flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all shrink-0">
                             <Plus className="w-4 h-4" /> {t('templates.newTemplate')}
                         </button>
                     </div>
