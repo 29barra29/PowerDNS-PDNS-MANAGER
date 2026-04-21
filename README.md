@@ -5,7 +5,7 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.3.4-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.3.5-blue.svg)
 
 ---
 
@@ -25,8 +25,11 @@ Ein Video-Walkthrough (Installation, ersten Server anbinden, Zone + DNSSEC anleg
 - **Benutzer mit zwei Rollen** – Admin sieht alles, Benutzer nur die ihm zugewiesenen Zonen.
 - **Audit-Log** – jede relevante Änderung mit Zeitstempel und User.
 - **SMTP** – optional für Passwort-Reset und Benachrichtigungen, mit Test-Mail-Funktion.
+- **Welcome-Mail** – optional bei Selbst-Registrierung, Subject und Body mit Platzhaltern (`{username}`, `{login_url}`, …) frei editierbar, Live-Vorschau und Test-Senden in den Einstellungen.
+- **Captcha** – optional gegen Bots/Brute-Force auf Login, Registrierung und Passwort-Reset. Cloudflare Turnstile, hCaptcha oder Google reCAPTCHA v2; Site-Key + Secret werden im Admin-Panel gepflegt, Verifikation läuft serverseitig.
 - **Branding** – eigener App-Name, Tagline und Logo (z. B. Firmenlogo); Logo bleibt bei Updates über das Volume `backend_uploads` erhalten.
-- **DE/EN-Oberfläche** – Sprachumschalter unten links, Default in der `.env` einstellbar.
+- **Mehrsprachige Oberfläche** – Sprach-Dropdown mit Flaggen, aktuell Deutsch, Englisch, Serbisch, Kroatisch, Bosnisch und Ungarisch. Default in der `.env` einstellbar. Fehlt mal ein Key, fällt die UI automatisch auf Englisch zurück; weitere Sprachen kommen per PR an `frontend/src/locales/<code>.json`.
+- **Mobile-tauglich** – einklappbare Sidebar mit Hamburger-Menü, Tabellen scrollen horizontal statt das Layout zu sprengen.
 
 ## Was es bewusst nicht macht
 
@@ -132,7 +135,7 @@ Manuell auf eine bestimmte Version wechseln:
 ```bash
 cd dns-manager
 git fetch origin --tags --force --prune --prune-tags
-git checkout v2.3.4              # oder: git checkout main && git pull
+git checkout v2.3.5              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
 ```
@@ -248,6 +251,18 @@ asyncio.run(reset())
 
 Hier die letzten beiden Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/dns-manager/releases).
 
+### v2.3.5
+
+Sammel-Release aus User-Feedback (Issue von `insxa`) plus zwei größere Features (Captcha + Welcome-Mail). Kein Breaking Change – `./update.sh` reicht; Settings und DB bleiben erhalten. Captcha und Welcome-Mail sind beide standardmäßig aus, alte Installationen verhalten sich unverändert.
+
+- **Captcha (optional):** Cloudflare Turnstile, hCaptcha und Google reCAPTCHA v2. Schützt Login, Registrierung und Passwort-Reset gegen Bots/Brute-Force. Provider und Site-/Secret-Keys werden in `Settings → Sicherheit` gepflegt, der Site-Key kommt über `/api/app-info` ins Frontend, das Secret bleibt im Backend, Token-Verifikation läuft serverseitig direkt gegen die Provider-API. Live-Test im Settings-Tab zeigt sofort, ob die Keys zusammenpassen.
+- **Welcome-Mail (optional):** schickt nach erfolgreicher Registrierung eine E-Mail. Subject und Body sind frei editierbar mit Platzhaltern (`{username}`, `{display_name}`, `{email}`, `{app_name}`, `{login_url}`), Live-Vorschau im Settings-Tab, Test-Senden mit dem Admin-Konto als Beispiel. Versand läuft als Background-Task, scheitert kein Register, wenn SMTP gerade hakt. Default-Templates in DE/EN/SR/HR/BS/HU eingebaut.
+- **Frontend komplett lokalisiert:** alle restlichen deutschen Strings in der Oberfläche (HTML-Title, Meta-Description, Formular-Placeholder wie „Firma GmbH" / „Musterstraße" / „Berlin" / „Deutschland", Validierungs-Meldungen für Domain-, IP-, Hostnamen-, Zahl-, Hex- und CAA-Felder) laufen jetzt über `i18n.t()`. In englischer Oberfläche steht keine deutsche Restzeile mehr.
+- **Sprach-Dropdown mit Flaggen:** der Schalter ersetzt die alte `DE | EN`-Buttonleiste. Sprache wird in `localStorage` gespeichert (überlebt Logout/Reload), Browser-Sprache wird beim ersten Aufruf erkannt, `<html lang="…">` zieht live mit (SEO/Screenreader).
+- **Mobile-Layout:** Sidebar klappt unter `md` weg und öffnet per Hamburger oben links inkl. Backdrop und ESC-Handling. Datentabellen (Zonen, Records, Suche, Audit-Log) scrollen jetzt horizontal in einem `overflow-x-auto`-Wrapper, statt die Seite zu sprengen.
+- **Document-Title dynamisch:** `document.title` zieht den eingestellten App-Namen aus `/api/app-info` – das eigene Branding ist auch im Browser-Tab sichtbar.
+- **6 Sprachen (DE/EN/SR/HR/BS/HU):** SR, HR, BS und HU sind mit dieser Version komplett übersetzt (~90 %; Rest sind bewusst englische Standard-Akronyme wie `DNSSEC`/`TTL`, Markennamen und Beispiel-Placeholder). Fehlt mal ein Key, fällt die UI automatisch auf Englisch zurück. Pflege per `node scripts/sync-locales.mjs` (siehe „Übersetzungen pflegen" unten).
+
 ### v2.3.4
 
 Kleines Patch-Release aus einem User-Issue auf GitHub. Drei Kleinigkeiten, kein Breaking Change – `./update.sh` reicht.
@@ -274,14 +289,44 @@ Hauptsächlich Sicherheits- und Aufräumarbeit, keine sichtbaren neuen Features.
 
 PRs sind willkommen, bei größeren Sachen vorher gerne ein Issue. Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### Eine neue Sprache beisteuern
+
+Aktuell drin: Deutsch, Englisch, Serbisch, Kroatisch, Bosnisch, Ungarisch. Weitere kommen gerne als PR – Ablauf:
+
+1. `frontend/src/locales/en.json` als Vorlage kopieren, z. B. zu `it.json`.
+2. Werte übersetzen, Keys nicht anfassen.
+3. In `frontend/src/i18n.js` einen Eintrag in `LANGUAGES` (Code, Label, Flag-Emoji) und im `resources`-Block ergänzen.
+4. PR aufmachen.
+
+Fehlt mal ein Key, ist das nicht schlimm – die UI fällt automatisch auf Englisch zurück.
+
 ### Versionspflege (für Maintainer)
 
 Die App-Version steht **ausschließlich** in der Datei `VERSION` im Projektroot. Backend, API und UI lesen sie von dort. Vor einem Release:
 
 ```bash
-echo "2.3.4" > VERSION
+echo "2.3.5" > VERSION
 ./scripts/update-readme-from-version.sh   # Badge + git-checkout-Beispiele anpassen
 ```
+
+### Übersetzungen pflegen
+
+`frontend/src/locales/en.json` ist die *Source of Truth* – jede UI-Zeichenkette landet dort zuerst. Die anderen Sprachen (`de`, `sr`, `hr`, `bs`, `hu`) liegen daneben.
+
+Wenn du in einem PR neue Keys einbaust:
+
+```bash
+node scripts/sync-locales.mjs
+```
+
+Das Script:
+
+- ergänzt fehlende Keys in allen anderen Sprachen mit dem englischen Wert (Fallback),
+- entfernt Keys, die nicht mehr in `en.json` existieren,
+- listet pro Datei auf, was hinzugefügt/entfernt wurde,
+- lässt bestehende Übersetzungen unangetastet.
+
+Danach `git diff frontend/src/locales/` prüfen und committen. Selber muss man so nur `en.json` (und optional `de.json`) pflegen – fehlende Übersetzungen in den anderen Sprachen werden zur Laufzeit über `fallbackLng: 'en'` automatisch englisch angezeigt, bis jemand einen Übersetzungs-PR schickt.
 
 ### Lokale Entwicklung ohne Docker
 

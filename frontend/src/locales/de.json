@@ -8,7 +8,15 @@
     "success": "Erfolgreich",
     "close": "Schließen",
     "copied": "In die Zwischenablage kopiert",
-    "copy": "Kopieren"
+    "copy": "Kopieren",
+    "appLoading": "Lade DNS Manager...",
+    "checkingAuth": "Anmeldung wird geprüft...",
+    "send": "Senden"
+  },
+  "auth": {
+    "captchaRequired": "Bitte zuerst das Captcha lösen.",
+    "captchaExpired": "Captcha abgelaufen – bitte erneut lösen.",
+    "captchaError": "Das Captcha konnte nicht geladen werden. Bitte Seite neu laden."
   },
   "login": {
     "title": "Melde dich an, um fortzufahren",
@@ -23,8 +31,11 @@
   "register": {
     "title": "Neues Konto erstellen",
     "username": "Benutzername",
+    "usernamePlaceholder": "benutzername",
     "email": "E-Mail",
+    "emailPlaceholder": "mail@beispiel.de",
     "displayName": "Anzeigename",
+    "displayNamePlaceholder": "Max Mustermann",
     "password": "Passwort",
     "passwordConfirm": "Passwort bestätigen",
     "submit": "Registrieren",
@@ -38,6 +49,7 @@
   "forgot": {
     "title": "Passwort zurücksetzen",
     "emailOrUser": "E-Mail oder Benutzername",
+    "emailOrUserPlaceholder": "mail@beispiel.de oder benutzername",
     "submit": "Link zum Zurücksetzen senden",
     "submitting": "Wird gesendet...",
     "backToLogin": "Zurück zur Anmeldung",
@@ -82,7 +94,10 @@
     "confirmPlaceholder": "Passwort bestätigen",
     "registerFailed": "Registrierung fehlgeschlagen",
     "passwordsMismatch": "Passwörter stimmen nicht überein",
-    "passwordTooShort": "Passwort muss mindestens 8 Zeichen haben"
+    "passwordTooShort": "Passwort muss mindestens 8 Zeichen haben",
+    "adminPlaceholder": "Administrator",
+    "appPasswordPlaceholder": "App-spezifisches Passwort",
+    "smtpUserPlaceholder": "deine-email@gmail.com"
   },
   "layout": {
     "overview": "Übersicht",
@@ -95,7 +110,9 @@
     "newVersionDot": "Neue Version auf GitHub verfügbar",
     "admin": "Admin",
     "user": "Benutzer",
-    "logout": "Abmelden"
+    "logout": "Abmelden",
+    "openMenu": "Menü öffnen",
+    "closeMenu": "Menü schließen"
   },
   "settings": {
     "title": "Einstellungen",
@@ -116,13 +133,30 @@
     "phone": "Telefon",
     "phoneHint": "Mind. eine Ziffer, max. 25 Zeichen (z. B. +49 123 456789)",
     "company": "Firma / Organisation",
+    "companyPlaceholder": "Firma GmbH",
     "street": "Straße & Hausnummer",
+    "streetPlaceholder": "Musterstraße 1",
     "postalCode": "PLZ",
     "postalCodeHint": "Max. 20 Zeichen (international)",
     "postalCodePlaceholder": "12345 oder SW1A 1AA",
     "city": "Ort",
+    "cityPlaceholder": "Berlin",
     "country": "Land",
+    "countryPlaceholder": "Deutschland",
     "dateOfBirth": "Geburtsdatum",
+    "adminUsernamePlaceholder": "admin",
+    "displayNamePlaceholder": "Administrator",
+    "systemTitlePlaceholder": "DNS Manager",
+    "taglinePlaceholder": "PowerDNS Admin Panel",
+    "creatorPlaceholder": "Created by deinem Team",
+    "nameserverPlaceholder": "Nameserver 1",
+    "serverDescriptionPlaceholder": "Hetzner Server DE, Hauptserver…",
+    "smtpFromEmailPlaceholder": "noreply@meinedomain.de",
+    "smtpFromNamePlaceholder": "DNS Manager",
+    "pdnsApiUrlPlaceholder": "http://192.168.1.10:8081",
+    "apiKeyKeepPlaceholder": "••••••••  (leer lassen, um den bestehenden Schlüssel zu behalten)",
+    "apiKeyPlaceholder": "dein-api-key",
+    "revealExistingApiKey": "Bestehenden API-Key anzeigen (wird im Audit-Log vermerkt)",
     "myZones": "Meine Zonen",
     "myZonesHint": "Dir zugewiesene Zonen (Zuweisung durch Administrator). Bearbeitung unter „Meine Zonen“.",
     "noZonesAssigned": "Keine Zonen zugewiesen",
@@ -149,6 +183,7 @@
     "logoUploadedSuccess": "Logo erfolgreich hochgeladen.",
     "language": "Sprache",
     "languageHint": "Oberflächensprache (für alle Nutzer änderbar)",
+    "languageWip": "Übersetzung in Arbeit – fehlende Texte fallen auf Englisch zurück.",
     "profileSaveSuccess": "Profil und Einstellungen erfolgreich aktualisiert!",
     "passwordMinLength": "Das neue Passwort muss mindestens 8 Zeichen lang sein!",
     "passwordChangeSuccess": "Passwort erfolgreich geändert!",
@@ -196,7 +231,51 @@
     "aboutText": "DNS Manager ist ein selbst gehostetes Admin-Panel für PowerDNS.",
     "writeToServerHint": "Zonen und Änderungen werden auf diesem Server geschrieben. Bei gemeinsamer Datenbank nur bei einem Server aktivieren.",
     "add": "Hinzufügen",
-    "phoneTitle": "Falls ausgefüllt: mindestens eine Ziffer (internationale Formate erlaubt)"
+    "phoneTitle": "Falls ausgefüllt: mindestens eine Ziffer (internationale Formate erlaubt)",
+    "captcha": {
+      "tab": "Sicherheit",
+      "title": "Captcha",
+      "subtitle": "Schützt Login, Registrierung und Passwort-Reset gegen Bots und Brute-Force-Versuche.",
+      "provider": "Anbieter",
+      "providerNone": "Aus (kein Captcha)",
+      "providerTurnstile": "Cloudflare Turnstile",
+      "providerHCaptcha": "hCaptcha",
+      "providerRecaptcha": "Google reCAPTCHA v2",
+      "siteKey": "Site-Key (öffentlich)",
+      "siteKeyHint": "Wird im Browser sichtbar – das Captcha-Widget braucht ihn zum Anzeigen.",
+      "secretKey": "Secret-Key (privat)",
+      "secretKeyHint": "Bleibt auf dem Server. Wird zum Verifizieren des Tokens beim Anbieter genutzt.",
+      "secretKeep": "leer lassen, um den bestehenden zu behalten",
+      "secretEnter": "Secret-Key einfügen",
+      "saveSuccess": "Captcha-Einstellungen gespeichert",
+      "testTitle": "Live-Test",
+      "testSubtitle": "Captcha lösen und prüfen, ob Site-Key und Secret-Key zusammenpassen.",
+      "testButton": "Token verifizieren",
+      "testNoToken": "Bitte zuerst das Captcha lösen.",
+      "docsTurnstile": "Kostenlos, datenschutzfreundlich und ohne Tracking. Site im Cloudflare-Dashboard anlegen:",
+      "docsHCaptcha": "Free-Tier verfügbar, DSGVO-freundlich. Site-Key im hCaptcha-Dashboard anlegen:",
+      "docsRecaptcha": "Google reCAPTCHA v2 (klassisches „Ich bin kein Roboter“). Achtung: sammelt Daten von Besuchern. Site hier anlegen:"
+    },
+    "welcomeMail": {
+      "tab": "Willkommens-Mail",
+      "title": "Willkommens-E-Mail",
+      "subtitle": "Sendet neuen Nutzern direkt nach der Registrierung eine E-Mail.",
+      "enabled": "Willkommens-Mail nach Registrierung versenden",
+      "subject": "Betreff",
+      "subjectHint": "Platzhalter sind erlaubt – leer lassen für den Sprach-Default.",
+      "body": "Inhalt",
+      "bodyHint": "Reiner Text oder HTML. Reiner Text wird automatisch in Absätze gepackt. Leer lassen für den Sprach-Default.",
+      "placeholdersTitle": "Verfügbare Platzhalter:",
+      "preview": "Live-Vorschau",
+      "previewSubject": "Betreff",
+      "previewBody": "Inhalt",
+      "previewEmpty": "(leer)",
+      "saveSuccess": "Willkommens-Mail-Einstellungen gespeichert",
+      "testTitle": "Test-E-Mail senden",
+      "testSubtitle": "Sendet die Willkommens-Mail mit deinem Konto als Beispiel.",
+      "testHint": "Der Test nutzt deinen Benutzernamen, Anzeigenamen und die konfigurierte Basis-URL als Platzhalter-Werte.",
+      "testFailed": "Versand fehlgeschlagen."
+    }
   },
   "dashboard": {
     "welcome": "Willkommen, {{name}}!",
@@ -268,7 +347,9 @@
     "zonesAssigned": "Zonen für „{{name}}“ aktualisiert",
     "passwordPolicy": "Mindestens 8 Zeichen, maximal 128.",
     "usernameHint": "Erlaubt sind Buchstaben, Ziffern sowie . _ -",
-    "usernamePattern": "Nur Buchstaben, Ziffern, Punkt, Unterstrich, Bindestrich"
+    "usernamePattern": "Nur Buchstaben, Ziffern, Punkt, Unterstrich, Bindestrich",
+    "usernamePlaceholder": "benutzername",
+    "displayNamePlaceholder": "Max Mustermann"
   },
   "search": {
     "title": "Suche",
@@ -326,7 +407,15 @@
     "removeNameserver": "Diesen Nameserver entfernen",
     "nameserverListHint": "Pro Zeile ein Nameserver. Trailing-Punkt wird automatisch ergänzt.",
     "dnssecRegistrarTitle": "Wichtig: DS-Record beim Registrar eintragen",
-    "dnssecRegistrarBody": "Es werden KSK + ZSK erzeugt. Damit DNSSEC wirklich greift, musst du danach den DS-Record bei deinem Domain-Registrar eintragen. Den DS findest du nach dem Anlegen unter „Zonen-Detail → DNSSEC“."
+    "dnssecRegistrarBody": "Es werden KSK + ZSK erzeugt. Damit DNSSEC wirklich greift, musst du danach den DS-Record bei deinem Domain-Registrar eintragen. Den DS findest du nach dem Anlegen unter „Zonen-Detail → DNSSEC“.",
+    "enterDomainName": "Bitte einen Domainnamen eingeben.",
+    "reverseZoneCreatedAs": "Reverse-Zone: wird als {{zone}} angelegt.",
+    "reverseZoneDetected": "Reverse-Zone erkannt – wird so übernommen.",
+    "invalidDomainName": "„{{name}}\" ist kein gültiger Domainname (z. B. meinedomain.de).",
+    "willBeCreatedAs": "Wird angelegt als: {{name}}",
+    "invalidNameserver": "Kein gültiger Nameserver (z. B. ns1.example.com).",
+    "invalidNameserverNamed": "Nameserver ungültig: {{name}}",
+    "serverReportedError": "Ein Server hat einen Fehler gemeldet."
   },
   "zoneDetail": {
     "back": "Zurück",
@@ -454,7 +543,22 @@
     "rdataPhSPF": "v=spf1 a mx ~all",
     "rdataPhHTTPS": "0 pool.example.net. alpn=h2",
     "rdataPhSVCB": "0 pool.example.net. port=443",
-    "rdataPhOPENPGPKEY": "mQCNAz… (Base64)"
+    "rdataPhOPENPGPKEY": "mQCNAz… (Base64)",
+    "enterIpv4": "Bitte IPv4-Adresse eingeben.",
+    "invalidIpv4": "Keine gültige IPv4 (z. B. 93.184.216.34).",
+    "enterIpv6": "Bitte IPv6-Adresse eingeben.",
+    "invalidIpv6": "Keine gültige IPv6 (z. B. 2001:db8::1).",
+    "enterHostname": "Bitte einen Hostnamen angeben.",
+    "invalidHostname": "Kein gültiger Hostname (z. B. mail.example.com).",
+    "enterNumber": "Bitte eine Zahl eingeben.",
+    "onlyDigits": "Nur ganze Zahlen erlaubt.",
+    "enterHex": "Bitte einen Hex-Wert eingeben.",
+    "onlyHex": "Nur 0-9 und a-f erlaubt.",
+    "enterText": "Bitte einen Text angeben.",
+    "tagMissing": "Tag fehlt.",
+    "hexLengthEven": "Länge sollte gerade sein.",
+    "txtTooLong": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.",
+    "unusualCaaTag": "Ungewöhnlicher Tag „{{tag}}\" (üblich: {{common}})."
   },
   "settingsMore": {
     "updatesScriptHint": "Per Git (fetch + neuestes Release-Tag v*, sonst Pull auf main) wird der Code aktualisiert, danach Backend-Image neu bauen und Container starten. Voraussetzung: Ordner mit .git (install.sh oder git clone). Ein nacktes git pull reicht nach Tag-Installation oft nicht – dafür ist update.sh da.",

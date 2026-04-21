@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import api from './api'
 import i18n from './i18n'
 import Layout from './components/Layout'
@@ -18,6 +19,7 @@ import SettingsPage from './pages/SettingsPage'
 import { UpdateAvailabilityProvider } from './context/UpdateAvailabilityContext'
 
 function ProtectedRoute({ children }) {
+  const { t } = useTranslation()
   const [authChecked, setAuthChecked] = useState(api.isLoggedIn())
   const [authorized, setAuthorized] = useState(api.isLoggedIn())
 
@@ -44,7 +46,7 @@ function ProtectedRoute({ children }) {
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-bg-primary flex items-center justify-center">
-        <div className="text-text-muted">Anmeldung wird geprüft...</div>
+        <div className="text-text-muted">{t('common.checkingAuth')}</div>
       </div>
     )
   }
@@ -55,14 +57,18 @@ function ProtectedRoute({ children }) {
 }
 
 export default function App() {
+  const { t } = useTranslation()
   const [setupStatus, setSetupStatus] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Apply default language from server (set during install/setup)
+    // Apply default language from server (set during install/setup) and sync document.title
     fetch('/api/v1/settings/app-info')
       .then(r => r.json())
-      .then(data => { if (data.default_language && data.default_language !== i18n.language) i18n.changeLanguage(data.default_language) })
+      .then(data => {
+        if (data.default_language && data.default_language !== i18n.language) i18n.changeLanguage(data.default_language)
+        if (data.app_name) document.title = data.app_name
+      })
       .catch(() => {})
   }, [])
 
@@ -88,7 +94,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white text-xl">Lade DNS Manager...</div>
+        <div className="text-white text-xl">{t('common.appLoading')}</div>
       </div>
     )
   }

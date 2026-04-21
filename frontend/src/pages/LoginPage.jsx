@@ -1,17 +1,21 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react'
 import api from '../api'
+import LanguageDropdown from '../components/LanguageDropdown'
+import CaptchaWidget from '../components/CaptchaWidget'
 
 export default function LoginPage() {
-    const { t, i18n } = useTranslation()
+    const { t } = useTranslation()
     const navigate = useNavigate()
     const [username, setUsername] = useState('')
     const [password, setPassword] = useState('')
     const [showPw, setShowPw] = useState(false)
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    const [captchaToken, setCaptchaToken] = useState('')
+    const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
         app_name: 'DNS Manager',
         app_version: '',
@@ -20,22 +24,37 @@ export default function LoginPage() {
         app_tagline: 'PowerDNS Admin Panel',
         app_creator: '',
         app_logo_url: '',
+        captcha_provider: 'none',
+        captcha_site_key: '',
     })
 
     React.useEffect(() => {
         api.getAppInfo().then(setAppInfo).catch(console.error)
     }, [])
 
+    const captchaActive = appInfo.captcha_provider && appInfo.captcha_provider !== 'none' && appInfo.captcha_site_key
+
     const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
+
+        if (captchaActive && !captchaToken) {
+            setError(t('auth.captchaRequired'))
+            return
+        }
         setLoading(true)
 
         try {
-            await api.login(username, password)
+            await api.login(username, password, captchaToken || null)
             navigate('/')
         } catch (err) {
             setError(err.message)
+            // Token ist nach jedem Submit verbraucht - Widget zuruecksetzen,
+            // damit der User es bei einem zweiten Versuch neu loesen kann.
+            if (captchaActive) {
+                setCaptchaToken('')
+                captchaRef.current?.reset()
+            }
         } finally {
             setLoading(false)
         }
@@ -48,11 +67,8 @@ export default function LoginPage() {
             <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl" />
 
             <div className="glass-card p-8 w-full max-w-md relative z-10">
-                {/* Language switcher */}
-                <div className="absolute top-4 right-4 flex gap-1 text-xs">
-                    <button type="button" onClick={() => i18n.changeLanguage('de')} className={`px-2 py-1 rounded ${i18n.language === 'de' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>DE</button>
-                    <span className="text-text-muted">|</span>
-                    <button type="button" onClick={() => i18n.changeLanguage('en')} className={`px-2 py-1 rounded ${i18n.language === 'en' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>EN</button>
+                <div className="absolute top-4 right-4">
+                    <LanguageDropdown />
                 </div>
                 {/* Logo */}
                 <div className="text-center mb-8">
@@ -110,9 +126,20 @@ export default function LoginPage() {
                         </div>
                     </div>
 
+                    {captchaActive && (
+                        <CaptchaWidget
+                            ref={captchaRef}
+                            provider={appInfo.captcha_provider}
+                            siteKey={appInfo.captcha_site_key}
+                            onToken={setCaptchaToken}
+                            onExpire={() => setCaptchaToken('')}
+                            onError={() => setCaptchaToken('')}
+                        />
+                    )}
+
                     <button
                         type="submit"
-                        disabled={loading}
+                        disabled={loading || (captchaActive && !captchaToken)}
                         className="w-full py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                         {loading ? (

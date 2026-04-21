@@ -82,7 +82,8 @@ export default function SearchPage() {
                 <div className="flex items-center justify-center h-32"><Loader2 className="w-6 h-6 text-accent animate-spin" /></div>
             ) : results.length > 0 ? (
                 <div className="glass-card overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[640px]">
                         <thead>
                             <tr className="border-b border-border">
                                 <th className="text-left p-3 text-text-muted font-medium text-xs">{t('search.name')}</th>
@@ -102,6 +103,7 @@ export default function SearchPage() {
                             ))}
                         </tbody>
                     </table>
+                  </div>
                 </div>
             ) : searched ? (
                 <div className="text-center py-12 text-text-muted">

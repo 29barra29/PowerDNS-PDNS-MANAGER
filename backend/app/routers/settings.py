@@ -68,6 +68,8 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
     from app.models.models import SystemSetting
     from app.core.config import settings
 
+    from app.services import captcha as captcha_service
+
     result = await db.execute(
         select(SystemSetting.key, SystemSetting.value).where(
             SystemSetting.key.in_((
@@ -77,10 +79,21 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
                 "app_tagline",
                 "app_creator",
                 "app_logo_url",
+                captcha_service.KEY_PROVIDER,
+                captcha_service.KEY_SITE_KEY,
             ))
         )
     )
     rows = {r[0]: r[1] for r in result.all()}
+
+    captcha_provider = (rows.get(captcha_service.KEY_PROVIDER) or captcha_service.PROVIDER_NONE).strip().lower()
+    if captcha_provider not in captcha_service.PROVIDERS:
+        captcha_provider = captcha_service.PROVIDER_NONE
+    captcha_site_key = (rows.get(captcha_service.KEY_SITE_KEY) or "").strip()
+    # Wenn kein Site-Key gepflegt ist, ist Captcha effektiv aus - sonst koennte
+    # der Browser nur ein leeres Widget rendern und der Login waere blockiert.
+    if not captcha_site_key:
+        captcha_provider = captcha_service.PROVIDER_NONE
 
     return {
         "app_name": rows.get("app_name") or settings.APP_NAME,
@@ -91,6 +104,9 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
         "app_creator": (rows.get("app_creator") or "").strip() or "Created by GemTec Games • Barra",
         "app_logo_url": (rows.get("app_logo_url") or "").strip() or None,
         "default_language": (settings.DEFAULT_LANGUAGE or "").strip() or "de",
+        # Public Captcha-Info - das Secret bleibt im Backend.
+        "captcha_provider": captcha_provider,
+        "captcha_site_key": captcha_site_key,
     }
 
 
@@ -617,6 +633,203 @@ async def send_test_email(
         msg_de = f"Test-E-Mail an {data.to_email} gesendet!"
         msg_en = f"Test email sent to {data.to_email}!"
         return {"success": True, "message": msg_de if lang == "de" else msg_en}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ========================
+# Captcha Settings
+# ========================
+class CaptchaSettings(BaseModel):
+    provider: str = Field(default="none", description="none | turnstile | hcaptcha | recaptcha")
+    site_key: str = Field(default="", max_length=500, description="Public Site-Key (im Browser sichtbar)")
+    # secret_key=None heisst "nicht aendern" (Pattern wie bei den PowerDNS-API-Keys),
+    # secret_key="" loescht den Schluessel.
+    secret_key: Optional[str] = Field(default=None, max_length=500, description="Privater Schluessel - leer lassen, um den bestehenden zu behalten")
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, v: str) -> str:
+        from app.services.captcha import PROVIDERS
+        v = (v or "none").strip().lower()
+        if v not in PROVIDERS:
+            raise ValueError(f"Unbekannter Provider. Erlaubt: {sorted(PROVIDERS)}")
+        return v
+
+
+@router.get("/captcha")
+async def get_captcha_settings(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Aktuelle Captcha-Konfiguration. Das Secret wird maskiert."""
+    from app.services.captcha import get_captcha_settings as _get
+    s = await _get(db)
+    return {
+        "provider": s["provider"],
+        "site_key": s["site_key"],
+        "secret_key": "••••••••" if s["secret_key"] else "",
+        "secret_key_set": bool(s["secret_key"]),
+    }
+
+
+@router.put("/captcha")
+async def update_captcha_settings(
+    data: CaptchaSettings,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Captcha-Provider und Keys speichern. Wenn das Secret maskiert oder None ist,
+    wird das gespeicherte Secret beibehalten."""
+    from app.services.captcha import save_captcha_settings
+
+    new_secret: Optional[str] = data.secret_key
+    if new_secret is not None and new_secret.strip() in ("••••••••", ""):
+        # Maskierter oder leerer Wert: nicht ueberschreiben, falls Provider gewechselt wird
+        # ist der alte Schluessel evtl. ungueltig - das ist ein bewusster Trade-off.
+        new_secret = None if new_secret.strip() == "••••••••" else ""
+
+    await save_captcha_settings(
+        db,
+        provider=data.provider,
+        site_key=data.site_key,
+        secret_key=new_secret,
+    )
+    return {"message": "Captcha-Einstellungen gespeichert"}
+
+
+class CaptchaTestRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=4096, description="Vom Browser geliefertes Captcha-Token")
+
+
+@router.post("/captcha/test")
+async def test_captcha(
+    data: CaptchaTestRequest,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verifiziert ein vom Browser-Widget geliefertes Test-Token gegen die Provider-API.
+    So sieht der Admin sofort, ob Site-Key + Secret-Key zusammenpassen."""
+    from app.services.captcha import (
+        get_captcha_settings as _get,
+        verify_captcha_token,
+        PROVIDER_NONE,
+    )
+
+    s = await _get(db)
+    if s["provider"] == PROVIDER_NONE:
+        return {"success": False, "error": "Kein Captcha-Provider konfiguriert"}
+    if not s["secret_key"]:
+        return {"success": False, "error": "Kein Secret-Key gespeichert"}
+
+    ok, error = await verify_captcha_token(
+        provider=s["provider"],
+        secret_key=s["secret_key"],
+        token=data.token,
+    )
+    if ok:
+        return {"success": True, "message": "Captcha-Konfiguration funktioniert"}
+    return {"success": False, "error": error or "Captcha-Pruefung fehlgeschlagen"}
+
+
+# ========================
+# Welcome Email Settings
+# ========================
+class WelcomeEmailSettings(BaseModel):
+    enabled: bool = Field(default=False, description="Welcome-Mail nach Registrierung versenden")
+    subject: str = Field(default="", max_length=200, description="E-Mail-Betreff (Platzhalter erlaubt)")
+    body: str = Field(default="", max_length=20000, description="E-Mail-Inhalt als Text/HTML (Platzhalter erlaubt)")
+
+
+@router.get("/welcome-email")
+async def get_welcome_email_settings(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Welcome-Mail-Einstellungen + Default-Templates fuer leere Felder."""
+    from app.services.email_service import get_welcome_email_settings as _get
+    from app.services.email_templates import welcome_email_default, pick_language
+    from app.core.config import settings as app_settings
+
+    s = await _get(db)
+    lang = pick_language(admin.preferred_language, app_settings.DEFAULT_LANGUAGE)
+    default_subject, default_body = welcome_email_default(lang)
+    return {
+        "enabled": s["enabled"],
+        "subject": s["subject"],
+        "body": s["body"],
+        "default_subject": default_subject,
+        "default_body": default_body,
+        "placeholders": ["username", "display_name", "email", "app_name", "login_url"],
+    }
+
+
+@router.put("/welcome-email")
+async def update_welcome_email_settings(
+    data: WelcomeEmailSettings,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Welcome-Mail-Einstellungen speichern. Wenn enabled aber Subject/Body leer ->
+    werden die Defaults der Admin-Sprache als Initialwerte gespeichert."""
+    from app.services.email_service import save_welcome_email_settings as _save
+    from app.services.email_templates import welcome_email_default, pick_language
+    from app.core.config import settings as app_settings
+
+    subject = (data.subject or "").strip()
+    body = (data.body or "").strip()
+    if data.enabled and (not subject or not body):
+        lang = pick_language(admin.preferred_language, app_settings.DEFAULT_LANGUAGE)
+        d_subject, d_body = welcome_email_default(lang)
+        if not subject:
+            subject = d_subject
+        if not body:
+            body = d_body
+
+    await _save(db, enabled=data.enabled, subject=subject, body=body)
+    return {"message": "Welcome-Mail-Einstellungen gespeichert"}
+
+
+@router.post("/welcome-email/test")
+async def send_welcome_test_email(
+    data: TestEmailRequest,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sendet die Welcome-Mail testweise an die angegebene Adresse - mit dem Admin
+    als Beispiel-Empfaenger fuer die Platzhalter."""
+    from app.services.email_service import (
+        get_smtp_settings as _smtp,
+        get_welcome_email_settings as _welcome,
+        send_email,
+    )
+    from app.services.email_templates import render_welcome_email, pick_language
+    from app.core.config import settings as app_settings
+    from app.models.models import SystemSetting
+
+    smtp_settings = await _smtp(db)
+    welcome_settings = await _welcome(db)
+
+    name_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_name"))
+    app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "DNS Manager").strip()
+    base_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
+    base_url = (base_row.scalar_one_or_none() or "").strip() or "http://localhost:5380"
+
+    lang = pick_language(admin.preferred_language, app_settings.DEFAULT_LANGUAGE)
+    subject, body_html, body_text = render_welcome_email(
+        lang=lang,
+        subject_template=welcome_settings["subject"],
+        body_template=welcome_settings["body"],
+        username=admin.username,
+        display_name=admin.display_name or admin.username,
+        email=data.to_email,
+        app_name=app_name,
+        login_url=f"{base_url.rstrip('/')}/login",
+    )
+
+    try:
+        send_email(smtp_settings, data.to_email, subject, body_html, body_text)
+        return {"success": True, "message": f"Test-Welcome-Mail an {data.to_email} gesendet"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

@@ -35,7 +35,8 @@ export default function AuditLogPage() {
             </div>
 
             <div className="glass-card overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[760px]">
                     <thead>
                         <tr className="border-b border-border">
                             <th className="text-left p-3 text-text-muted font-medium text-xs">{t('audit.timestamp')}</th>
@@ -72,6 +73,7 @@ export default function AuditLogPage() {
                         )}
                     </tbody>
                 </table>
+              </div>
             </div>
         </div>
     )

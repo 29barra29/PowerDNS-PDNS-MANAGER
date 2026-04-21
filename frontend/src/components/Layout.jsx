@@ -1,17 +1,20 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Globe, LayoutDashboard, Search, ScrollText, Users, LogOut, Shield, Settings } from 'lucide-react'
+import { Globe, LayoutDashboard, Search, ScrollText, Users, LogOut, Shield, Settings, Menu, X } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import api from '../api'
 import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
+import LanguageDropdown from './LanguageDropdown'
 
 const SESSION_PING_MS = 30 * 60 * 1000 // Sitzung alle 30 Min. prüfen (Token/Cookie)
 
 export default function Layout() {
     const { t, i18n } = useTranslation()
     const navigate = useNavigate()
+    const location = useLocation()
     const [user, setUser] = useState(() => api.getUser())
     const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '', app_logo_url: '' })
+    const [sidebarOpen, setSidebarOpen] = useState(false)
     const { updateAvailable } = useUpdateAvailability()
 
     /* eslint-disable react-hooks/set-state-in-effect -- sync user/appInfo from api on mount */
@@ -32,6 +35,21 @@ export default function Layout() {
         }, SESSION_PING_MS)
         return () => clearInterval(id)
     }, [])
+
+    // Sidebar bei Route-Wechsel automatisch schliessen (Mobile-UX)
+    /* eslint-disable react-hooks/set-state-in-effect -- close mobile sidebar on navigation */
+    useEffect(() => {
+        setSidebarOpen(false)
+    }, [location.pathname])
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    // ESC schliesst die Mobile-Sidebar
+    useEffect(() => {
+        if (!sidebarOpen) return
+        const onKey = (e) => { if (e.key === 'Escape') setSidebarOpen(false) }
+        document.addEventListener('keydown', onKey)
+        return () => document.removeEventListener('keydown', onKey)
+    }, [sidebarOpen])
 
     const handleLogout = () => {
         api.logout()
@@ -55,11 +73,26 @@ export default function Layout() {
 
     return (
         <div className="flex h-screen overflow-hidden">
-            {/* Sidebar */}
-            <aside className="w-64 bg-bg-secondary border-r border-border flex flex-col shrink-0">
+            {/* Mobile-Backdrop hinter der Sidebar */}
+            {sidebarOpen && (
+                <button
+                    type="button"
+                    aria-label={t('layout.closeMenu')}
+                    className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
+                    onClick={() => setSidebarOpen(false)}
+                />
+            )}
+
+            {/* Sidebar – Mobile: kollabierbar via translate, Desktop (md+): immer sichtbar */}
+            <aside
+                className={`bg-bg-secondary border-r border-border flex flex-col shrink-0
+                    fixed inset-y-0 left-0 z-40 w-64 transition-transform duration-200 ease-out
+                    ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+                    md:translate-x-0 md:static md:z-auto`}
+            >
                 {/* Logo */}
-                <div className="p-5 border-b border-border">
-                    <div className="flex items-center gap-3">
+                <div className="p-5 border-b border-border flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
                         {appInfo.app_logo_url ? (
                             <img src={appInfo.app_logo_url} alt="" className="w-9 h-9 rounded-lg object-contain bg-bg-secondary shadow-lg shadow-accent/10" />
                         ) : (
@@ -67,16 +100,25 @@ export default function Layout() {
                                 <Shield className="w-5 h-5 text-white" />
                             </div>
                         )}
-                        <div>
-                            <h1 className="text-sm font-bold text-text-primary">{appInfo.app_name}</h1>
+                        <div className="min-w-0">
+                            <h1 className="text-sm font-bold text-text-primary truncate">{appInfo.app_name}</h1>
                             {appInfo.app_version ? <p className="text-xs text-text-muted">v{appInfo.app_version}</p> : <p className="text-xs text-text-muted opacity-0">v0</p>}
                         </div>
                     </div>
+                    {/* Close-Button nur auf Mobile, wenn Sidebar offen ist */}
+                    <button
+                        type="button"
+                        onClick={() => setSidebarOpen(false)}
+                        className="md:hidden p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+                        aria-label={t('layout.closeMenu')}
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
                 </div>
 
                 {/* Navigation */}
-                <nav className="flex-1 p-3 space-y-1">
-                    {links.map(({ to, icon: Icon, labelKey }) => (  
+                <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+                    {links.map(({ to, icon: Icon, labelKey }) => (
                         <NavLink
                             key={to + labelKey}
                             to={to}
@@ -104,7 +146,7 @@ export default function Layout() {
                 {/* User */}
                 <div className="p-3 border-t border-border">
                     <div className="flex items-center gap-3 px-3 py-2">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent/40 to-purple-600/40 flex items-center justify-center text-xs font-bold text-accent-light uppercase">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent/40 to-purple-600/40 flex items-center justify-center text-xs font-bold text-accent-light uppercase shrink-0">
                             {user?.username?.charAt(0) || '?'}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -113,7 +155,7 @@ export default function Layout() {
                         </div>
                         <button
                             onClick={handleLogout}
-                            className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                            className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
                             title={t('layout.logout')}
                         >
                             <LogOut className="w-4 h-4" />
@@ -123,9 +165,24 @@ export default function Layout() {
             </aside>
 
             {/* Main content */}
-            <main className="flex-1 overflow-auto p-6">
-                <Outlet />
-            </main>
+            <div className="flex-1 flex flex-col min-w-0">
+                {/* Mobile-Topbar – nur sichtbar auf <md, mit Hamburger + Sprach-Dropdown */}
+                <header className="md:hidden sticky top-0 z-20 bg-bg-secondary/90 backdrop-blur border-b border-border px-3 py-2 flex items-center justify-between gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setSidebarOpen(true)}
+                        className="p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                        aria-label={t('layout.openMenu')}
+                    >
+                        <Menu className="w-5 h-5" />
+                    </button>
+                    <span className="text-sm font-semibold text-text-primary truncate">{appInfo.app_name}</span>
+                    <LanguageDropdown />
+                </header>
+                <main className="flex-1 overflow-auto p-4 md:p-6">
+                    <Outlet />
+                </main>
+            </div>
         </div>
     )
 }

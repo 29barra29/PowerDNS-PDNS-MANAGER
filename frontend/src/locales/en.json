@@ -8,7 +8,15 @@
     "success": "Success",
     "close": "Close",
     "copied": "Copied to clipboard",
-    "copy": "Copy"
+    "copy": "Copy",
+    "appLoading": "Loading DNS Manager...",
+    "checkingAuth": "Checking authentication...",
+    "send": "Send"
+  },
+  "auth": {
+    "captchaRequired": "Please complete the captcha first.",
+    "captchaExpired": "Captcha expired - please solve it again.",
+    "captchaError": "The captcha could not be loaded. Please reload the page."
   },
   "login": {
     "title": "Sign in to continue",
@@ -23,8 +31,11 @@
   "register": {
     "title": "Create new account",
     "username": "Username",
+    "usernamePlaceholder": "username",
     "email": "Email",
+    "emailPlaceholder": "mail@example.com",
     "displayName": "Display name",
+    "displayNamePlaceholder": "Jane Doe",
     "password": "Password",
     "passwordConfirm": "Confirm password",
     "submit": "Register",
@@ -38,6 +49,7 @@
   "forgot": {
     "title": "Reset password",
     "emailOrUser": "Email or username",
+    "emailOrUserPlaceholder": "mail@example.com or username",
     "submit": "Send reset link",
     "submitting": "Sending...",
     "backToLogin": "Back to sign in",
@@ -82,7 +94,10 @@
     "confirmPlaceholder": "Confirm password",
     "registerFailed": "Registration failed",
     "passwordsMismatch": "Passwords do not match",
-    "passwordTooShort": "Password must be at least 8 characters"
+    "passwordTooShort": "Password must be at least 8 characters",
+    "adminPlaceholder": "Administrator",
+    "appPasswordPlaceholder": "App-specific password",
+    "smtpUserPlaceholder": "your-email@gmail.com"
   },
   "layout": {
     "overview": "Overview",
@@ -95,7 +110,9 @@
     "newVersionDot": "New version available on GitHub",
     "admin": "Admin",
     "user": "User",
-    "logout": "Log out"
+    "logout": "Log out",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
   },
   "settings": {
     "title": "Settings",
@@ -116,13 +133,30 @@
     "phone": "Phone",
     "phoneHint": "At least one digit, max. 25 characters (e.g. +49 123 456789)",
     "company": "Company / Organisation",
+    "companyPlaceholder": "ACME Inc.",
     "street": "Street & number",
+    "streetPlaceholder": "Main Street 1",
     "postalCode": "Postal code",
     "postalCodeHint": "Max. 20 characters (international)",
     "postalCodePlaceholder": "12345 or SW1A 1AA",
     "city": "City",
+    "cityPlaceholder": "London",
     "country": "Country",
+    "countryPlaceholder": "United Kingdom",
     "dateOfBirth": "Date of birth",
+    "adminUsernamePlaceholder": "admin",
+    "displayNamePlaceholder": "Administrator",
+    "systemTitlePlaceholder": "DNS Manager",
+    "taglinePlaceholder": "PowerDNS Admin Panel",
+    "creatorPlaceholder": "Created by your team",
+    "nameserverPlaceholder": "Nameserver 1",
+    "serverDescriptionPlaceholder": "Hetzner Server DE, primary…",
+    "smtpFromEmailPlaceholder": "noreply@your-domain.com",
+    "smtpFromNamePlaceholder": "DNS Manager",
+    "pdnsApiUrlPlaceholder": "http://192.168.1.10:8081",
+    "apiKeyKeepPlaceholder": "••••••••  (leave empty to keep the existing key)",
+    "apiKeyPlaceholder": "your-api-key",
+    "revealExistingApiKey": "Show existing API key (logged in audit log)",
     "myZones": "My zones",
     "myZonesHint": "Zones assigned to you (by administrator). Edit under \"My zones\".",
     "noZonesAssigned": "No zones assigned",
@@ -149,6 +183,7 @@
     "logoUploadedSuccess": "Logo uploaded successfully.",
     "language": "Language",
     "languageHint": "Interface language (can be changed by any user)",
+    "languageWip": "Translation work in progress – missing strings fall back to English.",
     "profileSaveSuccess": "Profile and settings updated successfully!",
     "passwordMinLength": "The new password must be at least 8 characters long!",
     "passwordChangeSuccess": "Password changed successfully!",
@@ -196,7 +231,51 @@
     "aboutText": "DNS Manager is a self-hosted admin panel for PowerDNS.",
     "writeToServerHint": "Zones and changes are written to this server. With shared database, enable only on one server.",
     "add": "Add",
-    "phoneTitle": "If filled: at least one digit (international formats allowed)"
+    "phoneTitle": "If filled: at least one digit (international formats allowed)",
+    "captcha": {
+      "tab": "Security",
+      "title": "Captcha",
+      "subtitle": "Protect login, registration and password reset against bots and brute-force attempts.",
+      "provider": "Provider",
+      "providerNone": "Off (no captcha)",
+      "providerTurnstile": "Cloudflare Turnstile",
+      "providerHCaptcha": "hCaptcha",
+      "providerRecaptcha": "Google reCAPTCHA v2",
+      "siteKey": "Site key (public)",
+      "siteKeyHint": "Visible in the browser - the captcha widget needs it to render.",
+      "secretKey": "Secret key (private)",
+      "secretKeyHint": "Stays on the server. Used to verify tokens against the provider's API.",
+      "secretKeep": "leave empty to keep current",
+      "secretEnter": "Paste secret key",
+      "saveSuccess": "Captcha settings saved",
+      "testTitle": "Live test",
+      "testSubtitle": "Solve the captcha and verify that site key and secret key match.",
+      "testButton": "Verify token",
+      "testNoToken": "Solve the captcha first.",
+      "docsTurnstile": "Free, privacy-friendly and works without third-party tracking. Create a site for your domain in the Cloudflare dashboard:",
+      "docsHCaptcha": "Free tier available, GDPR-friendly. Create a site key in the hCaptcha dashboard:",
+      "docsRecaptcha": "Google reCAPTCHA v2 (the classic 'I'm not a robot' checkbox). Note: collects data from visitors. Create a site here:"
+    },
+    "welcomeMail": {
+      "tab": "Welcome mail",
+      "title": "Welcome email",
+      "subtitle": "Send an email to new users right after they register.",
+      "enabled": "Send welcome email after registration",
+      "subject": "Subject",
+      "subjectHint": "Placeholders are allowed - leave empty to use the default for your language.",
+      "body": "Body",
+      "bodyHint": "Plain text or HTML. Plain text is auto-wrapped into paragraphs. Leave empty to use the default for your language.",
+      "placeholdersTitle": "Placeholders you can use:",
+      "preview": "Live preview",
+      "previewSubject": "Subject",
+      "previewBody": "Body",
+      "previewEmpty": "(empty)",
+      "saveSuccess": "Welcome mail settings saved",
+      "testTitle": "Send test email",
+      "testSubtitle": "Sends the welcome mail with your account as sample data.",
+      "testHint": "The test uses your username, display name and the configured base URL to fill the placeholders.",
+      "testFailed": "Sending failed."
+    }
   },
   "dashboard": {
     "welcome": "Welcome, {{name}}!",
@@ -268,7 +347,9 @@
     "zonesAssigned": "Zones for \"{{name}}\" updated",
     "passwordPolicy": "At least 8 characters, max 128.",
     "usernameHint": "Allowed: letters, digits, . _ -",
-    "usernamePattern": "Only letters, digits, dot, underscore, hyphen"
+    "usernamePattern": "Only letters, digits, dot, underscore, hyphen",
+    "usernamePlaceholder": "username",
+    "displayNamePlaceholder": "Jane Doe"
   },
   "search": {
     "title": "Search",
@@ -326,7 +407,15 @@
     "removeNameserver": "Remove this nameserver",
     "nameserverListHint": "One nameserver per row. Trailing dot is added automatically.",
     "dnssecRegistrarTitle": "Important: add the DS record at your registrar",
-    "dnssecRegistrarBody": "KSK + ZSK will be generated. For DNSSEC to actually take effect, you must add the resulting DS record at your domain registrar. You can find the DS later under \"Zone detail → DNSSEC\"."
+    "dnssecRegistrarBody": "KSK + ZSK will be generated. For DNSSEC to actually take effect, you must add the resulting DS record at your domain registrar. You can find the DS later under \"Zone detail → DNSSEC\".",
+    "enterDomainName": "Please enter a domain name.",
+    "reverseZoneCreatedAs": "Reverse zone: will be created as {{zone}}.",
+    "reverseZoneDetected": "Reverse zone detected – will be used as is.",
+    "invalidDomainName": "„{{name}}\" is not a valid domain name (e.g. mydomain.com).",
+    "willBeCreatedAs": "Will be created as: {{name}}",
+    "invalidNameserver": "Not a valid nameserver (e.g. ns1.example.com).",
+    "invalidNameserverNamed": "Nameserver invalid: {{name}}",
+    "serverReportedError": "A server reported an error."
   },
   "zoneDetail": {
     "back": "Back",
@@ -454,7 +543,22 @@
     "rdataPhSPF": "v=spf1 a mx ~all",
     "rdataPhHTTPS": "0 pool.example.net. alpn=h2",
     "rdataPhSVCB": "0 pool.example.net. port=443",
-    "rdataPhOPENPGPKEY": "mQCNAz… (Base64)"
+    "rdataPhOPENPGPKEY": "mQCNAz… (Base64)",
+    "enterIpv4": "Please enter an IPv4 address.",
+    "invalidIpv4": "Not a valid IPv4 (e.g. 93.184.216.34).",
+    "enterIpv6": "Please enter an IPv6 address.",
+    "invalidIpv6": "Not a valid IPv6 (e.g. 2001:db8::1).",
+    "enterHostname": "Please enter a hostname.",
+    "invalidHostname": "Not a valid hostname (e.g. mail.example.com).",
+    "enterNumber": "Please enter a number.",
+    "onlyDigits": "Only whole numbers are allowed.",
+    "enterHex": "Please enter a hex value.",
+    "onlyHex": "Only 0-9 and a-f are allowed.",
+    "enterText": "Please enter some text.",
+    "tagMissing": "Tag is missing.",
+    "hexLengthEven": "Length should be even.",
+    "txtTooLong": "Long ({{count}} characters) – will be split into 255-character chunks in DNS.",
+    "unusualCaaTag": "Unusual tag „{{tag}}\" (common: {{common}})."
   },
   "settingsMore": {
     "updatesScriptHint": "Uses Git (fetch + latest v* release tag, or pull on main), rebuilds the backend image and restarts containers. Requires a .git folder (install.sh or git clone). A plain git pull often does nothing after a tag-based install—that’s what update.sh fixes.",

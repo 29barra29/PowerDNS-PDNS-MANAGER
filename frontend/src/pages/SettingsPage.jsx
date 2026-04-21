@@ -1,16 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, GitCommit, Code, Sliders, Copy, Check, Star, Send } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, GitCommit, Code, Sliders, Copy, Check, Star, Send, Shield, UserPlus } from 'lucide-react'
+import CaptchaWidget from '../components/CaptchaWidget'
 import api from '../api'
 import { ALL_RECORD_TYPE_KEYS, TEMPLATE_CONTENT_PLACEHOLDERS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
 import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
 import { compareSemver } from '../utils/semverCompare'
-
-const LANGUAGES = [
-    { code: 'de', label: 'Deutsch' },
-    { code: 'en', label: 'English' },
-]
+import { LANGUAGES } from '../i18n'
 
 export default function SettingsPage() {
     const { t, i18n } = useTranslation()
@@ -118,7 +115,13 @@ export default function SettingsPage() {
         if (activeTab === 'smtp') {
             loadSmtp()
         }
-    }, [activeTab, profile?.role]) // eslint-disable-line react-hooks/exhaustive-deps -- loadCommits/loadSmtp stable, commits.length intentional
+        if (activeTab === 'security') {
+            loadCaptcha()
+        }
+        if (activeTab === 'welcome') {
+            loadWelcome()
+        }
+    }, [activeTab, profile?.role]) // eslint-disable-line react-hooks/exhaustive-deps -- load* stable, commits.length intentional
 
     // Erfolgsmeldung verschwindet nach 4 s automatisch (verdeckt nichts dauerhaft)
     useEffect(() => {
@@ -450,6 +453,142 @@ export default function SettingsPage() {
         finally { setSendingTest(false) }
     }
 
+    // ===== Captcha =====
+    const [captchaForm, setCaptchaForm] = useState({
+        provider: 'none',
+        site_key: '',
+        secret_key: '',
+        secret_key_set: false,
+    })
+    const [savingCaptcha, setSavingCaptcha] = useState(false)
+    const [showCaptchaSecret, setShowCaptchaSecret] = useState(false)
+    const [captchaTestToken, setCaptchaTestToken] = useState('')
+    const [captchaTestResult, setCaptchaTestResult] = useState(null)
+    const captchaTestRef = useRef(null)
+    // Damit das Test-Widget nach Provider-/Key-Wechsel neu rendert.
+    const [captchaPreview, setCaptchaPreview] = useState({ provider: 'none', site_key: '' })
+
+    async function loadCaptcha() {
+        try {
+            const data = await api.getCaptchaSettings()
+            setCaptchaForm({
+                provider: data.provider || 'none',
+                site_key: data.site_key || '',
+                secret_key: '',
+                secret_key_set: !!data.secret_key_set,
+            })
+            setCaptchaPreview({ provider: data.provider || 'none', site_key: data.site_key || '' })
+            setCaptchaTestResult(null)
+            setCaptchaTestToken('')
+        } catch { /* ignore - settings not yet present is OK */ }
+    }
+
+    async function handleSaveCaptcha(e) {
+        e.preventDefault()
+        setSavingCaptcha(true)
+        setError('')
+        try {
+            const payload = {
+                provider: captchaForm.provider,
+                site_key: captchaForm.site_key.trim(),
+                // Leeres Secret = "nicht aendern" (das maskierte Backend-Feld kommt nicht zurueck als
+                // Plaintext, also tauschen wir hier auf "••••••••" um die Konvention beizubehalten).
+                secret_key: captchaForm.secret_key.trim() || (captchaForm.secret_key_set ? '••••••••' : ''),
+            }
+            await api.updateCaptchaSettings(payload)
+            setSuccess(t('settings.captcha.saveSuccess'))
+            setCaptchaPreview({ provider: payload.provider, site_key: payload.site_key })
+            await loadCaptcha()
+        } catch (err) { setError(err.message) }
+        finally { setSavingCaptcha(false) }
+    }
+
+    async function handleTestCaptcha() {
+        setCaptchaTestResult(null)
+        if (!captchaTestToken) {
+            setCaptchaTestResult({ success: false, error: t('settings.captcha.testNoToken') })
+            return
+        }
+        try {
+            const r = await api.testCaptcha(captchaTestToken)
+            setCaptchaTestResult(r)
+        } catch (err) {
+            setCaptchaTestResult({ success: false, error: err.message })
+        } finally {
+            // Token ist nach Verify verbraucht - Widget zuruecksetzen.
+            setCaptchaTestToken('')
+            captchaTestRef.current?.reset()
+        }
+    }
+
+    // ===== Welcome E-Mail =====
+    const [welcomeForm, setWelcomeForm] = useState({
+        enabled: false,
+        subject: '',
+        body: '',
+        default_subject: '',
+        default_body: '',
+        placeholders: ['username', 'display_name', 'email', 'app_name', 'login_url'],
+    })
+    const [savingWelcome, setSavingWelcome] = useState(false)
+    const [welcomeTestEmail, setWelcomeTestEmail] = useState('')
+    const [sendingWelcomeTest, setSendingWelcomeTest] = useState(false)
+
+    async function loadWelcome() {
+        try {
+            const data = await api.getWelcomeEmailSettings()
+            setWelcomeForm({
+                enabled: !!data.enabled,
+                subject: data.subject || '',
+                body: data.body || '',
+                default_subject: data.default_subject || '',
+                default_body: data.default_body || '',
+                placeholders: data.placeholders || ['username', 'display_name', 'email', 'app_name', 'login_url'],
+            })
+        } catch { /* settings not yet present is OK */ }
+    }
+
+    async function handleSaveWelcome(e) {
+        e.preventDefault()
+        setSavingWelcome(true)
+        setError('')
+        try {
+            await api.updateWelcomeEmailSettings({
+                enabled: welcomeForm.enabled,
+                subject: welcomeForm.subject,
+                body: welcomeForm.body,
+            })
+            setSuccess(t('settings.welcomeMail.saveSuccess'))
+            await loadWelcome()
+        } catch (err) { setError(err.message) }
+        finally { setSavingWelcome(false) }
+    }
+
+    async function handleSendWelcomeTest() {
+        if (!welcomeTestEmail.trim()) return
+        setSendingWelcomeTest(true)
+        try {
+            const r = await api.sendWelcomeTestEmail({ to_email: welcomeTestEmail })
+            if (r.success) setSuccess(r.message)
+            else setError(r.error || t('settings.welcomeMail.testFailed'))
+        } catch (err) { setError(err.message) }
+        finally { setSendingWelcomeTest(false) }
+    }
+
+    function welcomePreview() {
+        const subject = (welcomeForm.subject || welcomeForm.default_subject || '').trim()
+        const body = (welcomeForm.body || welcomeForm.default_body || '').trim()
+        const sample = {
+            username: profile?.username || 'maxmustermann',
+            display_name: profile?.display_name || profile?.username || 'Max Mustermann',
+            email: profile?.email || 'max@example.com',
+            app_name: profileForm.app_name || 'DNS Manager',
+            login_url: (adminInfo?.app_base_url || profileForm.app_base_url || 'http://localhost:5380').replace(/\/$/, '') + '/login',
+        }
+        const replace = (s) => s.replace(/\{(\w+)\}/g, (_m, k) => (k in sample ? sample[k] : `{${k}}`))
+        return { subject: replace(subject), body: replace(body) }
+    }
+
     // ===== Server functions =====
     function openAdd() {
         setEditId(null)
@@ -584,6 +723,8 @@ export default function SettingsPage() {
         { id: 'servers', labelKey: 'settings.servers', icon: Server },
         { id: 'templates', labelKey: 'settings.templates', icon: Copy },
         { id: 'smtp', labelKey: 'settings.smtp', icon: Mail },
+        { id: 'welcome', labelKey: 'settings.welcomeMail.tab', icon: UserPlus },
+        { id: 'security', labelKey: 'settings.captcha.tab', icon: Shield },
         { id: 'updates', labelKey: 'settings.updates', icon: Download },
         { id: 'about', labelKey: 'settings.about', icon: Database },
     ]
@@ -673,8 +814,10 @@ export default function SettingsPage() {
                                     }}
                                     className="w-full max-w-xs px-3 py-2 text-sm border border-border rounded-lg bg-bg-primary"
                                 >
-                                    {LANGUAGES.map(({ code, label }) => (
-                                        <option key={code} value={code}>{label}</option>
+                                    {LANGUAGES.map(({ code, label, flag, wip }) => (
+                                        <option key={code} value={code}>
+                                            {flag ? `${flag} ` : ''}{label}{wip ? ' (WIP)' : ''}
+                                        </option>
                                     ))}
                                 </select>
                                 <p className="text-xs text-text-muted mt-1">{t('settings.languageHint')}</p>
@@ -704,7 +847,7 @@ export default function SettingsPage() {
                                         type="text"
                                         value={profileForm.display_name}
                                         onChange={e => setProfileForm({ ...profileForm, display_name: e.target.value })}
-                                        placeholder="Administrator"
+                                        placeholder={t('settings.displayNamePlaceholder')}
                                         className="w-full px-3 py-2 text-sm"
                                     />
                                     <p className="text-xs text-text-muted mt-1">{t('settings.displayNameHint')}</p>
@@ -737,13 +880,13 @@ export default function SettingsPage() {
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.company')}</label>
                                     <input type="text" value={profileForm.company} onChange={e => setProfileForm({ ...profileForm, company: e.target.value })}
-                                        placeholder="Firma GmbH" className="w-full px-3 py-2 text-sm" maxLength={255} />
+                                        placeholder={t('settings.companyPlaceholder')} className="w-full px-3 py-2 text-sm" maxLength={255} />
                                 </div>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.street')}</label>
                                 <input type="text" value={profileForm.street} onChange={e => setProfileForm({ ...profileForm, street: e.target.value })}
-                                    placeholder="Musterstraße 1" className="w-full px-3 py-2 text-sm" maxLength={255} />
+                                    placeholder={t('settings.streetPlaceholder')} className="w-full px-3 py-2 text-sm" maxLength={255} />
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
@@ -755,12 +898,12 @@ export default function SettingsPage() {
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.city')}</label>
                                     <input type="text" value={profileForm.city} onChange={e => setProfileForm({ ...profileForm, city: e.target.value })}
-                                        placeholder="Berlin" className="w-full px-3 py-2 text-sm" maxLength={100} />
+                                        placeholder={t('settings.cityPlaceholder')} className="w-full px-3 py-2 text-sm" maxLength={100} />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.country')}</label>
                                     <input type="text" value={profileForm.country} onChange={e => setProfileForm({ ...profileForm, country: e.target.value })}
-                                        placeholder="Deutschland" className="w-full px-3 py-2 text-sm" maxLength={100} />
+                                        placeholder={t('settings.countryPlaceholder')} className="w-full px-3 py-2 text-sm" maxLength={100} />
                                 </div>
                             </div>
                             <div>
@@ -793,7 +936,7 @@ export default function SettingsPage() {
                                             type="text"
                                             value={profileForm.app_name}
                                             onChange={e => setProfileForm({ ...profileForm, app_name: e.target.value })}
-                                            placeholder="DNS Manager"
+                                            placeholder={t('settings.systemTitlePlaceholder')}
                                             className="w-full px-3 py-2 text-sm"
                                             required
                                         />
@@ -843,7 +986,7 @@ export default function SettingsPage() {
                                                 type="text"
                                                 value={profileForm.app_tagline}
                                                 onChange={e => setProfileForm({ ...profileForm, app_tagline: e.target.value })}
-                                                placeholder="PowerDNS Admin Panel"
+                                                placeholder={t('settings.taglinePlaceholder')}
                                                 className="w-full px-3 py-2 text-sm"
                                                 maxLength={200}
                                             />
@@ -855,7 +998,7 @@ export default function SettingsPage() {
                                                 type="text"
                                                 value={profileForm.app_creator}
                                                 onChange={e => setProfileForm({ ...profileForm, app_creator: e.target.value })}
-                                                placeholder="Created by GemTec Games • Barra"
+                                                placeholder={t('settings.creatorPlaceholder')}
                                                 className="w-full px-3 py-2 text-sm"
                                                 maxLength={200}
                                             />
@@ -1075,12 +1218,12 @@ export default function SettingsPage() {
                                     <div>
                                         <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.senderEmail')}</label>
                                         <input type="email" value={smtpForm.from_email} onChange={e => setSmtpForm({ ...smtpForm, from_email: e.target.value })}
-                                            placeholder="noreply@meinedomain.de" className="w-full px-3 py-2 text-sm" />
+                                            placeholder={t('settings.smtpFromEmailPlaceholder')} className="w-full px-3 py-2 text-sm" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.senderName')}</label>
                                         <input type="text" value={smtpForm.from_name} onChange={e => setSmtpForm({ ...smtpForm, from_name: e.target.value })}
-                                            placeholder="DNS Manager" className="w-full px-3 py-2 text-sm" />
+                                            placeholder={t('settings.smtpFromNamePlaceholder')} className="w-full px-3 py-2 text-sm" />
                                     </div>
                                 </div>
 
@@ -1129,6 +1272,242 @@ export default function SettingsPage() {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* =================== WELCOME-MAIL TAB =================== */}
+            {activeTab === 'welcome' && profile?.role === 'admin' && (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
+                                <UserPlus className="w-5 h-5 text-accent-light" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.welcomeMail.title')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.welcomeMail.subtitle')}</p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleSaveWelcome} className="space-y-5">
+                            <label className="flex items-center gap-3 select-none">
+                                <input type="checkbox" checked={welcomeForm.enabled}
+                                    onChange={(e) => setWelcomeForm(f => ({ ...f, enabled: e.target.checked }))}
+                                    className="w-4 h-4 accent-accent" />
+                                <span className="text-sm text-text-primary font-medium">{t('settings.welcomeMail.enabled')}</span>
+                            </label>
+
+                            <div className="grid md:grid-cols-2 gap-5">
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                            {t('settings.welcomeMail.subject')}
+                                        </label>
+                                        <input type="text" value={welcomeForm.subject}
+                                            onChange={(e) => setWelcomeForm(f => ({ ...f, subject: e.target.value }))}
+                                            placeholder={welcomeForm.default_subject}
+                                            className="w-full px-3 py-2 text-sm" maxLength={200} />
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.welcomeMail.subjectHint')}</p>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                            {t('settings.welcomeMail.body')}
+                                        </label>
+                                        <textarea value={welcomeForm.body}
+                                            onChange={(e) => setWelcomeForm(f => ({ ...f, body: e.target.value }))}
+                                            placeholder={welcomeForm.default_body}
+                                            rows={12}
+                                            className="w-full px-3 py-2 text-sm font-mono leading-relaxed" maxLength={20000} />
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.welcomeMail.bodyHint')}</p>
+                                    </div>
+
+                                    <div className="rounded-lg border border-border bg-bg-tertiary p-3">
+                                        <p className="text-xs font-semibold text-text-secondary mb-2">{t('settings.welcomeMail.placeholdersTitle')}</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {welcomeForm.placeholders.map((p) => (
+                                                <code key={p} className="text-[11px] px-2 py-1 rounded bg-bg-hover text-accent-light border border-border">
+                                                    {`{${p}}`}
+                                                </code>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('settings.welcomeMail.preview')}</label>
+                                    <div className="rounded-lg border border-border bg-bg-tertiary p-4 h-full min-h-[24rem] overflow-auto">
+                                        <p className="text-xs uppercase tracking-wide text-text-muted">{t('settings.welcomeMail.previewSubject')}</p>
+                                        <p className="text-sm font-semibold text-text-primary mb-3">{welcomePreview().subject || <span className="text-text-muted italic">{t('settings.welcomeMail.previewEmpty')}</span>}</p>
+                                        <p className="text-xs uppercase tracking-wide text-text-muted">{t('settings.welcomeMail.previewBody')}</p>
+                                        <pre className="text-sm text-text-primary whitespace-pre-wrap font-sans">{welcomePreview().body || <span className="text-text-muted italic">{t('settings.welcomeMail.previewEmpty')}</span>}</pre>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 pt-2">
+                                <button type="submit" disabled={savingWelcome}
+                                    className="px-5 py-2 bg-accent hover:bg-accent-hover text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {savingWelcome ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                                    {t('common.save')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
+                                <Send className="w-5 h-5 text-success" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.welcomeMail.testTitle')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.welcomeMail.testSubtitle')}</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <input type="email" value={welcomeTestEmail}
+                                onChange={e => setWelcomeTestEmail(e.target.value)}
+                                placeholder="test@meinedomain.de" className="flex-1 px-3 py-2 text-sm" />
+                            <button onClick={handleSendWelcomeTest}
+                                disabled={sendingWelcomeTest || !welcomeTestEmail.trim()}
+                                className="px-5 py-2 bg-gradient-to-r from-success/80 to-emerald-600 hover:from-success hover:to-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 shrink-0">
+                                {sendingWelcomeTest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                {t('common.send')}
+                            </button>
+                        </div>
+                        <p className="text-xs text-text-muted mt-2">{t('settings.welcomeMail.testHint')}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* =================== SECURITY (CAPTCHA) TAB =================== */}
+            {activeTab === 'security' && profile?.role === 'admin' && (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
+                                <Shield className="w-5 h-5 text-accent-light" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('settings.captcha.title')}</h2>
+                                <p className="text-sm text-text-muted">{t('settings.captcha.subtitle')}</p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleSaveCaptcha} className="space-y-5">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('settings.captcha.provider')}</label>
+                                <select value={captchaForm.provider}
+                                    onChange={(e) => setCaptchaForm(f => ({ ...f, provider: e.target.value }))}
+                                    className="w-full md:w-1/2 px-3 py-2 text-sm">
+                                    <option value="none">{t('settings.captcha.providerNone')}</option>
+                                    <option value="turnstile">{t('settings.captcha.providerTurnstile')}</option>
+                                    <option value="hcaptcha">{t('settings.captcha.providerHCaptcha')}</option>
+                                    <option value="recaptcha">{t('settings.captcha.providerRecaptcha')}</option>
+                                </select>
+                            </div>
+
+                            {captchaForm.provider !== 'none' && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('settings.captcha.siteKey')}</label>
+                                        <input type="text" value={captchaForm.site_key}
+                                            onChange={(e) => setCaptchaForm(f => ({ ...f, site_key: e.target.value }))}
+                                            className="w-full px-3 py-2 text-sm font-mono" maxLength={500} />
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.captcha.siteKeyHint')}</p>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('settings.captcha.secretKey')}</label>
+                                        <div className="relative">
+                                            <input
+                                                type={showCaptchaSecret ? 'text' : 'password'}
+                                                value={captchaForm.secret_key}
+                                                onChange={(e) => setCaptchaForm(f => ({ ...f, secret_key: e.target.value }))}
+                                                placeholder={captchaForm.secret_key_set ? '•••••••• (' + t('settings.captcha.secretKeep') + ')' : t('settings.captcha.secretEnter')}
+                                                className="w-full px-3 py-2 pr-10 text-sm font-mono" maxLength={500}
+                                                autoComplete="off" />
+                                            <button type="button" onClick={() => setShowCaptchaSecret(s => !s)}
+                                                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                                {showCaptchaSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-text-muted mt-1">{t('settings.captcha.secretKeyHint')}</p>
+                                    </div>
+
+                                    <div className="rounded-lg border border-border bg-bg-tertiary p-3 text-xs text-text-secondary leading-relaxed">
+                                        {captchaForm.provider === 'turnstile' && (
+                                            <>
+                                                <p className="font-semibold text-text-primary mb-1">Cloudflare Turnstile</p>
+                                                <p>{t('settings.captcha.docsTurnstile')}</p>
+                                                <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank" rel="noreferrer noopener" className="text-accent-light hover:underline">https://dash.cloudflare.com/?to=/:account/turnstile</a>
+                                            </>
+                                        )}
+                                        {captchaForm.provider === 'hcaptcha' && (
+                                            <>
+                                                <p className="font-semibold text-text-primary mb-1">hCaptcha</p>
+                                                <p>{t('settings.captcha.docsHCaptcha')}</p>
+                                                <a href="https://dashboard.hcaptcha.com/sites" target="_blank" rel="noreferrer noopener" className="text-accent-light hover:underline">https://dashboard.hcaptcha.com/sites</a>
+                                            </>
+                                        )}
+                                        {captchaForm.provider === 'recaptcha' && (
+                                            <>
+                                                <p className="font-semibold text-text-primary mb-1">Google reCAPTCHA v2</p>
+                                                <p>{t('settings.captcha.docsRecaptcha')}</p>
+                                                <a href="https://www.google.com/recaptcha/admin" target="_blank" rel="noreferrer noopener" className="text-accent-light hover:underline">https://www.google.com/recaptcha/admin</a>
+                                            </>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="flex flex-wrap items-center gap-3 pt-2">
+                                <button type="submit" disabled={savingCaptcha}
+                                    className="px-5 py-2 bg-accent hover:bg-accent-hover text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {savingCaptcha ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                                    {t('common.save')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    {captchaPreview.provider !== 'none' && captchaPreview.site_key && (
+                        <div className="glass-card p-6">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center">
+                                    <CheckCircle2 className="w-5 h-5 text-success" />
+                                </div>
+                                <div>
+                                    <h2 className="text-lg font-semibold text-text-primary">{t('settings.captcha.testTitle')}</h2>
+                                    <p className="text-sm text-text-muted">{t('settings.captcha.testSubtitle')}</p>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <CaptchaWidget
+                                    ref={captchaTestRef}
+                                    provider={captchaPreview.provider}
+                                    siteKey={captchaPreview.site_key}
+                                    onToken={setCaptchaTestToken}
+                                    onExpire={() => setCaptchaTestToken('')}
+                                    onError={() => setCaptchaTestToken('')}
+                                />
+                                <div className="flex items-center justify-center">
+                                    <button type="button" onClick={handleTestCaptcha} disabled={!captchaTestToken}
+                                        className="px-5 py-2 bg-gradient-to-r from-success/80 to-emerald-600 hover:from-success hover:to-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                        <Shield className="w-4 h-4" />
+                                        {t('settings.captcha.testButton')}
+                                    </button>
+                                </div>
+                                {captchaTestResult && (
+                                    <div className={`p-3 rounded-lg text-sm ${captchaTestResult.success ? 'bg-success/10 border border-success/30 text-success' : 'bg-danger/10 border border-danger/30 text-danger'}`}>
+                                        {captchaTestResult.success ? captchaTestResult.message : captchaTestResult.error}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1709,7 +2088,7 @@ export default function SettingsPage() {
                                     <input
                                         type="text" value={form.display_name}
                                         onChange={e => setForm({ ...form, display_name: e.target.value })}
-                                        placeholder="Nameserver 1" className="w-full px-3 py-2 text-sm"
+                                        placeholder={t('settings.nameserverPlaceholder')} className="w-full px-3 py-2 text-sm"
                                     />
                                 </div>
                             </div>
@@ -1719,7 +2098,7 @@ export default function SettingsPage() {
                                 <input
                                     type="url" value={form.url}
                                     onChange={e => setForm({ ...form, url: e.target.value })}
-                                    placeholder="http://192.168.1.10:8081" className="w-full px-3 py-2 text-sm"
+                                    placeholder={t('settings.pdnsApiUrlPlaceholder')} className="w-full px-3 py-2 text-sm"
                                     required
                                 />
                                 <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.powerDnsApiUrlHint')}</p>
@@ -1733,7 +2112,7 @@ export default function SettingsPage() {
                                     <input
                                         type={showApiKey ? 'text' : 'password'} value={form.api_key}
                                         onChange={e => setForm({ ...form, api_key: e.target.value })}
-                                        placeholder={editId ? '••••••••  (leer lassen, um den bestehenden Schlüssel zu behalten)' : 'dein-api-key'}
+                                        placeholder={editId ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
                                         className="w-full px-3 py-2 pr-20 text-sm"
                                         required={!editId}
                                     />
@@ -1750,7 +2129,7 @@ export default function SettingsPage() {
                                         className="mt-1 text-xs text-accent-light hover:text-accent flex items-center gap-1"
                                     >
                                         {revealingKey ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-                                        Bestehenden API-Key anzeigen (wird im Audit-Log vermerkt)
+                                        {t('settings.revealExistingApiKey')}
                                     </button>
                                 )}
                                 <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.apiKeyHint')}</p>
@@ -1761,7 +2140,7 @@ export default function SettingsPage() {
                                 <input
                                     type="text" value={form.description}
                                     onChange={e => setForm({ ...form, description: e.target.value })}
-                                    placeholder="Hetzner Server DE, Hauptserver..." className="w-full px-3 py-2 text-sm"
+                                    placeholder={t('settings.serverDescriptionPlaceholder')} className="w-full px-3 py-2 text-sm"
                                 />
                             </div>
 

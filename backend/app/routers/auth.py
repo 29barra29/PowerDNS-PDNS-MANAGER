@@ -1,7 +1,7 @@
 """API routes for authentication and user management."""
 import logging
 from datetime import date, datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Request, status
+from fastapi import APIRouter, HTTPException, Depends, Request, status, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator
@@ -92,11 +92,13 @@ class RegisterPublic(BaseModel):
     password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=128)
     email: Optional[str] = None
     display_name: Optional[str] = Field(None, max_length=255)
+    captcha_token: Optional[str] = Field(None, max_length=4096, description="Captcha-Token vom Browser (nur wenn aktiviert)")
 
 
 class ForgotPasswordRequest(BaseModel):
     email: Optional[str] = Field(None, description="E-Mail des Kontos")
     username: Optional[str] = Field(None, description="Benutzername (Alternative zu E-Mail)")
+    captcha_token: Optional[str] = Field(None, max_length=4096, description="Captcha-Token vom Browser (nur wenn aktiviert)")
 
 
 class ResetPasswordRequest(BaseModel):
@@ -146,10 +148,16 @@ async def _user_to_dict(user: User, db: AsyncSession) -> dict:
 # ========================
 @router.post("/login")
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
+    captcha_token: Optional[str] = Form(default=None, description="Captcha-Token (nur wenn aktiviert)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Login with username and password. Setzt HttpOnly-Cookie (kein Token im localStorage)."""
+    # Captcha vor dem Login pruefen, damit Bots keinen Brute-Force gegen DB+Hash starten koennen.
+    from app.services.captcha import verify_or_raise as _verify_captcha
+    await _verify_captcha(db, captcha_token, request.client.host if request.client else None)
+
     result = await db.execute(
         select(User).where(User.username == form_data.username)
     )
@@ -201,6 +209,8 @@ async def logout():
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_public(
     data: RegisterPublic,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user (only when registration is enabled in settings)."""
@@ -209,6 +219,10 @@ async def register_public(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registrierung ist deaktiviert",
         )
+
+    # Captcha gegen Spam-/Bot-Registrierungen.
+    from app.services.captcha import verify_or_raise as _verify_captcha
+    await _verify_captcha(db, data.captcha_token, request.client.host if request.client else None)
 
     result = await db.execute(select(User).where(User.username == data.username))
     if result.scalar_one_or_none():
@@ -230,7 +244,73 @@ async def register_public(
     db.add(user)
     await db.flush()
     logger.info(f"New user registered: {data.username}")
+
+    # Welcome-Mail im Hintergrund versenden, damit der Register-Request nicht
+    # auf SMTP wartet (und auch nicht fehlschlaegt, wenn der Mailserver kurz down ist).
+    if data.email:
+        background_tasks.add_task(
+            _send_welcome_email_safe,
+            user_id=user.id,
+            base_url=str(request.base_url).rstrip("/"),
+        )
+
     return {"message": "Registrierung erfolgreich. Du kannst dich jetzt anmelden."}
+
+
+async def _send_welcome_email_safe(user_id: int, base_url: str) -> None:
+    """Background-Task: laedt Settings, rendert Template, schickt Mail.
+    Eigene DB-Session, weil die Request-Session bereits geschlossen ist.
+    Schluckt alle Exceptions - die Registrierung darf NICHT zurueckgerollt werden,
+    nur weil SMTP gerade hakt.
+    """
+    from app.core.database import async_session
+    from app.services.email_service import (
+        get_smtp_settings,
+        get_welcome_email_settings,
+        send_email,
+    )
+    from app.services.email_templates import render_welcome_email, pick_language
+    from app.models.models import SystemSetting
+
+    try:
+        async with async_session() as session:
+            welcome = await get_welcome_email_settings(session)
+            if not welcome["enabled"]:
+                return
+            smtp = await get_smtp_settings(session)
+            if not smtp.get("enabled") or not smtp.get("host"):
+                logger.info("Welcome email skipped: SMTP not configured")
+                return
+
+            user_row = await session.execute(select(User).where(User.id == user_id))
+            user = user_row.scalar_one_or_none()
+            if not user or not user.email:
+                return
+
+            name_row = await session.execute(
+                select(SystemSetting.value).where(SystemSetting.key == "app_name")
+            )
+            app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "DNS Manager").strip()
+            base_row = await session.execute(
+                select(SystemSetting.value).where(SystemSetting.key == "app_base_url")
+            )
+            real_base = (base_row.scalar_one_or_none() or "").strip() or base_url
+
+            lang = pick_language(user.preferred_language, app_settings.DEFAULT_LANGUAGE)
+            subject, body_html, body_text = render_welcome_email(
+                lang=lang,
+                subject_template=welcome["subject"],
+                body_template=welcome["body"],
+                username=user.username,
+                display_name=user.display_name or user.username,
+                email=user.email,
+                app_name=app_name,
+                login_url=f"{real_base.rstrip('/')}/login",
+            )
+            send_email(smtp, user.email, subject, body_html, body_text)
+            logger.info("Welcome email sent to %s", user.email)
+    except Exception as exc:  # noqa: BLE001 - Hintergrund-Task soll nie crashen
+        logger.warning("Failed to send welcome email (user_id=%s): %s", user_id, exc)
 
 
 @router.post("/forgot-password")
@@ -245,6 +325,10 @@ async def forgot_password(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Passwort vergessen ist deaktiviert",
         )
+
+    # Captcha schuetzt davor, dass jemand massenhaft Reset-Mails an fremde Adressen triggert.
+    from app.services.captcha import verify_or_raise as _verify_captcha
+    await _verify_captcha(db, data.captcha_token, request.client.host if request.client else None)
 
     if not data.email and not data.username:
         raise HTTPException(status_code=400, detail="E-Mail oder Benutzername angeben")

@@ -6,8 +6,13 @@ import {
     Copy, X, Sparkles
 } from 'lucide-react'
 import api from '../api'
+import i18n from '../i18n'
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
+
+// Kuerze-Helper, damit die Validator-Funktionen unten lesbarer sind.
+// Nutzt das globale i18n-Objekt – funktioniert auch ausserhalb der Component.
+const _t = (key, vars) => i18n.t(key, vars)
 
 /* ============================================================================
  *  Validierung pro Eingabefeld – wird LIVE im Modal angezeigt.
@@ -24,31 +29,31 @@ const HEX_RE = /^[0-9a-fA-F]+$/
 
 function validateIPv4(v) {
     const s = (v || '').trim()
-    if (!s) return { error: 'Bitte IPv4-Adresse eingeben.' }
-    if (!IPV4_RE.test(s)) return { error: 'Keine gültige IPv4 (z. B. 93.184.216.34).' }
+    if (!s) return { error: _t('zoneDetail.enterIpv4') }
+    if (!IPV4_RE.test(s)) return { error: _t('zoneDetail.invalidIpv4') }
     return ''
 }
 
 function validateIPv6(v) {
     const s = (v || '').trim()
-    if (!s) return { error: 'Bitte IPv6-Adresse eingeben.' }
-    if (!IPV6_RE.test(s)) return { error: 'Keine gültige IPv6 (z. B. 2001:db8::1).' }
+    if (!s) return { error: _t('zoneDetail.enterIpv6') }
+    if (!IPV6_RE.test(s)) return { error: _t('zoneDetail.invalidIpv6') }
     return ''
 }
 
 function validateFqdn(v, { allowTrailingDot = true } = {}) {
     let s = (v || '').trim().replace(/\.$/, '')
-    if (!s) return { error: 'Bitte einen Hostnamen angeben.' }
+    if (!s) return { error: _t('zoneDetail.enterHostname') }
     if (!FQDN_RE.test(s + (allowTrailingDot ? '.' : ''))) {
-        return { error: 'Kein gültiger Hostname (z. B. mail.example.com).' }
+        return { error: _t('zoneDetail.invalidHostname') }
     }
     return ''
 }
 
 function validateInt(v, { min, max } = {}) {
     const s = String(v ?? '').trim()
-    if (!s) return { error: 'Bitte eine Zahl eingeben.' }
-    if (!/^\d+$/.test(s)) return { error: 'Nur ganze Zahlen erlaubt.' }
+    if (!s) return { error: _t('zoneDetail.enterNumber') }
+    if (!/^\d+$/.test(s)) return { error: _t('zoneDetail.onlyDigits') }
     const n = parseInt(s, 10)
     if (typeof min === 'number' && n < min) return { error: `Minimum: ${min}` }
     if (typeof max === 'number' && n > max) return { error: `Maximum: ${max}` }
@@ -57,23 +62,23 @@ function validateInt(v, { min, max } = {}) {
 
 function validateHex(v) {
     const s = (v || '').replace(/\s+/g, '')
-    if (!s) return { error: 'Bitte einen Hex-Wert eingeben.' }
-    if (!HEX_RE.test(s)) return { error: 'Nur 0-9 und a-f erlaubt.' }
-    if (s.length % 2 !== 0) return 'Länge sollte gerade sein.'
+    if (!s) return { error: _t('zoneDetail.enterHex') }
+    if (!HEX_RE.test(s)) return { error: _t('zoneDetail.onlyHex') }
+    if (s.length % 2 !== 0) return _t('zoneDetail.hexLengthEven')
     return ''
 }
 
 function validateTxt(v) {
     const s = (v || '').trim()
-    if (!s) return { error: 'Bitte einen Text angeben.' }
-    if (s.length > 255) return `Lang (${s.length} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.`
+    if (!s) return { error: _t('zoneDetail.enterText') }
+    if (s.length > 255) return _t('zoneDetail.txtTooLong', { count: s.length })
     return ''
 }
 
 function validateCaaTag(v) {
     const ok = ['issue', 'issuewild', 'iodef', 'contactemail', 'contactphone']
-    if (!v) return { error: 'Tag fehlt.' }
-    if (!ok.includes(v)) return `Ungewöhnlicher Tag „${v}“ (üblich: ${ok.slice(0, 3).join(', ')}).`
+    if (!v) return { error: _t('zoneDetail.tagMissing') }
+    if (!ok.includes(v)) return _t('zoneDetail.unusualCaaTag', { tag: v, common: ok.slice(0, 3).join(', ') })
     return ''
 }
 
@@ -630,7 +635,8 @@ export default function ZoneDetailPage() {
                         <span className="text-xs font-bold px-2 py-0.5 bg-accent/20 text-accent-light rounded">{type}</span>
                         <span className="text-xs text-text-muted">{t('zoneDetail.recordCount', { count: grouped[type].length })}</span>
                     </div>
-                    <table className="w-full text-sm">
+                    <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[640px]">
                         <thead>
                             <tr className="border-b border-border/50">
                                 <th className="text-left p-3 text-text-muted font-medium text-xs">{t('zoneDetail.name')}</th>
@@ -676,6 +682,7 @@ export default function ZoneDetailPage() {
                             ))}
                         </tbody>
                     </table>
+                    </div>
                 </div>
             ))}
 

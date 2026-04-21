@@ -27,20 +27,20 @@ function cleanupDomainInput(input) {
 const DOMAIN_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
 const REVERSE_SUFFIX_RE = /\.(in-addr|ip6)\.arpa$/i
 
-/** Liefert {error, hint, reverse} für eine eingegebene Domain. */
-function describeDomain(input) {
+/** Liefert {error, hint, reverse} für eine eingegebene Domain. `t` ist die i18next-Translate-Funktion. */
+function describeDomain(input, t) {
     const reverse = parseCidrToArpa(input)
-    if (reverse) return { hint: `Reverse-Zone: wird als ${reverse} angelegt.`, reverseZone: reverse }
+    if (reverse) return { hint: t('zones.reverseZoneCreatedAs', { zone: reverse }), reverseZone: reverse }
 
     const cleaned = cleanupDomainInput(input)
-    if (!cleaned) return { error: 'Bitte einen Domainnamen eingeben.' }
+    if (!cleaned) return { error: t('zones.enterDomainName') }
     if (REVERSE_SUFFIX_RE.test(cleaned)) {
-        return { hint: 'Reverse-Zone erkannt – wird so übernommen.' }
+        return { hint: t('zones.reverseZoneDetected') }
     }
     if (!DOMAIN_RE.test(cleaned)) {
-        return { error: `„${cleaned}“ ist kein gültiger Domainname (z. B. meinedomain.de).` }
+        return { error: t('zones.invalidDomainName', { name: cleaned }) }
     }
-    return { hint: `Wird angelegt als: ${cleaned}` }
+    return { hint: t('zones.willBeCreatedAs', { name: cleaned }) }
 }
 
 /** "192.168.1.0/24" → "1.168.192.in-addr.arpa". Andere CIDRs → null. */
@@ -57,11 +57,11 @@ function parseCidrToArpa(input) {
     return null
 }
 
-/** Validiert einen einzelnen Nameserver-Eintrag. */
-function validateNameserver(ns) {
+/** Validiert einen einzelnen Nameserver-Eintrag. `t` ist die i18next-Translate-Funktion. */
+function validateNameserver(ns, t) {
     if (!ns) return ''
     const s = ns.trim().replace(/\.$/, '')
-    if (!DOMAIN_RE.test(s)) return 'Kein gültiger Nameserver (z. B. ns1.example.com).'
+    if (!DOMAIN_RE.test(s)) return t('zones.invalidNameserver')
     return ''
 }
 
@@ -202,12 +202,12 @@ export default function ZonesPage() {
         const cleaned = reverseFromCidr || cleanupDomainInput(rawInput)
 
         if (!cleaned) {
-            setError('Bitte einen Domainnamen eingeben.')
+            setError(t('zones.enterDomainName'))
             setCreating(false)
             return
         }
         if (!REVERSE_SUFFIX_RE.test(cleaned) && !DOMAIN_RE.test(cleaned)) {
-            setError(`„${rawInput}“ ist kein gültiger Domainname. Beispiel: meinedomain.de`)
+            setError(t('zones.invalidDomainName', { name: rawInput }))
             setCreating(false)
             return
         }
@@ -220,8 +220,8 @@ export default function ZonesPage() {
 
         // Validiere jeden NS einzeln
         for (const ns of nsArray) {
-            if (validateNameserver(ns)) {
-                setError(`Nameserver ungültig: ${ns}`)
+            if (validateNameserver(ns, t)) {
+                setError(t('zones.invalidNameserverNamed', { name: ns }))
                 setCreating(false)
                 return
             }
@@ -241,7 +241,7 @@ export default function ZonesPage() {
                 const errParts = Object.entries(details)
                     .filter(([, v]) => String(v).startsWith('error:'))
                     .map(([srv, v]) => `${srv}: ${String(v).replace(/^error:\s*/, '')}`)
-                setError(errParts.length ? errParts.join(' · ') : 'Ein Server hat einen Fehler gemeldet.')
+                setError(errParts.length ? errParts.join(' · ') : t('zones.serverReportedError'))
             }
 
             // Template-Records (nur ohne Server-Fehler)
@@ -323,7 +323,7 @@ export default function ZonesPage() {
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
 
     /* ----- abgeleiteter Zustand fürs Modal ----------------------------------*/
-    const domainInfo = describeDomain(createForm.name)
+    const domainInfo = describeDomain(createForm.name, t)
     const selectedTemplate = templates.find(tt => String(tt.id) === selectedTemplateId)
 
     return (
@@ -361,7 +361,8 @@ export default function ZonesPage() {
 
             {/* Zone table */}
             <div className="glass-card overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[760px]">
                     <thead>
                         <tr className="border-b border-border">
                             <th className="text-left p-4 text-text-muted font-medium">{t('zones.zone')}</th>
@@ -415,6 +416,7 @@ export default function ZonesPage() {
                         )}
                     </tbody>
                 </table>
+              </div>
             </div>
 
             {/* Create Zone Modal */}
@@ -594,7 +596,7 @@ export default function ZonesPage() {
                                 </div>
                                 <div className="space-y-2">
                                     {nameservers.map((ns, idx) => {
-                                        const err = validateNameserver(ns)
+                                        const err = validateNameserver(ns, t)
                                         return (
                                             <div key={idx}>
                                                 <div className="flex gap-2 items-start">

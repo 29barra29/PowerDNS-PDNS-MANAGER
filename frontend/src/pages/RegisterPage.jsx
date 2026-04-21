@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react'
 import api from '../api'
+import LanguageDropdown from '../components/LanguageDropdown'
+import CaptchaWidget from '../components/CaptchaWidget'
 
 export default function RegisterPage() {
-    const { t, i18n } = useTranslation()
+    const { t } = useTranslation()
     const navigate = useNavigate()
     const [username, setUsername] = useState('')
     const [email, setEmail] = useState('')
@@ -15,6 +17,8 @@ export default function RegisterPage() {
     const [showPw, setShowPw] = useState(false)
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    const [captchaToken, setCaptchaToken] = useState('')
+    const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
         app_name: 'DNS Manager',
         registration_enabled: false,
@@ -22,6 +26,8 @@ export default function RegisterPage() {
         app_creator: '',
         app_logo_url: '',
         app_version: '',
+        captcha_provider: 'none',
+        captcha_site_key: '',
     })
 
     useEffect(() => {
@@ -30,6 +36,8 @@ export default function RegisterPage() {
             if (!info.registration_enabled) navigate('/login')
         }).catch(() => navigate('/login'))
     }, [navigate])
+
+    const captchaActive = appInfo.captcha_provider && appInfo.captcha_provider !== 'none' && appInfo.captcha_site_key
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -42,6 +50,10 @@ export default function RegisterPage() {
             setError(t('register.passwordMinLength'))
             return
         }
+        if (captchaActive && !captchaToken) {
+            setError(t('auth.captchaRequired'))
+            return
+        }
         setLoading(true)
         try {
             await api.register({
@@ -49,10 +61,15 @@ export default function RegisterPage() {
                 email: email.trim() || undefined,
                 display_name: displayName.trim() || undefined,
                 password,
+                captcha_token: captchaToken || undefined,
             })
             navigate('/login', { state: { message: t('register.successMessage') } })
         } catch (err) {
             setError(err.message)
+            if (captchaActive) {
+                setCaptchaToken('')
+                captchaRef.current?.reset()
+            }
         } finally {
             setLoading(false)
         }
@@ -77,10 +94,8 @@ export default function RegisterPage() {
                     <h1 className="text-2xl font-bold text-text-primary">{appInfo.app_name}</h1>
                     <p className="text-text-muted text-sm mt-1">{t('register.title')}</p>
                 </div>
-                <div className="absolute top-4 right-4 flex gap-1 text-xs">
-                    <button type="button" onClick={() => i18n.changeLanguage('de')} className={`px-2 py-1 rounded ${i18n.language === 'de' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>DE</button>
-                    <span className="text-text-muted">|</span>
-                    <button type="button" onClick={() => i18n.changeLanguage('en')} className={`px-2 py-1 rounded ${i18n.language === 'en' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>EN</button>
+                <div className="absolute top-4 right-4">
+                    <LanguageDropdown />
                 </div>
 
                 {error && (
@@ -97,7 +112,7 @@ export default function RegisterPage() {
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             className="w-full px-4 py-2.5 text-sm"
-                            placeholder="benutzer"
+                            placeholder={t('register.usernamePlaceholder')}
                             required
                             minLength={3}
                         />
@@ -109,7 +124,7 @@ export default function RegisterPage() {
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             className="w-full px-4 py-2.5 text-sm"
-                            placeholder="mail@beispiel.de"
+                            placeholder={t('register.emailPlaceholder')}
                         />
                     </div>
                     <div>
@@ -119,7 +134,7 @@ export default function RegisterPage() {
                             value={displayName}
                             onChange={(e) => setDisplayName(e.target.value)}
                             className="w-full px-4 py-2.5 text-sm"
-                            placeholder="Max Mustermann"
+                            placeholder={t('register.displayNamePlaceholder')}
                         />
                     </div>
                     <div>
@@ -158,9 +173,20 @@ export default function RegisterPage() {
                         />
                     </div>
 
+                    {captchaActive && (
+                        <CaptchaWidget
+                            ref={captchaRef}
+                            provider={appInfo.captcha_provider}
+                            siteKey={appInfo.captcha_site_key}
+                            onToken={setCaptchaToken}
+                            onExpire={() => setCaptchaToken('')}
+                            onError={() => setCaptchaToken('')}
+                        />
+                    )}
+
                     <button
                         type="submit"
-                        disabled={loading}
+                        disabled={loading || (captchaActive && !captchaToken)}
                         className="w-full py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                         {loading ? (

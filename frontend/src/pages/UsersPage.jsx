@@ -314,13 +314,13 @@ export default function UsersPage() {
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.username')}</label>
                                 <input type="text" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })}
-                                    placeholder="benutzername" className="w-full px-3 py-2 text-sm" required minLength={3} pattern="[A-Za-z0-9._-]+" title={t('users.usernamePattern')} />
+                                    placeholder={t('users.usernamePlaceholder')} className="w-full px-3 py-2 text-sm" required minLength={3} pattern="[A-Za-z0-9._-]+" title={t('users.usernamePattern')} />
                                 <p className="text-xs text-text-muted mt-1">{t('users.usernameHint')}</p>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.displayName')}</label>
                                 <input type="text" value={form.display_name} onChange={e => setForm({ ...form, display_name: e.target.value })}
-                                    placeholder="Max Mustermann" className="w-full px-3 py-2 text-sm" />
+                                    placeholder={t('users.displayNamePlaceholder')} className="w-full px-3 py-2 text-sm" />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">{t('users.password')}</label>

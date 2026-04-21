@@ -12,9 +12,10 @@ import {
   Loader2
 } from 'lucide-react';
 import api from '../api';
+import LanguageDropdown from '../components/LanguageDropdown';
 
 export default function SetupWizard() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -178,10 +179,8 @@ export default function SetupWizard() {
             <p className="text-text-muted text-sm">
               {t('setup.welcomeSubtitle')}
             </p>
-            <div className="absolute top-4 right-4 flex gap-1 text-xs">
-              <button type="button" onClick={() => i18n.changeLanguage('de')} className={`px-2 py-1 rounded ${i18n.language === 'de' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>DE</button>
-              <span className="text-text-muted">|</span>
-              <button type="button" onClick={() => i18n.changeLanguage('en')} className={`px-2 py-1 rounded ${i18n.language === 'en' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>EN</button>
+            <div className="absolute top-4 right-4">
+              <LanguageDropdown />
             </div>
           </div>
 
@@ -248,7 +247,7 @@ export default function SetupWizard() {
                       className="w-full px-4 py-2.5 text-sm"
                       value={userData.displayName}
                       onChange={(e) => setUserData({...userData, displayName: e.target.value})}
-                      placeholder="Administrator"
+                      placeholder={t('setup.adminPlaceholder')}
                     />
                   </div>
 
@@ -341,7 +340,7 @@ export default function SetupWizard() {
                         className="w-full px-4 py-2.5 text-sm"
                         value={emailConfig.smtp_user}
                         onChange={(e) => setEmailConfig({...emailConfig, smtp_user: e.target.value})}
-                        placeholder="deine-email@gmail.com"
+                        placeholder={t('setup.smtpUserPlaceholder')}
                       />
                     </div>
 
@@ -352,7 +351,7 @@ export default function SetupWizard() {
                         className="w-full px-4 py-2.5 text-sm"
                         value={emailConfig.smtp_password}
                         onChange={(e) => setEmailConfig({...emailConfig, smtp_password: e.target.value})}
-                        placeholder="App-spezifisches Passwort"
+                        placeholder={t('setup.appPasswordPlaceholder')}
                       />
                     </div>
 

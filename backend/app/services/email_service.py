@@ -120,6 +120,57 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
         raise RuntimeError(f"E-Mail-Versand fehlgeschlagen: {str(e)}")
 
 
+# ----------------------------------------------------------------------------
+# Welcome-Mail Settings (Key-Value, gleicher Store wie SMTP)
+# ----------------------------------------------------------------------------
+WELCOME_EMAIL_KEYS = [
+    "welcome_email_enabled",
+    "welcome_email_subject",
+    "welcome_email_body",
+]
+
+
+async def get_welcome_email_settings(db: AsyncSession) -> dict:
+    """Welcome-Mail-Einstellungen lesen. Leere Werte sind erlaubt - das UI
+    blendet dann das Default-Template ein."""
+    from app.models.models import SystemSetting
+
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key.in_(WELCOME_EMAIL_KEYS))
+    )
+    rows = {row.key: row.value for row in result.scalars().all()}
+    return {
+        "enabled": (rows.get("welcome_email_enabled") or "false").strip().lower() == "true",
+        "subject": (rows.get("welcome_email_subject") or "").strip(),
+        "body": rows.get("welcome_email_body") or "",
+    }
+
+
+async def save_welcome_email_settings(
+    db: AsyncSession,
+    *,
+    enabled: bool,
+    subject: str,
+    body: str,
+) -> None:
+    """Welcome-Mail-Einstellungen schreiben."""
+    from app.models.models import SystemSetting
+
+    pairs = {
+        "welcome_email_enabled": "true" if enabled else "false",
+        "welcome_email_subject": (subject or "").strip(),
+        "welcome_email_body": body or "",
+    }
+    for key, value in pairs.items():
+        result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.value = value
+        else:
+            db.add(SystemSetting(key=key, value=value))
+    await db.commit()
+
+
 async def test_smtp_connection(smtp_settings: dict) -> dict:
     """Test SMTP connection without sending an email."""
     host = smtp_settings.get("host", "")

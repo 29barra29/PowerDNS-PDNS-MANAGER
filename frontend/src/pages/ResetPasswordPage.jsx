@@ -3,9 +3,10 @@ import { useSearchParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Shield, Eye, EyeOff, Loader2 } from 'lucide-react'
 import api from '../api'
+import LanguageDropdown from '../components/LanguageDropdown'
 
 export default function ResetPasswordPage() {
-    const { t, i18n } = useTranslation()
+    const { t } = useTranslation()
     const [searchParams] = useSearchParams()
     const token = searchParams.get('token') || ''
     const [password, setPassword] = useState('')
@@ -57,10 +58,8 @@ export default function ResetPasswordPage() {
             <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl" />
 
             <div className="glass-card p-8 w-full max-w-md relative z-10">
-                <div className="absolute top-4 right-4 flex gap-1 text-xs">
-                    <button type="button" onClick={() => i18n.changeLanguage('de')} className={`px-2 py-1 rounded ${i18n.language === 'de' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>DE</button>
-                    <span className="text-text-muted">|</span>
-                    <button type="button" onClick={() => i18n.changeLanguage('en')} className={`px-2 py-1 rounded ${i18n.language === 'en' ? 'bg-accent/20 text-accent-light font-medium' : 'text-text-muted hover:text-text-primary'}`}>EN</button>
+                <div className="absolute top-4 right-4">
+                    <LanguageDropdown />
                 </div>
                 <div className="text-center mb-8">
                     {appInfo.app_logo_url ? (

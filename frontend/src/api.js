@@ -123,10 +123,12 @@ class APIClient {
     }
 
     // ========== Auth ==========
-    async login(username, password) {
+    async login(username, password, captchaToken = null) {
         const form = new URLSearchParams();
         form.append('username', username);
         form.append('password', password);
+        // Captcha-Token als zusaetzliches Form-Field (Backend nimmt es per Form(...) entgegen).
+        if (captchaToken) form.append('captcha_token', captchaToken);
 
         let res;
         try {
@@ -228,6 +230,16 @@ class APIClient {
     updateSmtpSettings(data) { return this.request('PUT', '/settings/smtp', data); }
     testSmtpConnection() { return this.request('POST', '/settings/smtp/test'); }
     sendTestEmail(data) { return this.request('POST', '/settings/smtp/test-email', data); }
+
+    // ========== Captcha ==========
+    getCaptchaSettings() { return this.request('GET', '/settings/captcha'); }
+    updateCaptchaSettings(data) { return this.request('PUT', '/settings/captcha', data); }
+    testCaptcha(token) { return this.request('POST', '/settings/captcha/test', { token }); }
+
+    // ========== Welcome Email ==========
+    getWelcomeEmailSettings() { return this.request('GET', '/settings/welcome-email'); }
+    updateWelcomeEmailSettings(data) { return this.request('PUT', '/settings/welcome-email', data); }
+    sendWelcomeTestEmail(data) { return this.request('POST', '/settings/welcome-email/test', data); }
     // ========== App Info ==========
     // Öffentliche, unkritische App-Daten (Name, Logo, Sprache).
     getAppInfo() { return this.request('GET', '/settings/app-info'); }
