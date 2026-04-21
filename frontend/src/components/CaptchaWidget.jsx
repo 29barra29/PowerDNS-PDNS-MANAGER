@@ -98,6 +98,22 @@ const CaptchaWidget = forwardRef(function CaptchaWidget(
     const widgetIdRef = useRef(null)
     const sdkRef = useRef(null)
 
+    // Callbacks in Refs halten, damit sie NICHT in den useEffect-Deps unten
+    // landen. Parents uebergeben oft Inline-Lambdas (z.B. () => setToken(''))
+    // die bei jedem Parent-Render eine neue Funktions-Referenz sind - wuerden
+    // die in den Deps stehen, wuerde das Widget bei jedem Tastendruck im Parent
+    // unmounten und neu rendern (iframe weg -> Focus weg -> halb geloestes
+    // Captcha futsch). Ueber Refs bleiben wir immer bei der aktuellen Version,
+    // ohne einen neuen Effect-Lauf auszuloesen.
+    const onTokenRef = useRef(onToken)
+    const onExpireRef = useRef(onExpire)
+    const onErrorRef = useRef(onError)
+    useEffect(() => {
+        onTokenRef.current = onToken
+        onExpireRef.current = onExpire
+        onErrorRef.current = onError
+    })
+
     useImperativeHandle(ref, () => ({
         reset() {
             const sdk = sdkRef.current
@@ -127,18 +143,18 @@ const CaptchaWidget = forwardRef(function CaptchaWidget(
                 localWidgetId = sdk.render(container, {
                     sitekey: siteKey,
                     theme,
-                    callback: (token) => { if (!cancelled && typeof onToken === 'function') onToken(token) },
-                    'expired-callback': () => { if (!cancelled && typeof onExpire === 'function') onExpire() },
-                    'error-callback': () => { if (!cancelled && typeof onError === 'function') onError() },
+                    callback: (token) => { if (!cancelled) onTokenRef.current?.(token) },
+                    'expired-callback': () => { if (!cancelled) onExpireRef.current?.() },
+                    'error-callback': () => { if (!cancelled) onErrorRef.current?.() },
                 })
                 widgetIdRef.current = localWidgetId
             } catch (err) {
                 console.error('Captcha render failed', err)
-                if (typeof onError === 'function') onError()
+                onErrorRef.current?.()
             }
         }).catch((err) => {
             console.error(err)
-            if (typeof onError === 'function') onError()
+            onErrorRef.current?.()
         })
 
         return () => {
@@ -152,7 +168,7 @@ const CaptchaWidget = forwardRef(function CaptchaWidget(
             widgetIdRef.current = null
             sdkRef.current = null
         }
-    }, [provider, siteKey, theme, onToken, onExpire, onError])
+    }, [provider, siteKey, theme])
 
     if (!provider || provider === 'none' || !siteKey) return null
 
