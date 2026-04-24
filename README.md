@@ -5,7 +5,7 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.3.5-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.3.6-blue.svg)
 
 ---
 
@@ -30,6 +30,7 @@ Ein Video-Walkthrough (Installation, ersten Server anbinden, Zone + DNSSEC anleg
 - **Branding** – eigener App-Name, Tagline und Logo (z. B. Firmenlogo); Logo bleibt bei Updates über das Volume `backend_uploads` erhalten.
 - **Mehrsprachige Oberfläche** – Sprach-Dropdown mit Flaggen, aktuell Deutsch, Englisch, Serbisch, Kroatisch, Bosnisch und Ungarisch. Default in der `.env` einstellbar. Fehlt mal ein Key, fällt die UI automatisch auf Englisch zurück; weitere Sprachen kommen per PR an `frontend/src/locales/<code>.json`.
 - **Mobile-tauglich** – einklappbare Sidebar mit Hamburger-Menü, Tabellen scrollen horizontal statt das Layout zu sprengen.
+- **ACME / Auto-TLS** – scoped API-Tokens fürs DNS-01-Challenge. certbot legt `_acme-challenge`-TXT-Records selbst an, Zertifikate erneuern sich vollautomatisch. Token kann ausschließlich `_acme-challenge.*`-TXTs in den freigegebenen Zonen schreiben/löschen, nichts anderes; fertiges Hook-Skript (`scripts/certbot-dns-dnsmanager.sh`) liegt im Repo.
 
 ## Was es bewusst nicht macht
 
@@ -135,7 +136,7 @@ Manuell auf eine bestimmte Version wechseln:
 ```bash
 cd dns-manager
 git fetch origin --tags --force --prune --prune-tags
-git checkout v2.3.5              # oder: git checkout main && git pull
+git checkout v2.3.6              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
 ```
@@ -250,6 +251,17 @@ asyncio.run(reset())
 ## Was ist neu (Changelog)
 
 Hier die letzten beiden Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/dns-manager/releases).
+
+### v2.3.6
+
+Neues Feature-Release: **ACME / Auto-TLS**. Du kannst jetzt scoped API-Tokens im Panel erzeugen und damit Let's-Encrypt-Zertifikate (oder andere DNS-01-Challenges) komplett automatisch erneuern, ohne den vollen PowerDNS-API-Key herauszugeben. Kein Breaking Change – `./update.sh` reicht; die neue Tabelle `acme_tokens` legt die App beim ersten Start selbst an.
+
+- **Scoped API-Tokens (Settings → ACME / Auto-TLS):** Pro Token wählst du einen Namen und eine Liste erlaubter Zonen. Generierter Plaintext-Token wird genau einmal angezeigt (gleiches Pattern wie GitHub PATs); in der DB liegt nur ein SHA-256-Hash. Sichtbar im UI: Prefix, erlaubte Zonen, letzte Verwendung (Zeit + IP) – inkl. Revoke-Button.
+- **Endpunkte für certbot/acme.sh/Lego:** `POST /api/v1/acme/present` und `POST /api/v1/acme/cleanup` per `Authorization: Bearer …`. Token kann ausschließlich `_acme-challenge.*`-TXT-Records in den freigegebenen Zonen anlegen/entfernen – jede andere Aktion ist hart 403. Idempotent, mehrere parallele Validierungen (Wildcard + exact) auf gleichem Namen werden korrekt zusammengeführt. TTL der Challenge ist fix 60 s.
+- **certbot-Hook im Repo:** `scripts/certbot-dns-dnsmanager.sh` (bash, ~80 Zeilen, keine Abhängigkeiten außer `curl`). Liest `DNSMGR_URL` und `DNSMGR_TOKEN` aus Env oder `/etc/dnsmgr.env`, erkennt automatisch ob certbot gerade die Auth- oder die Cleanup-Phase aufruft, wartet konfigurierbar (`DNSMGR_PROPAGATE_SECONDS`, Default 30 s) auf DNS-Propagation.
+- **Audit-Log:** jeder ACME-Aufruf landet als `ACME_PRESENT` / `ACME_CLEANUP` mit Token-Name, Zone und Ergebnis im Audit-Log – falls ein Token unerwartet aktiv wird, sieht man es sofort.
+- **Multi-Server-fähig:** wenn mehrere PowerDNS-Server `allow_writes=true` haben und die Zone führen, wird der TXT auf allen geschrieben. Single-Master-Setup mit AXFR/IXFR funktioniert wie gewohnt – dann reicht ein Schreibvorgang.
+- **i18n:** komplett übersetzt für DE/EN/SR/HR/BS/HU.
 
 ### v2.3.5
 

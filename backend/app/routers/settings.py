@@ -833,3 +833,80 @@ async def send_welcome_test_email(
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+# ========================
+# ACME / Auto-TLS Tokens
+# ========================
+class AcmeTokenCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Sprechender Name (z.B. 'smtp-server')")
+    allowed_zones: list[str] = Field(..., min_length=1, description="Zonen, die der Token bedienen darf (mit oder ohne Trailing-Dot)")
+
+
+def _serialize_acme_token(t) -> dict:
+    """ACME-Token DB-Row -> JSON. Niemals den Plaintext exposen - der existiert
+    nach der Erstellung gar nicht mehr in der DB."""
+    return {
+        "id": t.id,
+        "name": t.name,
+        "token_prefix": t.token_prefix,
+        "allowed_zones": t.allowed_zones or [],
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        "last_used_ip": t.last_used_ip,
+        "is_active": bool(t.is_active),
+    }
+
+
+@router.get("/acme/tokens")
+async def list_acme_tokens(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Alle ACME-Tokens auflisten - Plaintext-Wert ist NICHT enthalten (nur Prefix
+    zur Wiedererkennung)."""
+    from app.services import acme as acme_service
+    rows = await acme_service.list_tokens(db)
+    return {"tokens": [_serialize_acme_token(t) for t in rows]}
+
+
+@router.post("/acme/tokens", status_code=201)
+async def create_acme_token(
+    data: AcmeTokenCreate,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Erzeugt einen neuen ACME-Token. Liefert den Plaintext GENAU EINMAL zurueck -
+    das UI muss den User anzeigen lassen, weil er danach nirgendwo mehr lesbar ist.
+    """
+    from app.services import acme as acme_service
+    try:
+        row, plaintext = await acme_service.create_token(
+            db,
+            name=data.name,
+            allowed_zones=data.allowed_zones,
+            created_by_id=admin.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.commit()
+    return {
+        "token": _serialize_acme_token(row),
+        "plaintext_token": plaintext,  # NUR HIER, einmalig
+        "warning": "Dieser Token wird kein zweites Mal angezeigt - jetzt sicher abspeichern.",
+    }
+
+
+@router.delete("/acme/tokens/{token_id}")
+async def delete_acme_token(
+    token_id: int,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Loescht einen Token (Hard-Delete - keine Wiederverwendung moeglich)."""
+    from app.services import acme as acme_service
+    ok = await acme_service.delete_token(db, token_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Token nicht gefunden")
+    await db.commit()
+    return {"message": "Token geloescht"}
+

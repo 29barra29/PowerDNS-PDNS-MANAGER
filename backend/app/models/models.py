@@ -101,3 +101,31 @@ class SystemSetting(Base):
     value = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
+
+class AcmeToken(Base):
+    """Scoped API tokens for ACME / DNS-01 automation (z.B. certbot).
+
+    Auth-Modell: Bearer-Token im Authorization-Header. Wir speichern NIE den
+    Plaintext-Token - nur einen SHA-256-Hash. Beim Erstellen wird der Plaintext
+    EINMAL ans UI zurueckgegeben, danach kann er nicht mehr eingesehen werden
+    (gleiches Pattern wie GitHub PATs / Cloudflare API Tokens).
+
+    Scope: ``allowed_zones`` ist eine JSON-Liste mit normalisierten Zone-Namen
+    (lowercase, mit Trailing-Dot, z.B. ``["gtgmail.de.", "example.com."]``).
+    Der Token darf nur ``_acme-challenge.<sub>.<zone>`` TXT-Records anlegen/loeschen,
+    wo ``<zone>`` exakt einer dieser Zonen entspricht. Eine leere Liste wird vom
+    Code wie "keine Zonen erlaubt" behandelt - es muss immer explizit gescoped sein.
+    """
+    __tablename__ = "acme_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # menschenlesbarer Name, z.B. "smtp-server"
+    token_prefix = Column(String(16), nullable=False, index=True)  # erste ~8 Zeichen, zum Wiedererkennen im UI
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)  # SHA-256 hex
+    allowed_zones = Column(JSON, nullable=False, default=list)  # ["zone1.", "zone2."] - leer = keine
+    created_by_id = Column(Integer, nullable=True)  # User der den Token erstellt hat
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    last_used_ip = Column(String(64), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+

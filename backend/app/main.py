@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_db
 from app.services.pdns_client import PowerDNSAPIError, pdns_manager
-from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router, setup, templates
+from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router, setup, templates, acme
 from app.core.auth import create_initial_admin
 from app.core.database import get_db, async_session
 
@@ -176,6 +176,7 @@ app.include_router(dnssec.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(settings_router.router, prefix=API_PREFIX)
 app.include_router(templates.router, prefix=API_PREFIX)
+app.include_router(acme.router, prefix=API_PREFIX)
 
 
 # ========================

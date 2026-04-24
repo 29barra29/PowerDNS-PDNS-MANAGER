@@ -240,6 +240,13 @@ class APIClient {
     getWelcomeEmailSettings() { return this.request('GET', '/settings/welcome-email'); }
     updateWelcomeEmailSettings(data) { return this.request('PUT', '/settings/welcome-email', data); }
     sendWelcomeTestEmail(data) { return this.request('POST', '/settings/welcome-email/test', data); }
+
+    // ========== ACME / Auto-TLS Tokens ==========
+    // Liste der Tokens (ohne Plaintext - der existiert nur einmalig nach create).
+    getAcmeTokens() { return this.request('GET', '/settings/acme/tokens'); }
+    // Liefert { token, plaintext_token, warning } - plaintext_token nur einmal!
+    createAcmeToken(data) { return this.request('POST', '/settings/acme/tokens', data); }
+    deleteAcmeToken(id) { return this.request('DELETE', `/settings/acme/tokens/${id}`); }
     // ========== App Info ==========
     // Öffentliche, unkritische App-Daten (Name, Logo, Sprache).
     getAppInfo() { return this.request('GET', '/settings/app-info'); }
