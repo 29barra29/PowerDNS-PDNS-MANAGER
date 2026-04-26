@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 import { Server, Globe, Activity, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
 import api from '../api'
 
 export default function DashboardPage() {
     const { t } = useTranslation()
     const [servers, setServers] = useState([])
+    const [uniqueZones, setUniqueZones] = useState(null) // null = unbekannt, sonst Set-Count
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [user, setUser] = useState(() => api.getUser())
@@ -21,7 +23,21 @@ export default function DashboardPage() {
     async function loadDashboard() {
         try {
             const data = await api.getServers()
-            setServers(data.servers || [])
+            const srvs = data.servers || []
+            setServers(srvs)
+            // Eindeutige Zonen über alle Server berechnen, damit synchronisierte
+            // Zonen nicht doppelt gezählt werden.
+            try {
+                const reachable = srvs.filter(s => s.is_reachable)
+                const lists = await Promise.all(reachable.map(async s => {
+                    try {
+                        const z = await api.listZones(s.name)
+                        return (z.zones || []).map(zone => zone.name)
+                    } catch { return [] }
+                }))
+                const unique = new Set(lists.flat())
+                setUniqueZones(unique.size)
+            } catch { /* ignore – Fallback auf Summe */ }
         } catch (err) {
             setError(err.message)
         } finally {
@@ -40,7 +56,9 @@ export default function DashboardPage() {
     const isAdmin = user?.role === 'admin'
     const allOnline = servers.every(s => s.is_reachable)
     const onlineCount = servers.filter(s => s.is_reachable).length
-    const totalZones = servers.reduce((acc, s) => acc + (s.zone_count || 0), 0)
+    const totalZones = uniqueZones != null
+        ? uniqueZones
+        : servers.reduce((acc, s) => acc + (s.zone_count || 0), 0)
 
     // ========================
     // Benutzer-Dashboard (vereinfacht)
@@ -83,7 +101,7 @@ export default function DashboardPage() {
                 <div>
                     <h2 className="text-lg font-semibold text-text-primary mb-3">{t('dashboard.quickAccess')}</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <a href="/zones" className="glass-card p-5 hover:bg-bg-hover/50 transition-all group cursor-pointer block">
+                        <Link to="/zones" className="glass-card p-5 hover:bg-bg-hover/50 transition-all group cursor-pointer block">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center group-hover:bg-accent/30 transition-colors">
                                     <Globe className="w-5 h-5 text-accent-light" />
@@ -93,8 +111,8 @@ export default function DashboardPage() {
                                     <p className="text-xs text-text-muted">{t('dashboard.manageRecords')}</p>
                                 </div>
                             </div>
-                        </a>
-                        <a href="/search" className="glass-card p-5 hover:bg-bg-hover/50 transition-all group cursor-pointer block">
+                        </Link>
+                        <Link to="/search" className="glass-card p-5 hover:bg-bg-hover/50 transition-all group cursor-pointer block">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center group-hover:bg-purple-500/30 transition-colors">
                                     <Activity className="w-5 h-5 text-purple-400" />
@@ -104,7 +122,7 @@ export default function DashboardPage() {
                                     <p className="text-xs text-text-muted">{t('dashboard.searchRecords')}</p>
                                 </div>
                             </div>
-                        </a>
+                        </Link>
                     </div>
                 </div>
             </div>

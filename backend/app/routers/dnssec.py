@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.auth import get_current_user, assert_zone_access
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
+from app.services.dnssec_parse import parse_ds_line, parse_dnskey_rdata
 from app.schemas.dns import DNSSECEnable, MessageResponse  # CryptoKeyResponse currently unused
 from app.models.models import AuditLog, User
 
@@ -98,7 +99,7 @@ async def enable_dnssec(
 
     Creates a CSK (Combined Signing Key), sets NSEC3 parameters and rectifies the zone.
     """
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
@@ -148,7 +149,7 @@ async def disable_dnssec(
     db: AsyncSession = Depends(get_db),
 ):
     """Disable DNSSEC for a zone (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
@@ -183,7 +184,7 @@ async def activate_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Activate a DNSSEC key (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
         await client.activate_cryptokey(zone_id, key_id)
@@ -208,7 +209,7 @@ async def deactivate_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Deactivate a DNSSEC key (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
         await client.deactivate_cryptokey(zone_id, key_id)
@@ -233,7 +234,7 @@ async def delete_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a DNSSEC key (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
         await client.delete_cryptokey(zone_id, key_id)
@@ -263,14 +264,28 @@ async def get_ds_records(
         keys = await client.get_cryptokeys(zone_id)
 
         ds_records = []
+        signing_keys = []
         for key in keys:
+            kid = key.get("id")
+            dnskey_str = key.get("dnskey")
+            signing_keys.append({
+                "key_id": kid,
+                "keytype": key.get("keytype"),
+                "active": key.get("active"),
+                "algorithm": key.get("algorithm"),  # z. B. "ECDSAP256SHA256" laut PowerDNS
+                "bits": key.get("bits"),
+                "dnskey": dnskey_str,
+                "dnskey_parsed": parse_dnskey_rdata(dnskey_str),
+            })
             if key.get("ds"):
                 for ds in key["ds"]:
+                    p = parse_ds_line(ds) if isinstance(ds, str) else {"raw": str(ds), "error": "not_string"}
                     ds_records.append({
-                        "key_id": key.get("id"),
+                        "key_id": kid,
                         "keytype": key.get("keytype"),
                         "active": key.get("active"),
                         "ds": ds,
+                        "parsed": p,
                     })
 
         return {
@@ -278,7 +293,8 @@ async def get_ds_records(
             "server": server_name,
             "ds_count": len(ds_records),
             "ds_records": ds_records,
-            "info": "Add these DS records to your domain registrar.",
+            "signing_keys": signing_keys,
+            "info": "Add these DS records to your domain registrar. Multiple DS lines per key are different digest algorithms (1=SHA-1, 2=SHA-256, 4=SHA-384) — use digest type 2 at the registrar if only one is allowed.",
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

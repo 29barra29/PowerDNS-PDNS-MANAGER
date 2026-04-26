@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
-    Globe, Plus, Trash2, Loader2, Shield, AlertCircle, CheckCircle, X
+    Globe, Plus, Trash2, Loader2, Shield, AlertCircle, CheckCircle, X, FileUp
 } from 'lucide-react'
 import api from '../api'
 
@@ -92,6 +92,13 @@ export default function ZonesPage() {
     const [user, setUser] = useState(() => api.getUser())
     const isAdmin = user?.role === 'admin'
     const formRef = useRef(null)
+    const [showImport, setShowImport] = useState(false)
+    const [imName, setImName] = useState('')
+    const [imKind, setImKind] = useState('Native')
+    const [imNs, setImNs] = useState('ns1.example.com.,ns2.example.com.')
+    const [imContent, setImContent] = useState('')
+    const [imPreview, setImPreview] = useState(null)
+    const [imBusy, setImBusy] = useState(false)
 
     useEffect(() => {
         const u = api.getUser()
@@ -169,8 +176,10 @@ export default function ZonesPage() {
     async function loadZones() {
         try {
             const sData = await api.getServers()
-            setServers(sData.servers || [])
-            const reachable = (sData.servers || []).filter(s => s.is_reachable)
+            const allServers = sData.servers || []
+            setServers(allServers)
+            const writableSet = new Set(allServers.filter(s => s.allow_writes !== false).map(s => s.name))
+            const reachable = allServers.filter(s => s.is_reachable)
             const results = await Promise.all(reachable.map(async (s) => {
                 try {
                     const zData = await api.listZones(s.name)
@@ -180,8 +189,34 @@ export default function ZonesPage() {
                 }
             }))
             const allZones = results.flat()
-            const seen = new Set()
-            setZones(allZones.filter(z => { if (seen.has(z.name)) return false; seen.add(z.name); return true }))
+            // Merge zones with the same name (e.g. synchronized between ns1 and ns3).
+            // The user sees one row per zone, with all servers it lives on. The
+            // first server in `_servers` is preferred for click-through and is
+            // always a writable one if any of the zone's servers can write.
+            const merged = new Map()
+            for (const z of allZones) {
+                const key = z.name
+                if (!merged.has(key)) {
+                    merged.set(key, { ...z, _servers: [z._server] })
+                } else {
+                    const cur = merged.get(key)
+                    if (!cur._servers.includes(z._server)) cur._servers.push(z._server)
+                    if (z.dnssec && !cur.dnssec) cur.dnssec = true
+                    if (z.serial && (!cur.serial || String(z.serial) > String(cur.serial))) {
+                        cur.serial = z.serial
+                    }
+                }
+            }
+            // Sort each zone's _servers list: writable first, then by name.
+            for (const z of merged.values()) {
+                z._servers.sort((a, b) => {
+                    const aw = writableSet.has(a) ? 0 : 1
+                    const bw = writableSet.has(b) ? 0 : 1
+                    if (aw !== bw) return aw - bw
+                    return a.localeCompare(b)
+                })
+            }
+            setZones(Array.from(merged.values()))
         } catch (err) {
             setError(err.message)
         } finally {
@@ -309,15 +344,63 @@ export default function ZonesPage() {
         setShowCreate(true)
     }
 
-    async function handleDelete(server, zone) {
-        if (!confirm(t('zones.deleteZoneConfirm', { zone }))) return
+    function _importPayload() {
+        const name = (imName || '').trim().toLowerCase()
+        const content = (imContent || '').trim()
+        const nameservers = (imNs || '').split(/[\n,]+/).map((s) => s.trim().replace(/\.$/, '')).filter(Boolean)
+        if (!name) throw new Error(t('zones.enterDomainName'))
+        if (!content) throw new Error(t('zones.importContentMissing'))
+        return { name, kind: imKind, nameservers, content }
+    }
+
+    async function runImportPreview() {
+        setImBusy(true)
+        setImPreview(null)
+        setError('')
         try {
-            await api.deleteZone(server, zone)
-            setSuccess(t('zones.deletedSuccess', { zone: zone.replace(/\.$/, '') }))
+            const p = _importPayload()
+            const d = await api.previewZoneImport(p)
+            setImPreview(d)
+        } catch (e) {
+            setError(e.message)
+        } finally { setImBusy(false) }
+    }
+
+    async function runImportExecute() {
+        setImBusy(true)
+        setError('')
+        try {
+            const p = _importPayload()
+            const res = await api.importZone(p)
+            setShowImport(false)
+            setImPreview(null)
+            setImContent('')
+            setImName('')
+            setSuccess(res.message || t('zones.importRun'))
             loadZones()
-        } catch (err) {
-            setError(err.message)
+        } catch (e) {
+            setError(e.message)
+        } finally { setImBusy(false) }
+    }
+
+    async function handleDelete(servers, zone) {
+        const targets = Array.isArray(servers) ? servers : [servers]
+        const confirmKey = targets.length > 1 ? 'zones.deleteZoneAllServersConfirm' : 'zones.deleteZoneConfirm'
+        if (!confirm(t(confirmKey, { zone, count: targets.length, servers: targets.join(', ') }))) return
+        const errors = []
+        for (const srv of targets) {
+            try {
+                await api.deleteZone(srv, zone)
+            } catch (err) {
+                errors.push(`${srv}: ${err.message || err}`)
+            }
         }
+        if (errors.length) {
+            setError(errors.join(' · '))
+        } else {
+            setSuccess(t('zones.deletedSuccess', { zone: zone.replace(/\.$/, '') }))
+        }
+        loadZones()
     }
 
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
@@ -334,12 +417,22 @@ export default function ZonesPage() {
                     <p className="text-text-muted text-sm mt-1">{t('zones.zonesCount', { count: zones.length })}</p>
                 </div>
                 {isAdmin && (
-                    <button
-                        onClick={openCreateModal}
-                        className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
-                    >
-                        <Plus className="w-4 h-4" /> {t('zones.newZone')}
-                    </button>
+                    <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+                        <button
+                            type="button"
+                            onClick={() => { setShowImport(true); setImPreview(null); setError('') }}
+                            className="flex items-center gap-2 px-4 py-2.5 border border-border bg-bg-secondary hover:bg-bg-hover text-text-primary rounded-lg font-medium text-sm transition-all"
+                        >
+                            <FileUp className="w-4 h-4" /> {t('zones.importZone')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={openCreateModal}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
+                        >
+                            <Plus className="w-4 h-4" /> {t('zones.newZone')}
+                        </button>
+                    </div>
                 )}
             </div>
 
@@ -374,11 +467,14 @@ export default function ZonesPage() {
                         </tr>
                     </thead>
                     <tbody>
-                        {zones.map(z => (
+                        {zones.map(z => {
+                            const zoneServers = z._servers && z._servers.length ? z._servers : [z._server]
+                            const primary = zoneServers[0]
+                            return (
                             <tr
                                 key={z.name}
                                 className="border-b border-border/50 hover:bg-bg-hover/50 cursor-pointer transition-colors"
-                                onClick={() => navigate(`/zones/${z._server}/${z.name}`)}
+                                onClick={() => navigate(`/zones/${encodeURIComponent(primary)}/${encodeURIComponent(z.name)}`)}
                             >
                                 <td className="p-4">
                                     <div className="flex items-center gap-2">
@@ -394,11 +490,22 @@ export default function ZonesPage() {
                                         : <span className="text-xs text-text-muted">{t('zones.dnssecOff')}</span>
                                     }
                                 </td>
-                                <td className="p-4 text-text-secondary">{z._server}</td>
+                                <td className="p-4 text-text-secondary">
+                                    <div className="flex flex-wrap gap-1">
+                                        {zoneServers.map(srv => (
+                                            <span
+                                                key={srv}
+                                                className="text-xs px-2 py-0.5 rounded-full bg-bg-secondary border border-border text-text-secondary"
+                                            >
+                                                {srv}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </td>
                                 <td className="p-4 text-right">
                                     {isAdmin && (
                                         <button
-                                            onClick={(e) => { e.stopPropagation(); handleDelete(z._server, z.name) }}
+                                            onClick={(e) => { e.stopPropagation(); handleDelete(zoneServers, z.name) }}
                                             className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
                                             title={t('zones.deleteZone')}
                                         >
@@ -407,7 +514,8 @@ export default function ZonesPage() {
                                     )}
                                 </td>
                             </tr>
-                        ))}
+                            )
+                        })}
                         {zones.length === 0 && (
                             <tr><td colSpan={6} className="p-12 text-center text-text-muted">
                                 <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
@@ -512,7 +620,7 @@ export default function ZonesPage() {
                                     )}
                                     <p className="text-xs text-text-muted mt-1">
                                         {t('zones.templateHint')}{' '}
-                                        <a href="/settings" className="text-accent hover:underline">{t('zones.manageTemplates')}</a>
+                                        <Link to="/settings" className="text-accent hover:underline">{t('zones.manageTemplates')}</Link>
                                     </p>
                                 </div>
                             )}
@@ -629,7 +737,7 @@ export default function ZonesPage() {
                                 </div>
                                 <p className="text-xs text-text-muted mt-1">
                                     {t('zones.nameserverListHint')}{' '}
-                                    <a href="/settings" className="text-accent hover:underline">{t('zones.defaultInSettings')}</a>.
+                                    <Link to="/settings" className="text-accent hover:underline">{t('zones.defaultInSettings')}</Link>.
                                 </p>
                             </div>
 
@@ -673,6 +781,60 @@ export default function ZonesPage() {
                                 </div>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {showImport && isAdmin && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                    onClick={() => { if (!imBusy) { setShowImport(false); setImPreview(null) } }}
+                >
+                    <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-start justify-between mb-4">
+                            <h2 className="text-lg font-bold text-text-primary">{t('zones.importTitle')}</h2>
+                            <button type="button" onClick={() => { if (!imBusy) { setShowImport(false); setImPreview(null) } }} className="p-1 rounded hover:bg-bg-hover"><X className="w-5 h-5" /></button>
+                        </div>
+                        <div className="space-y-3 text-sm">
+                            <div>
+                                <label className="block text-text-muted text-xs mb-1">{t('zones.importName')}</label>
+                                <input value={imName} onChange={(e) => setImName(e.target.value)} className="w-full px-3 py-2" placeholder="example.com" />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importKind')}</label>
+                                    <select value={imKind} onChange={(e) => setImKind(e.target.value)} className="w-full px-3 py-2">
+                                        <option value="Native">Native</option>
+                                        <option value="Master">Master</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importNs')}</label>
+                                    <input value={imNs} onChange={(e) => setImNs(e.target.value)} className="w-full px-3 py-2" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-text-muted text-xs mb-1">{t('zones.importContent')}</label>
+                                <textarea value={imContent} onChange={(e) => setImContent(e.target.value)} className="w-full min-h-[180px] font-mono text-xs px-3 py-2" spellCheck={false} />
+                            </div>
+                            {imPreview && (
+                                <div className="rounded-lg border border-border p-3 text-xs space-y-1 max-h-48 overflow-y-auto">
+                                    {imPreview.parse_error && (
+                                        <p className="text-danger">{t('zones.importParseError', { err: imPreview.parse_error })}</p>
+                                    )}
+                                    <p><strong>zone_exists:</strong> {imPreview.zone_exists ? 'yes' : 'no'}</p>
+                                    <p><strong>would_add:</strong> {imPreview.would_add_total ?? 0} &nbsp; <strong>would_remove:</strong> {imPreview.would_remove_total ?? 0}</p>
+                                </div>
+                            )}
+                            <div className="flex flex-wrap justify-end gap-2 pt-2">
+                                <button type="button" disabled={imBusy} onClick={runImportPreview} className="px-3 py-2 rounded-lg bg-bg-secondary text-sm">
+                                    {imBusy ? <Loader2 className="w-4 h-4 inline animate-spin" /> : null} {t('zones.importPreview')}
+                                </button>
+                                <button type="button" disabled={imBusy || !imPreview} onClick={runImportExecute} className="px-3 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm">
+                                    {t('zones.importRun')}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

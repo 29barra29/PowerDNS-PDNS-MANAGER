@@ -14,6 +14,9 @@ export default function LoginPage() {
     const [showPw, setShowPw] = useState(false)
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
+    const [needTwoFactor, setNeedTwoFactor] = useState(false)
+    const [twoFactorToken, setTwoFactorToken] = useState('')
+    const [totpCode, setTotpCode] = useState('')
     const [captchaToken, setCaptchaToken] = useState('')
     const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
@@ -45,7 +48,18 @@ export default function LoginPage() {
         setLoading(true)
 
         try {
-            await api.login(username, password, captchaToken || null)
+            if (needTwoFactor && twoFactorToken) {
+                await api.completeLogin2fa(twoFactorToken, totpCode)
+                navigate('/')
+                return
+            }
+            const out = await api.login(username, password, captchaToken || null)
+            if (out?.needTwoFactor) {
+                setNeedTwoFactor(true)
+                setTwoFactorToken(out.twoFactorToken || '')
+                setError('')
+                return
+            }
             navigate('/')
         } catch (err) {
             setError(err.message)
@@ -101,7 +115,7 @@ export default function LoginPage() {
                             className="w-full px-4 py-2.5 text-sm"
                             placeholder="admin"
                             autoFocus
-                            required
+                            required={!needTwoFactor}
                         />
                     </div>
 
@@ -114,7 +128,8 @@ export default function LoginPage() {
                                 onChange={(e) => setPassword(e.target.value)}
                                 className="w-full px-4 py-2.5 pr-10 text-sm"
                                 placeholder="••••••••"
-                                required
+                                required={!needTwoFactor}
+                                disabled={needTwoFactor}
                             />
                             <button
                                 type="button"
@@ -125,6 +140,22 @@ export default function LoginPage() {
                             </button>
                         </div>
                     </div>
+
+                    {needTwoFactor && (
+                        <div>
+                            <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('auth.totpCode')}</label>
+                            <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                value={totpCode}
+                                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                                className="w-full px-4 py-2.5 text-sm font-mono tracking-widest"
+                                placeholder="123456"
+                                maxLength={8}
+                            />
+                        </div>
+                    )}
 
                     {captchaActive && (
                         <CaptchaWidget
@@ -139,7 +170,7 @@ export default function LoginPage() {
 
                     <button
                         type="submit"
-                        disabled={loading || (captchaActive && !captchaToken)}
+                        disabled={loading || (captchaActive && !captchaToken) || (needTwoFactor && totpCode.length < 4)}
                         className="w-full py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                         {loading ? (
@@ -147,6 +178,8 @@ export default function LoginPage() {
                                 <Loader2 className="w-4 h-4 animate-spin" />
                                 {t('login.submitting')}
                             </>
+                        ) : needTwoFactor ? (
+                            t('auth.verifyTotp')
                         ) : (
                             t('login.submit')
                         )}

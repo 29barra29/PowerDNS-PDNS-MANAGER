@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings as app_settings
 from app.core.database import get_db
+import pyotp
 from app.core.auth import (
     hash_password, verify_password, create_access_token,
     create_password_reset_token, decode_password_reset_token,
+    create_two_factor_pending_token, decode_two_factor_pending_token,
     get_current_user, get_admin_user,
     generate_random_password, MIN_PASSWORD_LENGTH,
 )
@@ -83,7 +85,24 @@ class PasswordChange(BaseModel):
 
 
 class ZoneAccessUpdate(BaseModel):
-    zones: list[str] = Field(..., description="Liste der Zonen die der Benutzer verwalten darf")
+    zones: list[str] = Field(..., description="Liste der Zonen")
+    zone_permissions: Optional[dict[str, str]] = Field(
+        default=None,
+        description="Optional: Zonenname -> read oder manage (Fehlende = manage)",
+    )
+
+    @field_validator("zone_permissions")
+    @classmethod
+    def _validate_zone_perms(cls, v: Optional[dict[str, str]]) -> Optional[dict[str, str]]:
+        if not v:
+            return v
+        out = {}
+        for k, val in v.items():
+            p = (val or "manage").strip().lower()
+            if p not in ("read", "manage"):
+                raise ValueError("permission muss read oder manage sein")
+            out[k.strip()] = p
+        return out
 
 
 class RegisterPublic(BaseModel):
@@ -116,11 +135,14 @@ async def _get_auth_setting(db: AsyncSession, key: str) -> bool:
 
 
 async def _user_to_dict(user: User, db: AsyncSession) -> dict:
-    # Zugewiesene Zonen laden
     result = await db.execute(
-        select(UserZoneAccess.zone_name).where(UserZoneAccess.user_id == user.id)
+        select(UserZoneAccess.zone_name, UserZoneAccess.permission).where(
+            UserZoneAccess.user_id == user.id
+        )
     )
-    zones = [row[0] for row in result.all()]
+    rows = result.all()
+    zones = [row[0] for row in rows]
+    zone_permissions = {row[0]: (row[1] or "manage") for row in rows}
 
     return {
         "id": user.id,
@@ -130,6 +152,7 @@ async def _user_to_dict(user: User, db: AsyncSession) -> dict:
         "role": user.role,
         "is_active": user.is_active,
         "zones": zones,
+        "zone_permissions": zone_permissions,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login": user.last_login.isoformat() if user.last_login else None,
         "phone": getattr(user, "phone", None),
@@ -140,20 +163,41 @@ async def _user_to_dict(user: User, db: AsyncSession) -> dict:
         "country": getattr(user, "country", None),
         "date_of_birth": user.date_of_birth.isoformat()[:10] if getattr(user, "date_of_birth", None) else None,
         "preferred_language": getattr(user, "preferred_language", None) or None,
+        "totp_enabled": bool(getattr(user, "totp_enabled", False)),
     }
 
 
 # ========================
 # Auth Endpoints
 # ========================
+class TwoFactorComplete(BaseModel):
+    """Abschluss der Anmeldung nach TOTP – Token aus /login bei need_two_factor."""
+    two_factor_token: str = Field(..., min_length=20)
+    totp_code: str = Field(..., min_length=4, max_length=12)
+
+
 @router.post("/login")
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     captcha_token: Optional[str] = Form(default=None, description="Captcha-Token (nur wenn aktiviert)"),
+    totp_code: Optional[str] = Form(default=None, description="6-stelliger TOTP-Code, falls 2FA aktiv"),
     db: AsyncSession = Depends(get_db),
 ):
     """Login with username and password. Setzt HttpOnly-Cookie (kein Token im localStorage)."""
+    from app.core.login_rate_limit import (
+        is_login_rate_limited,
+        record_failed_login,
+        clear_login_fails,
+    )
+
+    client_ip = request.client.host if request.client else "unknown"
+    if is_login_rate_limited(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
+        )
+
     # Captcha vor dem Login pruefen, damit Bots keinen Brute-Force gegen DB+Hash starten koennen.
     from app.services.captcha import verify_or_raise as _verify_captcha
     await _verify_captcha(db, captcha_token, request.client.host if request.client else None)
@@ -164,6 +208,7 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):
+        record_failed_login(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Falscher Benutzername oder Passwort",
@@ -175,9 +220,36 @@ async def login(
             detail="Konto ist deaktiviert",
         )
 
+    # --- 2FA (TOTP) ------------------------------------------------------------
+    if getattr(user, "totp_enabled", False):
+        sec = (user.totp_secret or "").strip()
+        if not sec:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="2FA fehlerhaft konfiguriert (kein Geheimnis) – bitte Admin kontaktieren",
+            )
+        code = (totp_code or "").strip().replace(" ", "")
+        if not code:
+            pending = create_two_factor_pending_token(user.id)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "need_two_factor": True,
+                    "two_factor_token": pending,
+                },
+            )
+        if not pyotp.TOTP(sec).verify(code, valid_window=1):
+            record_failed_login(client_ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Falscher TOTP-Code",
+            )
+
     # Update last login
     user.last_login = datetime.now(timezone.utc)
     await db.flush()
+
+    clear_login_fails(client_ip)
 
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
     user_dict = await _user_to_dict(user, db)
@@ -185,6 +257,62 @@ async def login(
     # Token wird NUR per HttpOnly-Cookie gesetzt – nicht mehr im JSON-Body,
     # damit er nicht in Browser-DevTools/Logs sichtbar wird oder versehentlich
     # vom Frontend in localStorage etc. gespeichert werden kann.
+    response = JSONResponse(content={"user": user_dict})
+    response.set_cookie(
+        key=app_settings.AUTH_COOKIE_NAME,
+        value=token,
+        max_age=app_settings.AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=app_settings.AUTH_COOKIE_SECURE,
+        samesite=app_settings.AUTH_COOKIE_SAMESITE,
+        path="/",
+    )
+    return response
+
+
+@router.post("/login/2fa")
+async def login_two_factor(
+    data: TwoFactorComplete,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """TOTP-Code + pending-Token aus /login, wenn 2FA aktiv. Setzt Session-Cookie."""
+    from app.core.login_rate_limit import (
+        is_login_rate_limited,
+        record_failed_login,
+        clear_login_fails,
+    )
+
+    client_ip = request.client.host if request.client else "unknown"
+    if is_login_rate_limited(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
+        )
+    uid = decode_two_factor_pending_token(data.two_factor_token)
+    if not uid:
+        record_failed_login(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Ungültiger oder abgelaufener Zweitschritt-Token",
+        )
+    result = await db.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active or not getattr(user, "totp_enabled", False):
+        record_failed_login(client_ip)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nicht anmeldbar")
+    sec = (user.totp_secret or "").strip()
+    if not sec or not pyotp.TOTP(sec).verify((data.totp_code or "").strip().replace(" ", ""), valid_window=1):
+        record_failed_login(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Falscher TOTP-Code",
+        )
+    user.last_login = datetime.now(timezone.utc)
+    await db.flush()
+    clear_login_fails(client_ip)
+    token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    user_dict = await _user_to_dict(user, db)
     response = JSONResponse(content={"user": user_dict})
     response.set_cookie(
         key=app_settings.AUTH_COOKIE_NAME,
@@ -612,12 +740,24 @@ async def update_user_zones(
     # Alle bisherigen Zuordnungen loeschen
     await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.user_id == user_id))
 
-    # Neue Zuordnungen erstellen
+    def _perm_for(zone_name_norm: str) -> str:
+        if not data.zone_permissions:
+            return "manage"
+        for k, v in data.zone_permissions.items():
+            kn = k.strip().lower()
+            if not kn.endswith('.'):
+                kn += '.'
+            if kn == zone_name_norm:
+                p = (v or "manage").strip().lower()
+                return p if p in ("read", "manage") else "manage"
+        return "manage"
+
     for zone in data.zones:
         zone_name = zone.strip().lower()
         if not zone_name.endswith('.'):
             zone_name += '.'
-        db.add(UserZoneAccess(user_id=user_id, zone_name=zone_name))
+        perm = _perm_for(zone_name)
+        db.add(UserZoneAccess(user_id=user_id, zone_name=zone_name, permission=perm))
 
     await db.flush()
     logger.info(f"Zone access for '{user.username}' updated: {data.zones}")
@@ -632,7 +772,280 @@ async def get_user_zones(
 ):
     """Get zones assigned to a user. Admin only."""
     result = await db.execute(
-        select(UserZoneAccess.zone_name).where(UserZoneAccess.user_id == user_id)
+        select(UserZoneAccess.zone_name, UserZoneAccess.permission).where(
+            UserZoneAccess.user_id == user_id
+        )
     )
-    zones = [row[0] for row in result.all()]
-    return {"user_id": user_id, "zones": zones}
+    rows = result.all()
+    zones = [row[0] for row in rows]
+    zone_permissions = {row[0]: (row[1] or "manage") for row in rows}
+    return {"user_id": user_id, "zones": zones, "zone_permissions": zone_permissions}
+
+
+# ========================
+# 2FA (TOTP) – Einstellungen
+# ========================
+class TotpEnableBody(BaseModel):
+    code: str = Field(..., min_length=4, max_length=12, description="Aktueller TOTP-Code aus der App")
+
+
+class TotpDisableBody(BaseModel):
+    password: str
+    code: str = Field(..., min_length=4, max_length=12)
+
+
+@router.get("/me/totp/status")
+async def totp_status(current_user: User = Depends(get_current_user)):
+    """Ob 2FA aktiv ist und ob ein ausstehendes Setup (scan QR) laeuft."""
+    pending = bool(
+        (getattr(current_user, "totp_pending_secret", None) or "").strip()
+        and not (getattr(current_user, "totp_enabled", False))
+    )
+    return {
+        "totp_enabled": bool(getattr(current_user, "totp_enabled", False)),
+        "totp_pending": pending,
+    }
+
+
+@router.post("/me/totp/begin")
+async def totp_begin(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Startet 2FA-Einrichtung: neues Geheimnis, Secret + otpauth-URI für Authenticator-App."""
+    if getattr(current_user, "totp_enabled", False):
+        raise HTTPException(status_code=400, detail="2FA ist bereits aktiv – zuerst deaktivieren")
+    sec = pyotp.random_base32()
+    current_user.totp_pending_secret = sec
+    await db.flush()
+    t = pyotp.totp.TOTP(sec)
+    # Klarer Label-Text für Authenticator-Apps; Sonderzeichen/Zeilenumbruch vermeiden
+    iss = (app_settings.APP_NAME or "DNS Manager").strip()[:64]
+    uname = (current_user.username or "user").strip()[:200]
+    uri = t.provisioning_uri(name=uname, issuer_name=iss)
+    return {
+        "secret": sec,
+        "provisioning_uri": uri,
+    }
+
+
+@router.post("/me/totp/enable")
+async def totp_enable(
+    data: TotpEnableBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bestaetigt das Setup: pending-Secret wird aktiv, 2FA an."""
+    ps = (getattr(current_user, "totp_pending_secret", None) or "").strip()
+    if not ps:
+        raise HTTPException(
+            status_code=400,
+            detail="Zuerst /me/totp/begin aufrufen",
+        )
+    if not pyotp.TOTP(ps).verify((data.code or "").strip().replace(" ", ""), valid_window=1):
+        raise HTTPException(status_code=400, detail="Falscher TOTP-Code")
+    current_user.totp_secret = ps
+    current_user.totp_pending_secret = None
+    current_user.totp_enabled = True
+    await db.flush()
+    return {"message": "2FA aktiviert", "user": await _user_to_dict(current_user, db)}
+
+
+@router.post("/me/totp/disable")
+async def totp_disable(
+    data: TotpDisableBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """2FA ausschalten: Passwort + gueltiger TOTP."""
+    if not verify_password(data.password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Passwort ist falsch")
+    if not getattr(current_user, "totp_enabled", False):
+        return {"message": "2FA war nicht aktiv", "user": await _user_to_dict(current_user, db)}
+    sec = (getattr(current_user, "totp_secret", None) or "").strip()
+    if not sec or not pyotp.TOTP(sec).verify((data.code or "").strip().replace(" ", ""), valid_window=1):
+        raise HTTPException(status_code=400, detail="Falscher TOTP-Code")
+    current_user.totp_enabled = False
+    current_user.totp_secret = None
+    current_user.totp_pending_secret = None
+    await db.flush()
+    return {"message": "2FA deaktiviert", "user": await _user_to_dict(current_user, db)}
+
+
+# ========================
+# Panel-API-Token (Bearer wie Session, für Skripte)
+# ========================
+class PanelTokenCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+@router.get("/me/panel-tokens")
+async def list_panel_tokens(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import panel_token as ptk
+
+    rows = await ptk.list_tokens(db, current_user.id)
+    return {
+        "tokens": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "token_prefix": t.token_prefix,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+                "is_active": t.is_active,
+            }
+            for t in rows
+        ]
+    }
+
+
+@router.post("/me/panel-tokens", status_code=201)
+async def create_panel_token(
+    data: PanelTokenCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import panel_token as ptk
+
+    row, plain = await ptk.create_token(db, current_user.id, data.name)
+    return {
+        "token": {
+            "id": row.id,
+            "name": row.name,
+            "token_prefix": row.token_prefix,
+        },
+        "plaintext_token": plain,
+        "warning": "Dieser Token wird nur einmal angezeigt – bitte sicher speichern.",
+    }
+
+
+@router.delete("/me/panel-tokens/{token_id}")
+async def delete_panel_token(
+    token_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import panel_token as ptk
+
+    ok = await ptk.delete_token(db, current_user.id, token_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Token nicht gefunden")
+    return {"message": "Token widerrufen"}
+
+
+# ========================
+# Webhooks
+# ========================
+class WebhookCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    url: str = Field(..., min_length=5, max_length=1024)
+    events: list[str] = Field(default_factory=lambda: ["*"])
+
+
+class WebhookUpdateBody(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    events: Optional[list[str]] = None
+    is_active: Optional[bool] = None
+    rotate_secret: bool = False
+
+
+@router.get("/me/webhooks")
+async def list_my_webhooks(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import webhook_service as wh
+
+    rows = await wh.list_webhooks(db, current_user.id)
+    return {
+        "webhooks": [
+            {
+                "id": w.id,
+                "name": w.name,
+                "url": w.url,
+                "events": w.events or ["*"],
+                "is_active": w.is_active,
+                "has_secret": True,
+                "created_at": w.created_at.isoformat() if w.created_at else None,
+            }
+            for w in rows
+        ]
+    }
+
+
+@router.post("/me/webhooks", status_code=201)
+async def create_my_webhook(
+    data: WebhookCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import webhook_service as wh
+
+    try:
+        w = await wh.create_webhook(db, current_user.id, data.name, data.url, data.events)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "webhook": {
+            "id": w.id,
+            "name": w.name,
+            "url": w.url,
+            "events": w.events,
+            "is_active": w.is_active,
+        },
+        "secret": w.secret,
+        "warning": "Das Shared Secret für HMAC (Header X-DNS-Manager-Signature) – nur in dieser Antwort; bei Verlust: rotate_secret im PUT nutzen",
+    }
+
+
+@router.put("/me/webhooks/{webhook_id}")
+async def update_my_webhook(
+    webhook_id: int,
+    data: WebhookUpdateBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import webhook_service as wh
+
+    try:
+        w = await wh.update_webhook(
+            db,
+            current_user.id,
+            webhook_id,
+            name=data.name,
+            url=data.url,
+            events=data.events,
+            is_active=data.is_active,
+            new_secret=data.rotate_secret,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not w:
+        raise HTTPException(status_code=404, detail="Webhook nicht gefunden")
+    out: dict = {
+        "id": w.id,
+        "name": w.name,
+        "url": w.url,
+        "events": w.events,
+        "is_active": w.is_active,
+    }
+    if data.rotate_secret:
+        out["new_secret"] = w.secret
+    return out
+
+
+@router.delete("/me/webhooks/{webhook_id}")
+async def delete_my_webhook(
+    webhook_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import webhook_service as wh
+
+    if not await wh.delete_webhook(db, current_user.id, webhook_id):
+        raise HTTPException(status_code=404, detail="Webhook nicht gefunden")
+    return {"message": "Webhook gelöscht"}

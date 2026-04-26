@@ -208,7 +208,7 @@ async def update_zone(
     db: AsyncSession = Depends(get_db),
 ):
     """Update zone metadata (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
@@ -270,7 +270,7 @@ async def notify_zone(
     db: AsyncSession = Depends(get_db),
 ):
     """Send NOTIFY to all slaves for a zone (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
         await client.notify_zone(zone_id)
@@ -303,6 +303,41 @@ async def export_zone(
         raise HTTPException(status_code=404, detail=str(e))
     except PowerDNSAPIError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.post("/import/preview")
+async def import_zone_preview(
+    import_data: ZoneImport,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Vergleich Zonefile vs. bestehende PDNS-Zone (erster schreibender Server) – kein Schreiben."""
+    from app.services.zone_import_diff import build_import_diff
+
+    col = _allow_writes_column()
+    if col is not None:
+        r = await db.execute(select(ServerConfig.name).where(ServerConfig.is_active == True, col == True))  # noqa: E712
+        target_servers = [row[0] for row in r.all()]
+    else:
+        target_servers = pdns_manager.list_servers()
+    if not target_servers:
+        raise HTTPException(
+            status_code=400,
+            detail="Kein DNS-Server mit Schreibrechten. In Einstellungen → DNS-Server „Auf diesem Server speichern“ aktivieren."
+        )
+    existing = None
+    for server_name in target_servers:
+        try:
+            client = pdns_manager.get_client(server_name)
+            existing = await client.get_zone(import_data.name)
+            break
+        except PowerDNSAPIError as e:
+            if e.status_code in (404, 422):
+                continue
+            raise HTTPException(status_code=e.status_code, detail=str(e.detail)[:2000])
+        except ValueError:
+            continue
+    return build_import_diff(import_data.name, import_data.content, existing)
 
 
 @router.post("/import", response_model=MessageResponse)
@@ -366,6 +401,12 @@ async def import_zone(
                 user_id=admin.id,
             )
 
+    from app.services.webhook_service import deliver_webhooks_background
+    deliver_webhooks_background(
+        admin.id,
+        "zone.imported",
+        {"zone": import_data.name, "results": results},
+    )
     return MessageResponse(
         message=f"Zone '{import_data.name}' import completed",
         details=results,

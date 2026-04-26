@@ -39,6 +39,9 @@ COPY backend/app/ ./app/
 
 # Frontend build vom ersten Stage kopieren
 COPY --from=frontend-build /frontend/dist ./app/static_new/
+RUN test -f /app/app/static_new/index.html \
+    && test -d /app/app/static_new/assets \
+    && find /app/app/static_new/assets -name '*.js' -type f | grep -q .
 
 # Uploads-Ordner sicherstellen (damit das Volume vom richtigen User beschreibbar ist)
 RUN mkdir -p /app/app/static_new/uploads

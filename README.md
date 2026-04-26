@@ -5,7 +5,7 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.3.6-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.3.7-blue.svg)
 
 ---
 
@@ -31,6 +31,8 @@ Ein Video-Walkthrough (Installation, ersten Server anbinden, Zone + DNSSEC anleg
 - **Mehrsprachige Oberfläche** – Sprach-Dropdown mit Flaggen, aktuell Deutsch, Englisch, Serbisch, Kroatisch, Bosnisch und Ungarisch. Default in der `.env` einstellbar. Fehlt mal ein Key, fällt die UI automatisch auf Englisch zurück; weitere Sprachen kommen per PR an `frontend/src/locales/<code>.json`.
 - **Mobile-tauglich** – einklappbare Sidebar mit Hamburger-Menü, Tabellen scrollen horizontal statt das Layout zu sprengen.
 - **ACME / Auto-TLS** – scoped API-Tokens fürs DNS-01-Challenge. certbot legt `_acme-challenge`-TXT-Records selbst an, Zertifikate erneuern sich vollautomatisch. Token kann ausschließlich `_acme-challenge.*`-TXTs in den freigegebenen Zonen schreiben/löschen, nichts anderes; fertiges Hook-Skript (`scripts/certbot-dns-dnsmanager.sh`) liegt im Repo.
+
+**Panel-API & Skripte:** Voller API-Zugriff (wie die Web-UI) geht per **Panel-API-Token** im Header `Authorization: Bearer …` (siehe Einstellungen → API & Sicherheit). Kurzdoku und curl-Beispiel: [`docs/PANEL-API.md`](docs/PANEL-API.md). Optional: interaktive API unter `/docs`, wenn `DOCS_ENABLED=true` gesetzt ist.
 
 ## Was es bewusst nicht macht
 
@@ -136,7 +138,7 @@ Manuell auf eine bestimmte Version wechseln:
 ```bash
 cd dns-manager
 git fetch origin --tags --force --prune --prune-tags
-git checkout v2.3.6              # oder: git checkout main && git pull
+git checkout v2.3.7              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
 ```
@@ -250,7 +252,68 @@ asyncio.run(reset())
 
 ## Was ist neu (Changelog)
 
-Hier die letzten beiden Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/dns-manager/releases).
+Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/dns-manager/releases).
+
+### v2.3.7
+
+Größeres Release mit Records-Sync, Stabilität und vollständiger i18n. Kein Schema-Bruch – `./update.sh` reicht.
+
+**Records & Multi-Server-Sync**
+
+- **Fan-out beim Schreiben:** `POST/PUT/DELETE` und Bulk-Updates auf Records werden jetzt automatisch auf **alle** Server angewendet, die `Speichern: Ja` (`allow_writes=true`) haben **und** die Zone führen. Read-only Server werden hart abgelehnt (HTTP 403) statt heimlich übergangen. Per-Server-Status (ok / skipped / error) liegt im Response-Body unter `details`.
+- **Frontend kennt schreibbare Server:** `/api/v1/servers` liefert pro Server `allow_writes` mit. Klick auf eine Zone in der Liste navigiert automatisch zu einem schreibbaren Server (sofern vorhanden); ist nur ein Read-Only-Server erreichbar, gibt es im Zonen-Detail einen klaren Hinweis und Schalter zum Wechsel.
+- **Synchronisierte Anzeige:** Zonenliste, Suche und Dashboard fassen identische Zonen/Records über mehrere Server zu jeweils einer Zeile zusammen. Server, auf denen die Zone existiert, werden als Badges angezeigt – kein doppeltes Auflisten mehr.
+- **Zonen-Detail-Banner:** Aktueller Server schreibgeschützt → rote Warnung + Wechsel-Button auf einen Peer mit `allow_writes=true`. Zusätzliche schreibbare Peers vorhanden → Info-Banner, dass jede Änderung auf allen entsprechenden Servern landet.
+
+**Zonenrechte (Lesen / Voll)**
+
+- In **Benutzer → Zonen zuweisen** pro Zone wählbar. „Nur lesen“ blockiert API-seitig alle schreibenden Aktionen (Records, DNSSEC ein/aus, NOTIFY). In der Zonendetailansicht erscheint ein Hinweis, Buttons sind deaktiviert.
+
+**Sicherheit**
+
+- **Login-Rate-Limit:** IP-basierte Sperre nach mehreren fehlgeschlagenen Logins (HTTP 429, gleitendes Fenster) – Brute-Force-Schutz, ohne legitime User dauerhaft auszusperren.
+- **Webhook SSRF-Schutz:** Webhook-URLs werden vor dem Speichern und vor jedem Versand geprüft. Localhost / private / link-local / multicast-Ziele sind standardmäßig blockiert. Wer das in einem internen Netz braucht, setzt `WEBHOOK_ALLOW_PRIVATE_URLS=true` in der `.env`.
+- **PowerDNS-Fehler:** 5xx-Antworten von PowerDNS landen mit vollständigem Detail im Backend-Log; nach außen geht eine kundenfreundliche Meldung ohne Stacktrace-Leck.
+
+**i18n**
+
+- Alle 6 Sprachen (en / de / sr / hr / bs / hu) sind jetzt **vollständig synchronisiert** auf identische Key-Liste (770 Keys). Vorher fehlten in bs/hr/hu/sr ca. 60 Keys (Integrations-Tab, common-Errors, Zonen-Detail-Hinweise, Zone-Import). Pflege weiter via `node scripts/sync-locales.mjs`.
+
+**Tests**
+
+- Pytest-Suite mit echten Modultests: DNSSEC-Parse, ACME-Helfer, Zonen-ACL, Login-Rate-Limit, Webhook-URL-Validierung, Health.
+- `backend/pytest.ini` für konsistente Test-Pfade.
+
+**Audit**
+
+- Admin kann das Log als **CSV** exportieren (`GET /api/v1/audit-log/export`, Semikolon + UTF-8-BOM für Excel) – Button im Audit-Log.
+
+**Health-Check**
+
+- `GET /health` prüft die Datenbank mit `SELECT 1` (kein fester `database: connected` mehr). Wenn die DB weg ist: HTTP 503 + `status: unhealthy`.
+- `compose.yaml` hängt einen Healthcheck am Backend-Service – `depends_on: condition: service_healthy` zieht dadurch sauber.
+
+**UX & Stabilität**
+
+- `AppErrorBoundary`: Statt weißer Seite bei einem Frontend-Runtime-Fehler erscheint ein verständlicher Hinweis mit „Neu laden“-Button.
+- `App.jsx` zeigt klare Meldungen bei Setup-/Auth-Problemen statt eines unendlichen Spinners.
+- Leere Record-Listen zeigen Hinweis + Add-Button statt einer leeren Tabelle.
+- **DNSSEC-Registrar-Karte** in eigene Komponente ausgelagert (`ZoneDnssecRegistrarCard.jsx`).
+- **Settings → API & Sicherheit** kapselt Tokens / TOTP / Webhooks in einem Panel; QR-Code für TOTP läuft über das `qrcode`-Paket (vorher zerschoss `react-qr-code` den Build → weiße Seite).
+
+**Build / Deployment**
+
+- `backend/Dockerfile` prüft nach dem Frontend-Copy explizit, dass `index.html`, `assets/` und mindestens ein gebautes JS-Bundle vorhanden sind – sonst bricht der Build sofort ab.
+- `compose.yaml`: Backend-Healthcheck via `/health`, neuer Env-Eintrag `WEBHOOK_ALLOW_PRIVATE_URLS`.
+
+**CI**
+
+- Frontend-ESLint läuft wieder „hart“ (ohne `|| true`).
+
+**Docs**
+
+- `docs/PANEL-API.md` ausgebaut: Authentifizierungswege, Endpoint-Beispiele für Zonen / Records / DNSSEC, Webhook-Signaturprüfung mit Code-Snippet.
+- `frontend/README.md` ist kein Vite-Boilerplate mehr.
 
 ### v2.3.6
 

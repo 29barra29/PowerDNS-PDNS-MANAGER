@@ -2,320 +2,32 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-    ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle,
-    Copy, X, Sparkles
+    ArrowLeft, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle, Globe,
+    Copy, X, Sparkles, Shield
 } from 'lucide-react'
 import api from '../api'
-import i18n from '../i18n'
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
-
-// Kuerze-Helper, damit die Validator-Funktionen unten lesbarer sind.
-// Nutzt das globale i18n-Objekt – funktioniert auch ausserhalb der Component.
-const _t = (key, vars) => i18n.t(key, vars)
-
-/* ============================================================================
- *  Validierung pro Eingabefeld – wird LIVE im Modal angezeigt.
- *  Rückgabe: ''  → ok
- *            'msg' → Hinweis (kein Blocker)  – wird gelb angezeigt
- *            { error: 'msg' } → harter Fehler – wird rot angezeigt + blockt Save
- * ========================================================================== */
-
-const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
-// Pragmatisches IPv6 – akzeptiert vollständige + komprimierte Schreibweise.
-const IPV6_RE = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|::)$/
-const FQDN_RE = /^(?=.{1,253}\.?$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$/i
-const HEX_RE = /^[0-9a-fA-F]+$/
-
-function validateIPv4(v) {
-    const s = (v || '').trim()
-    if (!s) return { error: _t('zoneDetail.enterIpv4') }
-    if (!IPV4_RE.test(s)) return { error: _t('zoneDetail.invalidIpv4') }
-    return ''
-}
-
-function validateIPv6(v) {
-    const s = (v || '').trim()
-    if (!s) return { error: _t('zoneDetail.enterIpv6') }
-    if (!IPV6_RE.test(s)) return { error: _t('zoneDetail.invalidIpv6') }
-    return ''
-}
-
-function validateFqdn(v, { allowTrailingDot = true } = {}) {
-    let s = (v || '').trim().replace(/\.$/, '')
-    if (!s) return { error: _t('zoneDetail.enterHostname') }
-    if (!FQDN_RE.test(s + (allowTrailingDot ? '.' : ''))) {
-        return { error: _t('zoneDetail.invalidHostname') }
-    }
-    return ''
-}
-
-function validateInt(v, { min, max } = {}) {
-    const s = String(v ?? '').trim()
-    if (!s) return { error: _t('zoneDetail.enterNumber') }
-    if (!/^\d+$/.test(s)) return { error: _t('zoneDetail.onlyDigits') }
-    const n = parseInt(s, 10)
-    if (typeof min === 'number' && n < min) return { error: `Minimum: ${min}` }
-    if (typeof max === 'number' && n > max) return { error: `Maximum: ${max}` }
-    return ''
-}
-
-function validateHex(v) {
-    const s = (v || '').replace(/\s+/g, '')
-    if (!s) return { error: _t('zoneDetail.enterHex') }
-    if (!HEX_RE.test(s)) return { error: _t('zoneDetail.onlyHex') }
-    if (s.length % 2 !== 0) return _t('zoneDetail.hexLengthEven')
-    return ''
-}
-
-function validateTxt(v) {
-    const s = (v || '').trim()
-    if (!s) return { error: _t('zoneDetail.enterText') }
-    if (s.length > 255) return _t('zoneDetail.txtTooLong', { count: s.length })
-    return ''
-}
-
-function validateCaaTag(v) {
-    const ok = ['issue', 'issuewild', 'iodef', 'contactemail', 'contactphone']
-    if (!v) return { error: _t('zoneDetail.tagMissing') }
-    if (!ok.includes(v)) return _t('zoneDetail.unusualCaaTag', { tag: v, common: ok.slice(0, 3).join(', ') })
-    return ''
-}
-
-const FIELD_VALIDATORS = {
-    A: { ipv4: validateIPv4 },
-    AAAA: { ipv6: validateIPv6 },
-    CNAME: { target: (v) => validateFqdn(v) },
-    NS: { ns: (v) => validateFqdn(v) },
-    PTR: { host: (v) => validateFqdn(v) },
-    MX: {
-        priority: (v) => validateInt(v, { min: 0, max: 65535 }),
-        mailserver: (v) => validateFqdn(v),
-    },
-    SRV: {
-        pri: (v) => validateInt(v, { min: 0, max: 65535 }),
-        weight: (v) => validateInt(v, { min: 0, max: 65535 }),
-        port: (v) => validateInt(v, { min: 1, max: 65535 }),
-        target: (v) => validateFqdn(v),
-    },
-    TXT: { text: validateTxt },
-    CAA: {
-        flag: (v) => validateInt(v, { min: 0, max: 255 }),
-        tag: validateCaaTag,
-    },
-    TLSA: {
-        usage: (v) => validateInt(v, { min: 0, max: 3 }),
-        sel: (v) => validateInt(v, { min: 0, max: 1 }),
-        match: (v) => validateInt(v, { min: 0, max: 2 }),
-        hash: validateHex,
-    },
-    SSHFP: {
-        algo: (v) => validateInt(v, { min: 1, max: 6 }),
-        fptype: (v) => validateInt(v, { min: 1, max: 2 }),
-        fp: validateHex,
-    },
-    SOA: {
-        mname: (v) => validateFqdn(v),
-        rname: (v) => validateFqdn(v),
-        serial: (v) => validateInt(v, { min: 0 }),
-        refresh: (v) => validateInt(v, { min: 0 }),
-        retry: (v) => validateInt(v, { min: 0 }),
-        expire: (v) => validateInt(v, { min: 0 }),
-        minimum: (v) => validateInt(v, { min: 0 }),
-    },
-}
-
-/* ============================================================================
- *  Apex-Schutz: Welche Typen sind direkt am Zone-Apex (@) verboten / unüblich?
- * ========================================================================== */
-const APEX_FORBIDDEN = {
-    CNAME: 'CNAME ist am Apex (Zonen-Wurzel) laut RFC nicht erlaubt. Nutze stattdessen ALIAS oder einen direkten A/AAAA-Record.',
-    DS: 'DS ist am Apex einer eigenen Zone nicht erlaubt – DS-Records gehören in die ELTERN-Zone (also bei deinem Domain-Registrar). Hier kannst du DNSKEY-Einträge anlegen.',
-    DNAME: 'DNAME am Apex ist meist falsch – nutze CNAME für Subdomains oder ALIAS am Apex.',
-}
-
-function getApexWarning(name, type) {
-    if (name !== '@') return null
-    const msg = APEX_FORBIDDEN[type]
-    if (msg) return { kind: 'error', text: msg }
-    if (type === 'PTR') return { kind: 'warn', text: 'PTR am Apex passt meist nur in Reverse-Zonen (in-addr.arpa).' }
-    return null
-}
-
-/* ============================================================================
- *  Schnellvorlagen für oft genutzte Records
- * ========================================================================== */
-function buildQuickTemplates(zoneName) {
-    return [
-        {
-            id: 'spf',
-            label: 'SPF (Mail-Spoof-Schutz)',
-            type: 'TXT',
-            name: '@',
-            ttl: '3600',
-            // Inhalt geht in den Text-Field; wird beim Save in "..." gewrappt
-            fields: { text: 'v=spf1 mx -all' },
-            note: 'Trag bei mx oder include die zum Mailversand berechtigten Hosts ein.',
-        },
-        {
-            id: 'dmarc',
-            label: 'DMARC (Reporting / Policy)',
-            type: 'TXT',
-            name: '_dmarc',
-            ttl: '3600',
-            fields: { text: `v=DMARC1; p=quarantine; rua=mailto:postmaster@${zoneName}` },
-            note: 'Mit p=none startest du im Monitor-Modus.',
-        },
-        {
-            id: 'dkim',
-            label: 'DKIM (Selector default._domainkey)',
-            type: 'TXT',
-            name: 'default._domainkey',
-            ttl: '3600',
-            fields: { text: 'v=DKIM1; k=rsa; p=DEIN_BASE64_PUBLIC_KEY' },
-            note: 'Den öffentlichen Schlüssel stellt dein Mailserver bereit.',
-        },
-        {
-            id: 'mta-sts',
-            label: 'MTA-STS (Mail-Transport-Sicherheit)',
-            type: 'TXT',
-            name: '_mta-sts',
-            ttl: '3600',
-            fields: { text: 'v=STSv1; id=20240101000000Z' },
-            note: 'Erfordert zusätzlich /.well-known/mta-sts.txt unter mta-sts.<deine-domain>.',
-        },
-        {
-            id: 'tls-rpt',
-            label: 'TLS-RPT (TLS-Reports per Mail)',
-            type: 'TXT',
-            name: '_smtp._tls',
-            ttl: '3600',
-            fields: { text: `v=TLSRPTv1; rua=mailto:postmaster@${zoneName}` },
-            note: '',
-        },
-        {
-            id: 'caa',
-            label: 'CAA (nur Let’s Encrypt darf Zertifikate ausstellen)',
-            type: 'CAA',
-            name: '@',
-            ttl: '3600',
-            fields: { flag: '0', tag: 'issue', val: 'letsencrypt.org' },
-            note: '',
-        },
-        {
-            id: 'tlsa-mail',
-            label: 'TLSA für SMTP (Port 25)',
-            type: 'TLSA',
-            name: '_25._tcp.mail',
-            ttl: '3600',
-            fields: { usage: '3', sel: '1', match: '1', hash: 'DEIN_SHA256_FINGERPRINT' },
-            note: 'usage=3, sel=1, match=1 = DANE-EE / SPKI / SHA-256',
-        },
-    ]
-}
-
-/** Ein Feld – freier RDATA-Text (PowerDNS-Format); placeholderKey = Kurzbeispiel */
-function rdataRecord(typeKey, labelKey) {
-    return {
-        labelKey,
-        rdataTypeKey: typeKey,
-        fields: [
-            {
-                id: 'raw',
-                labelKey: 'zoneDetail.fieldRdata',
-                textarea: true,
-                placeholderKey: `zoneDetail.rdataPh${typeKey}`,
-            },
-        ],
-        build: (f) => f.raw.trim(),
-        parse: (c) => ({ raw: c }),
-    }
-}
-
-const RECORD_TYPES = {
-    A: { labelKey: 'zoneDetail.recordA', label: 'A – IPv4', fields: [{ id: 'ipv4', labelKey: 'zoneDetail.fieldIpv4', label: 'IPv4-Adresse', placeholder: '93.184.216.34' }], build: f => f.ipv4, parse: c => ({ ipv4: c }) },
-    AAAA: { labelKey: 'zoneDetail.recordAAAA', label: 'AAAA – IPv6', fields: [{ id: 'ipv6', labelKey: 'zoneDetail.fieldIpv6', label: 'IPv6-Adresse', placeholder: '2001:db8::1' }], build: f => f.ipv6, parse: c => ({ ipv6: c }) },
-    CNAME: { labelKey: 'zoneDetail.recordCNAME', label: 'CNAME – Weiterleitung', fields: [{ id: 'target', labelKey: 'zoneDetail.fieldTarget', label: 'Ziel-Domain', placeholder: 'example.com.' }], build: f => f.target.endsWith('.') ? f.target : f.target + '.', parse: c => ({ target: c }) },
-    MX: {
-        labelKey: 'zoneDetail.recordMX', label: 'MX – Mailserver', fields: [
-            { id: 'priority', labelKey: 'zoneDetail.fieldPriority', label: 'Priorität', placeholder: '10', type: 'number' },
-            { id: 'mailserver', labelKey: 'zoneDetail.fieldMailserver', label: 'Mail-Server', placeholder: 'mail.example.com.' },
-        ], build: f => `${f.priority} ${f.mailserver.endsWith('.') ? f.mailserver : f.mailserver + '.'}`,
-        parse: c => { const s = c.split(' '); return { priority: s[0], mailserver: s[1] } }
-    },
-    TXT: { labelKey: 'zoneDetail.recordTXT', label: 'TXT – Text', fields: [{ id: 'text', labelKey: 'zoneDetail.fieldText', label: 'Text', placeholder: 'v=spf1 ...', textarea: true }], build: f => f.text.startsWith('"') ? f.text : `"${f.text}"`, parse: c => { let t = c; if (t.startsWith('"') && t.endsWith('"')) t = t.substring(1, t.length - 1); return { text: t } } },
-    NS: { labelKey: 'zoneDetail.recordNS', label: 'NS – Nameserver', fields: [{ id: 'ns', labelKey: 'zoneDetail.fieldNs', label: 'Nameserver', placeholder: 'ns1.example.com.' }], build: f => f.ns.endsWith('.') ? f.ns : f.ns + '.', parse: c => ({ ns: c }) },
-    SOA: {
-        labelKey: 'zoneDetail.recordSOA', label: 'SOA – Start of Authority', fields: [
-            { id: 'mname', labelKey: 'zoneDetail.fieldMname', label: 'Primary NS', placeholder: 'ns1.example.com.' },
-            { id: 'rname', labelKey: 'zoneDetail.fieldRname', label: 'Hostmaster Email', placeholder: 'hostmaster.example.com.' },
-            { id: 'serial', labelKey: 'zoneDetail.fieldSerial', label: 'Serial', type: 'number' },
-            { id: 'refresh', labelKey: 'zoneDetail.fieldRefresh', label: 'Refresh', type: 'number' },
-            { id: 'retry', labelKey: 'zoneDetail.fieldRetry', label: 'Retry', type: 'number' },
-            { id: 'expire', labelKey: 'zoneDetail.fieldExpire', label: 'Expire', type: 'number' },
-            { id: 'minimum', labelKey: 'zoneDetail.fieldMinimum', label: 'Minimum TTL', type: 'number' },
-        ], build: f => `${f.mname.endsWith('.') ? f.mname : f.mname + '.'} ${f.rname.endsWith('.') ? f.rname : f.rname + '.'} ${f.serial} ${f.refresh} ${f.retry} ${f.expire} ${f.minimum}`,
-        parse: c => { const s = c.split(' '); return { mname: s[0], rname: s[1], serial: s[2], refresh: s[3], retry: s[4], expire: s[5], minimum: s[6] } }
-    },
-    SRV: {
-        labelKey: 'zoneDetail.recordSRV', label: 'SRV – Dienst', fields: [
-            { id: 'pri', labelKey: 'zoneDetail.fieldPri', label: 'Priorität', placeholder: '10', type: 'number' },
-            { id: 'weight', labelKey: 'zoneDetail.fieldWeight', label: 'Gewicht', placeholder: '5', type: 'number' },
-            { id: 'port', labelKey: 'zoneDetail.fieldPort', label: 'Port', placeholder: '443', type: 'number' },
-            { id: 'target', labelKey: 'zoneDetail.fieldTarget', label: 'Ziel', placeholder: 'server.example.com.' },
-        ], build: f => `${f.pri} ${f.weight} ${f.port} ${f.target.endsWith('.') ? f.target : f.target + '.'}`,
-        parse: c => { const s = c.split(' '); return { pri: s[0], weight: s[1], port: s[2], target: s[3] } }
-    },
-    CAA: {
-        labelKey: 'zoneDetail.recordCAA', label: 'CAA – Zertifikat', fields: [
-            { id: 'flag', labelKey: 'zoneDetail.fieldFlag', label: 'Flag', placeholder: '0', type: 'number' },
-            { id: 'tag', labelKey: 'zoneDetail.fieldTag', label: 'Tag', placeholder: 'issue', select: ['issue', 'issuewild', 'iodef'] },
-            { id: 'val', labelKey: 'zoneDetail.fieldVal', label: 'Wert', placeholder: 'letsencrypt.org' },
-        ], build: f => `${f.flag} ${f.tag} "${f.val}"`,
-        parse: c => { const s = c.split(' '); return { flag: s[0], tag: s[1], val: s.slice(2).join(' ').replace(/"/g, '') } }
-    },
-    PTR: { labelKey: 'zoneDetail.recordPTR', label: 'PTR – Reverse', fields: [{ id: 'host', labelKey: 'zoneDetail.fieldHost', label: 'Hostname', placeholder: 'host.example.com.' }], build: f => f.host.endsWith('.') ? f.host : f.host + '.', parse: c => ({ host: c }) },
-    TLSA: {
-        labelKey: 'zoneDetail.recordTLSA', label: 'TLSA – DANE', fields: [
-            { id: 'usage', labelKey: 'zoneDetail.fieldUsage', label: 'Usage', placeholder: '3', type: 'number' },
-            { id: 'sel', labelKey: 'zoneDetail.fieldSel', label: 'Selector', placeholder: '1', type: 'number' },
-            { id: 'match', labelKey: 'zoneDetail.fieldMatch', label: 'Matching', placeholder: '1', type: 'number' },
-            { id: 'hash', labelKey: 'zoneDetail.fieldHash', label: 'Hash', placeholder: 'abc123...' },
-        ], build: f => `${f.usage} ${f.sel} ${f.match} ${f.hash}`,
-        parse: c => { const s = c.split(' '); return { usage: s[0], sel: s[1], match: s[2], hash: s[3] } }
-    },
-    SSHFP: {
-        labelKey: 'zoneDetail.recordSSHFP', label: 'SSHFP – SSH', fields: [
-            { id: 'algo', labelKey: 'zoneDetail.fieldAlgo', label: 'Algo', placeholder: '4', type: 'number' },
-            { id: 'fptype', labelKey: 'zoneDetail.fieldFptype', label: 'Hash-Typ', placeholder: '2', type: 'number' },
-            { id: 'fp', labelKey: 'zoneDetail.fieldFp', label: 'Fingerprint', placeholder: 'abc...' },
-        ], build: f => `${f.algo} ${f.fptype} ${f.fp}`,
-        parse: c => { const s = c.split(' '); return { algo: s[0], fptype: s[1], fp: s[2] } }
-    },
-    ALIAS: rdataRecord('ALIAS', 'zoneDetail.recordALIAS'),
-    DNAME: rdataRecord('DNAME', 'zoneDetail.recordDNAME'),
-    LOC: rdataRecord('LOC', 'zoneDetail.recordLOC'),
-    NAPTR: rdataRecord('NAPTR', 'zoneDetail.recordNAPTR'),
-    DS: rdataRecord('DS', 'zoneDetail.recordDS'),
-    DNSKEY: rdataRecord('DNSKEY', 'zoneDetail.recordDNSKEY'),
-    NSEC: rdataRecord('NSEC', 'zoneDetail.recordNSEC'),
-    NSEC3: rdataRecord('NSEC3', 'zoneDetail.recordNSEC3'),
-    NSEC3PARAM: rdataRecord('NSEC3PARAM', 'zoneDetail.recordNSEC3PARAM'),
-    RRSIG: rdataRecord('RRSIG', 'zoneDetail.recordRRSIG'),
-    SPF: rdataRecord('SPF', 'zoneDetail.recordSPF'),
-    HTTPS: rdataRecord('HTTPS', 'zoneDetail.recordHTTPS'),
-    SVCB: rdataRecord('SVCB', 'zoneDetail.recordSVCB'),
-    OPENPGPKEY: rdataRecord('OPENPGPKEY', 'zoneDetail.recordOPENPGPKEY'),
-}
-
-/** Welche Typen erlauben mehrere Werte in EINEM Modal (Round-Robin / mehrere RRset-Einträge)? */
-const MULTI_VALUE_OK = new Set(['A', 'AAAA', 'NS', 'TXT', 'MX', 'CAA', 'SRV'])
+import ZoneDnssecRegistrarCard from '../components/ZoneDnssecRegistrarCard'
+import {
+    FIELD_VALIDATORS, getApexWarning, buildQuickTemplates, RECORD_TYPES, MULTI_VALUE_OK,
+} from '../zoneDetail/zoneDetailModel'
 
 export default function ZoneDetailPage() {
     const { t } = useTranslation()
     const { server, zoneId } = useParams()
     const navigate = useNavigate()
     const [_zone, setZone] = useState(null)
+    /** Metadaten von GET /zones/.../detail (u. a. dnssec: boolean) */
+    const [zoneMeta, setZoneMeta] = useState(null)
+    /** Antwort von GET /dnssec/.../ds */
+    const [dsData, setDsData] = useState(null)
+    const [dsLoading, setDsLoading] = useState(false)
+    const [dsError, setDsError] = useState('')
+    const [enablingDnssec, setEnablingDnssec] = useState(false)
+    const [disablingDnssec, setDisablingDnssec] = useState(false)
+    /** „DS / Registrar“-Assistent: erklärt 3× DS + einzelne Felder zum Kopieren */
+    const [showDsModal, setShowDsModal] = useState(false)
     const [records, setRecords] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
@@ -332,6 +44,25 @@ export default function ZoneDetailPage() {
     const [saving, setSaving] = useState(false)
     /** Ist beim Submit aktiv – verhindert nochmaliges Senden bei Strg+Enter */
     const formRef = useRef(null)
+
+    const [me, setMe] = useState(() => api.getUser())
+    const [allServers, setAllServers] = useState([])
+    useEffect(() => {
+        api.getMe().then((u) => { api.setUser(u); setMe(u) }).catch(() => {})
+    }, [])
+    useEffect(() => {
+        api.getServers().then((d) => setAllServers(d.servers || [])).catch(() => {})
+    }, [])
+
+    const currentServerInfo = useMemo(
+        () => allServers.find((s) => s.name === server) || null,
+        [allServers, server]
+    )
+    const otherWritableServers = useMemo(
+        () => allServers.filter((s) => s.name !== server && s.allow_writes !== false && s.is_reachable),
+        [allServers, server]
+    )
+    const serverCanWrite = currentServerInfo ? currentServerInfo.allow_writes !== false : true
 
     useEffect(() => {
         if (!success) return
@@ -388,7 +119,19 @@ export default function ZoneDetailPage() {
     }
 
     const zoneName = zoneId.replace(/\.$/, '')
+    const zoneKey = useMemo(() => {
+        let z = (zoneId || '').trim().toLowerCase()
+        if (!z) return ''
+        return z.endsWith('.') ? z : `${z}.`
+    }, [zoneId])
     const quickTemplates = useMemo(() => buildQuickTemplates(zoneName), [zoneName])
+
+    /** Bevorzugte DS-Zeile: Digest-Typ 2 (SHA-256) – so will es der Großteil der Registrar-Formulare. */
+    const recommendedDsRow = useMemo(() => {
+        const rows = dsData?.ds_records || []
+        const ok = (r) => r.parsed && !r.parsed.error
+        return rows.find((r) => ok(r) && (r.parsed.recommended || r.parsed.digest_type === 2)) || rows.find(ok) || null
+    }, [dsData])
 
     useEffect(() => { loadZone() }, [server, zoneId]) // eslint-disable-line react-hooks/exhaustive-deps -- loadZone stable
 
@@ -409,15 +152,79 @@ export default function ZoneDetailPage() {
 
     async function loadZone() {
         setLoading(true)
+        setDsError('')
         try {
             const data = await api.listRecords(server, zoneId)
             setRecords(data.records || [])
             setZone(data)
+
+            let meta = null
+            try {
+                meta = await api.getZone(server, zoneId)
+                setZoneMeta(meta)
+            } catch {
+                setZoneMeta(null)
+            }
+
+            if (meta?.dnssec) {
+                setDsLoading(true)
+                try {
+                    const ds = await api.getDsRecords(server, zoneId)
+                    setDsData(ds)
+                } catch (e) {
+                    setDsData(null)
+                    setDsError(e.message || String(e))
+                } finally {
+                    setDsLoading(false)
+                }
+            } else {
+                setDsData(null)
+                setDsLoading(false)
+            }
         } catch (err) {
             setError(err.message)
         } finally {
             setLoading(false)
         }
+    }
+
+    async function handleEnableDnssec() {
+        if (!window.confirm(t('zoneDetail.dnssecEnableConfirm'))) return
+        setEnablingDnssec(true)
+        setDsError('')
+        try {
+            await api.enableDNSSEC(server, zoneId, {})
+            setSuccess(t('zoneDetail.dnssecEnabledOk'))
+            await loadZone()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setEnablingDnssec(false)
+        }
+    }
+
+    async function handleDisableDnssec() {
+        if (!window.confirm(t('zoneDetail.dnssecDisableConfirm'))) return
+        setDisablingDnssec(true)
+        setDsError('')
+        try {
+            await api.disableDNSSEC(server, zoneId)
+            setShowDsModal(false)
+            setSuccess(t('zoneDetail.dnssecDisabledOk'))
+            await loadZone()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setDisablingDnssec(false)
+        }
+    }
+
+    function copyToClipboard(text, i18nToast, vars) {
+        if (!text) return
+        const msg = i18nToast ? t(i18nToast, vars) : null
+        navigator.clipboard.writeText(String(text)).then(() => {
+            if (msg) setSuccess(msg)
+        }).catch(() => {})
     }
 
     function resolveName(name) {
@@ -513,7 +320,7 @@ export default function ZoneDetailPage() {
         const contents = []
         for (const set of dynFieldsList) {
             try { contents.push(def.build(set)) } catch (err) {
-                setModalError(`Wert konnte nicht gebaut werden: ${err.message || err}`)
+                setModalError(t('zoneDetail.valueBuildFailed', { message: err.message || String(err) }))
                 setSaving(false)
                 return
             }
@@ -526,7 +333,11 @@ export default function ZoneDetailPage() {
             for (const c of contents) {
                 const dup = findDuplicate(addName, addType, c)
                 if (dup) {
-                    setModalError(`Es existiert bereits ein ${addType}-Eintrag „${dup.name.replace(/\.$/, '')}“ mit dem Wert „${c}“.`)
+                    setModalError(t('zoneDetail.duplicateRecord', {
+                        type: addType,
+                        name: dup.name.replace(/\.$/, ''),
+                        value: c,
+                    }))
                     setSaving(false)
                     return
                 }
@@ -577,6 +388,9 @@ export default function ZoneDetailPage() {
 
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
 
+    const userCanEdit = !me || me.role === 'admin' || me.zone_permissions?.[zoneKey] !== 'read'
+    const canEdit = userCanEdit && serverCanWrite
+
     const grouped = {}
     records.forEach(r => {
         if (!grouped[r.type]) grouped[r.type] = []
@@ -604,12 +418,24 @@ export default function ZoneDetailPage() {
                         <p className="text-text-muted text-sm">{t('zoneDetail.recordsCount', { server, count: records.length })}</p>
                     </div>
                 </div>
-                <button
-                    onClick={openAddModal}
-                    className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all"
-                >
-                    <Plus className="w-4 h-4" /> {t('zoneDetail.addRecord')}
-                </button>
+                <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                    <button
+                        type="button"
+                        onClick={() => setShowDsModal(true)}
+                        className="self-start sm:self-auto order-2 sm:order-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 rounded-lg font-medium text-sm transition-all"
+                    >
+                        <Shield className="w-4 h-4 shrink-0" />
+                        {t('zoneDetail.dnssecModalOpenButton')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={openAddModal}
+                        disabled={!canEdit}
+                        className="self-start sm:self-auto order-1 sm:order-2 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    >
+                        <Plus className="w-4 h-4 shrink-0" /> {t('zoneDetail.addRecord')}
+                    </button>
+                </div>
             </div>
 
             {error && (
@@ -628,7 +454,84 @@ export default function ZoneDetailPage() {
                 </div>
             )}
 
+            {!userCanEdit && (
+                <div className="p-4 rounded-xl bg-bg-secondary/80 border border-border text-text-secondary text-sm">
+                    {t('zoneDetail.readOnlyZone')}
+                </div>
+            )}
+
+            {userCanEdit && !serverCanWrite && (
+                <div className="p-4 rounded-xl bg-warning/10 border border-warning/30 text-warning flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                        <div className="font-medium">
+                            {t('zoneDetail.serverReadOnlyTitle', { server })}
+                        </div>
+                        <div className="mt-1 text-text-secondary">
+                            {t('zoneDetail.serverReadOnlyBody')}
+                        </div>
+                        {otherWritableServers.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                {otherWritableServers.map((s) => (
+                                    <button
+                                        key={s.name}
+                                        type="button"
+                                        onClick={() => navigate(`/zones/${encodeURIComponent(s.name)}/${encodeURIComponent(zoneId)}`)}
+                                        className="text-xs px-2 py-0.5 rounded-full bg-success/10 border border-success/30 text-success hover:bg-success/20 transition-colors"
+                                    >
+                                        {t('zoneDetail.switchToServer', { server: s.name, defaultValue: 'Wechsel zu {{server}}' })}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {userCanEdit && serverCanWrite && otherWritableServers.length > 0 && (
+                <div className="p-3 rounded-xl bg-bg-secondary/60 border border-border/60 text-text-secondary text-xs flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-success shrink-0" />
+                    <span>
+                        {t('zoneDetail.fanoutInfo', {
+                            primary: server,
+                            peers: otherWritableServers.map((s) => s.name).join(', '),
+                        })}
+                    </span>
+                </div>
+            )}
+
+            <ZoneDnssecRegistrarCard
+                t={t}
+                zoneMeta={zoneMeta}
+                dsLoading={dsLoading}
+                dsError={dsError}
+                dsData={dsData}
+                canEdit={canEdit}
+                enablingDnssec={enablingDnssec}
+                disablingDnssec={disablingDnssec}
+                onOpenModal={() => setShowDsModal(true)}
+                onEnableDnssec={handleEnableDnssec}
+                onDisableDnssec={handleDisableDnssec}
+            />
+
             {/* Records grouped by type */}
+            {records.length === 0 && (
+                <div className="glass-card p-8 text-center text-text-muted">
+                    <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                    <h2 className="text-lg font-semibold text-text-primary">{t('zoneDetail.noRecordsTitle')}</h2>
+                    <p className="text-sm mt-2 max-w-xl mx-auto">{t('zoneDetail.noRecordsBody')}</p>
+                    {canEdit && (
+                        <button
+                            type="button"
+                            onClick={openAddModal}
+                            className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium"
+                        >
+                            <Plus className="w-4 h-4" /> {t('zoneDetail.addRecord')}
+                        </button>
+                    )}
+                </div>
+            )}
+
             {sortedTypes.map(type => (
                 <div key={type} className="glass-card overflow-hidden">
                     <div className="px-4 py-3 bg-bg-hover/30 border-b border-border flex items-center gap-2">
@@ -646,15 +549,16 @@ export default function ZoneDetailPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {grouped[type].map((r, i) => (
-                                <tr key={i} className="border-b border-border/30 hover:bg-bg-hover/30 transition-colors">
+                            {grouped[type].map((r) => (
+                                <tr key={`${r.name}:${r.type}:${r.content}`} className="border-b border-border/30 hover:bg-bg-hover/30 transition-colors">
                                     <td className="p-3 font-mono text-xs text-text-primary">{r.name.replace(/\.$/, '')}</td>
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{r.content}</td>
                                     <td className="p-3 text-text-muted text-xs">{r.ttl}</td>
                                     <td className="p-3 text-right whitespace-nowrap">
                                         <button
                                             onClick={() => openEdit(r)}
-                                            className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1"
+                                            disabled={!canEdit}
+                                            className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1 disabled:opacity-30 disabled:pointer-events-none"
                                             title={t('zoneDetail.edit')}
                                         >
                                             <Pencil className="w-3.5 h-3.5" />
@@ -662,7 +566,8 @@ export default function ZoneDetailPage() {
                                         {type !== 'SOA' && (
                                             <button
                                                 onClick={() => openClone(r)}
-                                                className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1"
+                                                disabled={!canEdit}
+                                                className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1 disabled:opacity-30 disabled:pointer-events-none"
                                                 title={t('zoneDetail.clone')}
                                             >
                                                 <Copy className="w-3.5 h-3.5" />
@@ -671,7 +576,8 @@ export default function ZoneDetailPage() {
                                         {type !== 'SOA' && type !== 'NS' && (
                                             <button
                                                 onClick={() => handleDelete(r.name, r.type)}
-                                                className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                                                disabled={!canEdit}
+                                                className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
                                                 title={t('zoneDetail.deleteRecord')}
                                             >
                                                 <Trash2 className="w-3.5 h-3.5" />
@@ -720,7 +626,8 @@ export default function ZoneDetailPage() {
                                             key={tpl.id}
                                             type="button"
                                             onClick={() => applyQuickTemplate(tpl)}
-                                            className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-primary hover:bg-bg-hover transition-colors"
+                                            disabled={!canEdit}
+                                            className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-primary hover:bg-bg-hover transition-colors disabled:opacity-35 disabled:pointer-events-none"
                                             title={tpl.note || tpl.label}
                                         >
                                             {tpl.label}
@@ -895,12 +802,220 @@ export default function ZoneDetailPage() {
                                 <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
                                 <div className="flex justify-end gap-3">
                                     <button type="button" onClick={closeModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
-                                    <button type="submit" disabled={saving || apexWarning?.kind === 'error'} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    <button type="submit" disabled={!canEdit || saving || apexWarning?.kind === 'error'} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
                                         {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                                     </button>
                                 </div>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {showDsModal && (
+                <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center bg-black/65 backdrop-blur-sm p-4"
+                    onClick={() => setShowDsModal(false)}
+                >
+                    <div
+                        className="glass-card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                            <h2 className="text-lg font-bold text-text-primary pr-6 leading-snug">
+                                {t('zoneDetail.dnssecModalTitle')}
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={() => setShowDsModal(false)}
+                                className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0"
+                                title={t('zoneDetail.dnssecModalClose')}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {!zoneMeta?.dnssec ? (
+                            <div className="space-y-3 text-sm text-text-secondary">
+                                <p>{t('zoneDetail.dnssecModalNeedEnable')}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => { handleEnableDnssec() }}
+                                    disabled={!canEdit || enablingDnssec || disablingDnssec}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent/20 text-accent-light text-sm font-medium disabled:opacity-50"
+                                >
+                                    {enablingDnssec ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                                    {t('zoneDetail.dnssecEnableButton')}
+                                </button>
+                            </div>
+                        ) : dsLoading ? (
+                            <div className="flex items-center gap-2 text-text-muted py-6">
+                                <Loader2 className="w-5 h-5 animate-spin text-accent" />
+                                {t('zoneDetail.dnssecLoading')}
+                            </div>
+                        ) : dsError ? (
+                            <div className="p-3 rounded-lg bg-danger/10 text-danger text-sm">{dsError}</div>
+                        ) : (
+                            <div className="space-y-5 text-sm">
+                                <div className="rounded-lg border border-border bg-bg-secondary/30 p-4">
+                                    <p className="font-medium text-text-primary mb-1">{t('zoneDetail.dnssecModalWhyTitle')}</p>
+                                    <p className="text-text-muted leading-relaxed">{t('zoneDetail.dnssecModalWhyBody')}</p>
+                                </div>
+
+                                {recommendedDsRow?.parsed && !recommendedDsRow.parsed.error && (
+                                    <div className="rounded-lg border-2 border-success/40 bg-success/10 p-4">
+                                        <p className="text-xs font-semibold text-success mb-3 uppercase tracking-wide">
+                                            {t('zoneDetail.dnssecModalRecommended')}
+                                        </p>
+                                        <div className="space-y-1">
+                                            {[
+                                                [t('zoneDetail.dnssecModalFieldKeyTag'), String(recommendedDsRow.parsed.key_tag)],
+                                                [t('zoneDetail.dnssecModalFieldAlgorithmName'), String(recommendedDsRow.parsed.algorithm_name || '')],
+                                                [t('zoneDetail.dnssecModalFieldAlgorithm'), String(recommendedDsRow.parsed.algorithm)],
+                                                [t('zoneDetail.dnssecModalFieldDigestType'), `${recommendedDsRow.parsed.digest_type} – ${recommendedDsRow.parsed.digest_type_name}`],
+                                                [t('zoneDetail.dnssecModalFieldDigestHex'), recommendedDsRow.parsed.digest_hex],
+                                            ].map(([label, val]) => (
+                                                <div
+                                                    key={label}
+                                                    className="flex flex-col sm:flex-row sm:items-center gap-2 py-1 border-b border-border/30 last:border-0"
+                                                >
+                                                    <span className="text-xs text-text-muted shrink-0 sm:w-52">{label}</span>
+                                                    <code className="flex-1 text-xs font-mono break-all text-text-primary bg-bg-primary/50 px-2 py-1 rounded min-w-0">
+                                                        {val}
+                                                    </code>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyToClipboard(val, 'zoneDetail.dnssecFieldCopied', { field: label })}
+                                                        className="shrink-0 self-end sm:self-center p-1.5 rounded text-accent-light hover:bg-accent/15"
+                                                    >
+                                                        <Copy className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const line = typeof recommendedDsRow.ds === 'string' ? recommendedDsRow.ds : recommendedDsRow.parsed.raw
+                                                copyToClipboard(line, 'zoneDetail.dnssecCopied')
+                                            }}
+                                            className="mt-3 w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-success/20 hover:bg-success/30 text-success text-xs font-medium"
+                                        >
+                                            <Copy className="w-3.5 h-3.5" />
+                                            {t('zoneDetail.dnssecModalCopyDsLine')}
+                                        </button>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <p className="text-xs font-medium text-text-muted mb-2">{t('zoneDetail.dnssecModalDigestVariants')}</p>
+                                    <div className="space-y-2">
+                                        {(dsData?.ds_records || []).map((row, idx) => {
+                                            const p = row.parsed
+                                            const line = typeof row.ds === 'string' ? row.ds : String(row.ds)
+                                            if (!p || p.error) {
+                                                return (
+                                                    <div key={idx} className="rounded border border-border p-2 text-xs">
+                                                        <code className="break-all">{line}</code>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => copyToClipboard(line, 'zoneDetail.dnssecCopied')}
+                                                            className="mt-2 text-accent-light text-xs"
+                                                        >
+                                                            {t('zoneDetail.dnssecCopyLine')}
+                                                        </button>
+                                                    </div>
+                                                )
+                                            }
+                                            return (
+                                                <div
+                                                    key={idx}
+                                                    className={`rounded-lg border p-3 ${p.recommended ? 'border-success/30 bg-success/5' : 'border-border bg-bg-secondary/30'}`}
+                                                >
+                                                    <div className="flex flex-wrap gap-2 text-[10px] text-text-muted mb-2">
+                                                        <span>{t('zoneDetail.dnssecKeyType')}: {row.keytype}</span>
+                                                        <span>ID {row.key_id}</span>
+                                                        <span>{p.digest_type_name}</span>
+                                                    </div>
+                                                    <code className="block text-xs font-mono break-all text-text-primary mb-2">{line}</code>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyToClipboard(line, 'zoneDetail.dnssecCopied')}
+                                                        className="text-xs text-accent-light hover:underline"
+                                                    >
+                                                        {t('zoneDetail.dnssecModalCopyDsLine')}
+                                                    </button>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+
+                                {(dsData?.signing_keys || []).length > 0 && (dsData.signing_keys[0].dnskey_parsed || dsData.signing_keys[0].dnskey) && (
+                                    <div className="rounded-lg border border-border p-4 space-y-2">
+                                        <p className="text-sm font-medium text-text-primary">{t('zoneDetail.dnssecModalDnskeyTitle')}</p>
+                                        {(dsData.signing_keys || []).map((k) => {
+                                            const d = k.dnskey_parsed
+                                            if (d && !d.error) {
+                                                return (
+                                                    <div key={k.key_id} className="space-y-1 border-b border-border/40 last:border-0 pb-3 last:pb-0">
+                                                        {[
+                                                            [t('zoneDetail.dnssecModalDnskeyFlags'), String(d.flags)],
+                                                            [t('zoneDetail.dnssecModalDnskeyRole'), d.flags_role || '—'],
+                                                            [t('zoneDetail.dnssecModalDnskeyProtocol'), String(d.protocol)],
+                                                            [t('zoneDetail.dnssecModalFieldAlgorithmName'), d.algorithm_name || String(d.algorithm)],
+                                                            [t('zoneDetail.dnssecModalDnskeyPublic'), d.public_key_base64 || '—'],
+                                                        ].map(([label, val]) => (
+                                                            <div key={label} className="flex flex-col sm:flex-row sm:items-start gap-2 text-xs">
+                                                                <span className="text-text-muted shrink-0 sm:w-52">{label}</span>
+                                                                <code className="flex-1 font-mono break-all bg-bg-primary/50 px-2 py-1 rounded min-w-0">
+                                                                    {val}
+                                                                </code>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => copyToClipboard(val, 'zoneDetail.dnssecFieldCopied', { field: label })}
+                                                                    className="p-1 rounded hover:bg-bg-hover self-start"
+                                                                >
+                                                                    <Copy className="w-3.5 h-3.5 text-accent-light" />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )
+                                            }
+                                            if (k.dnskey) {
+                                                return (
+                                                    <div key={k.key_id}>
+                                                        <code className="text-xs break-all block bg-bg-primary/50 p-2 rounded">{k.dnskey}</code>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => copyToClipboard(k.dnskey, 'zoneDetail.dnssecCopied')}
+                                                            className="mt-1 text-xs text-accent-light"
+                                                        >
+                                                            {t('zoneDetail.dnssecCopyLine')}
+                                                        </button>
+                                                    </div>
+                                                )
+                                            }
+                                            return null
+                                        })}
+                                    </div>
+                                )}
+
+                                <div className="rounded-lg border border-danger/30 bg-danger/5 p-4 space-y-2">
+                                    <p className="text-xs text-text-muted leading-relaxed">{t('zoneDetail.dnssecDisableHint')}</p>
+                                    <button
+                                        type="button"
+                                        onClick={handleDisableDnssec}
+                                        disabled={!canEdit || enablingDnssec || disablingDnssec}
+                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-danger/50 bg-danger/15 text-danger text-xs font-medium hover:bg-danger/25 disabled:opacity-50"
+                                    >
+                                        {disablingDnssec ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                        {t('zoneDetail.dnssecDisableButton')}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

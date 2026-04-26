@@ -1,6 +1,10 @@
 """API routes for search and audit log."""
+import csv
+import io
+import json
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.core.database import get_db
@@ -153,3 +157,68 @@ async def get_audit_log(
             for log in logs
         ],
     }
+
+
+@router.get("/audit-log/export", tags=["Audit"])
+async def export_audit_log_csv(
+    action: str = Query(None, description="Filter: CREATE, UPDATE, …"),
+    resource_type: str = Query(None, description="zone, record, …"),
+    server_name: str = Query(None),
+    max_rows: int = Query(10_000, ge=1, le=50_000),
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Audit-Log als UTF-8-CSV (Excel: Trennzeichen Semikolon). Nur Admin."""
+    query = select(AuditLog).order_by(desc(AuditLog.timestamp))
+    if action:
+        query = query.where(AuditLog.action == action)
+    if resource_type:
+        query = query.where(AuditLog.resource_type == resource_type)
+    if server_name:
+        query = query.where(AuditLog.server_name == server_name)
+    query = query.limit(max_rows)
+    result = await db.execute(query)
+    logs = result.scalars().all()
+
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+    w.writerow(
+        [
+            "id",
+            "timestamp_utc",
+            "action",
+            "resource_type",
+            "resource_name",
+            "server_name",
+            "user_id",
+            "status",
+            "error_message",
+            "details_json",
+        ]
+    )
+    for log in logs:
+        det = log.details
+        det_s = "" if det is None else (json.dumps(det, ensure_ascii=False) if isinstance(det, (dict, list)) else str(det))
+        w.writerow(
+            [
+                log.id,
+                log.timestamp.isoformat() if log.timestamp else "",
+                log.action,
+                log.resource_type,
+                (log.resource_name or "") if log.resource_name is not None else "",
+                (log.server_name or "") if log.server_name is not None else "",
+                log.user_id or "",
+                log.status,
+                (log.error_message or "") if log.error_message is not None else "",
+                det_s,
+            ]
+        )
+    # BOM für Excel mit UTF-8
+    out = "\ufeff" + buf.getvalue()
+    return Response(
+        content=out.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="audit-log.csv"',
+        },
+    )

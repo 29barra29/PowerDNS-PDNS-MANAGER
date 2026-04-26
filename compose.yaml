@@ -67,12 +67,19 @@ services:
       # CORS + API-Doku
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       DOCS_ENABLED: ${DOCS_ENABLED:-false}
+      WEBHOOK_ALLOW_PRIVATE_URLS: ${WEBHOOK_ALLOW_PRIVATE_URLS:-false}
     volumes:
       # Logo und andere Uploads bleiben bei Updates erhalten
       - backend_uploads:/app/app/static_new/uploads
     depends_on:
       mariadb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     # DNS für Auflösung externer Hosts (z. B. SMTP-Server wie smtp.gmail.com)
     dns:
       - 8.8.8.8

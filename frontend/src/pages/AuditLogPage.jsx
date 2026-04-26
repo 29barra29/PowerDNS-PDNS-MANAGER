@@ -1,12 +1,26 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ScrollText, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { ScrollText, Loader2, CheckCircle2, XCircle, Download } from 'lucide-react'
 import api from '../api'
 
 export default function AuditLogPage() {
     const { t } = useTranslation()
     const [logs, setLogs] = useState([])
     const [loading, setLoading] = useState(true)
+    const [exporting, setExporting] = useState(false)
+    const [exportError, setExportError] = useState('')
+
+    async function handleExport() {
+        setExporting(true)
+        setExportError('')
+        try {
+            await api.downloadAuditLogCsv()
+        } catch (e) {
+            setExportError(e.message || String(e))
+        } finally {
+            setExporting(false)
+        }
+    }
 
     useEffect(() => {
         api.getAuditLog(200).then(data => {
@@ -29,10 +43,25 @@ export default function AuditLogPage() {
 
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-text-primary">{t('audit.title')}</h1>
-                <p className="text-text-muted text-sm mt-1">{t('audit.subtitle')}</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 className="text-2xl font-bold text-text-primary">{t('audit.title')}</h1>
+                    <p className="text-text-muted text-sm mt-1">{t('audit.subtitle')}</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={handleExport}
+                    disabled={exporting}
+                    className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-bg-secondary/50 hover:bg-bg-hover text-text-primary text-sm font-medium disabled:opacity-50"
+                >
+                    {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    {t('audit.exportCsv')}
+                </button>
             </div>
+
+            {exportError && (
+                <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm">{exportError}</div>
+            )}
 
             <div className="glass-card overflow-hidden">
               <div className="overflow-x-auto">

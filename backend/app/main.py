@@ -3,10 +3,12 @@
 A custom backend for managing PowerDNS servers.
 Replaces PowerDNS-Admin with a cleaner, more stable solution.
 """
+import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,15 +17,41 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.services.pdns_client import PowerDNSAPIError, pdns_manager
 from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router, setup, templates, acme
-from app.core.auth import create_initial_admin
-from app.core.database import get_db, async_session
+from app.core.auth import create_initial_admin, get_current_user
+from app.core.database import engine, async_session
+from sqlalchemy import text
+from app.models.models import User
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s [%(name)s] %(levelname)s - %(message)s",
-)
+# Configure logging (optional JSON-Zeilen für Log-Aggregatoren, LOG_FORMAT=json)
+_LOG_LEVEL = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+if (settings.LOG_FORMAT or "").lower() == "json":
+
+    class _JsonLogFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            return json.dumps(
+                {
+                    "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                },
+                ensure_ascii=False,
+            )
+
+    _root = logging.getLogger()
+    _root.setLevel(_LOG_LEVEL)
+    if not _root.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(_JsonLogFormatter())
+        _root.addHandler(_h)
+else:
+    logging.basicConfig(
+        level=_LOG_LEVEL,
+        format="%(asctime)s [%(name)s] %(levelname)s - %(message)s",
+    )
 logger = logging.getLogger(__name__)
+_METRICS_START = time.time()
+_REQUEST_COUNT = 0
 
 
 @asynccontextmanager
@@ -117,6 +145,9 @@ if _cors_origins:
 # unkontrolliertes Browser-Feature-Loading und versehentliche Referer-Lecks.
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
+    global _REQUEST_COUNT
+    if request.url.path.startswith("/api/"):
+        _REQUEST_COUNT += 1
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -142,12 +173,16 @@ async def _security_headers(request: Request, call_next):
 @app.exception_handler(PowerDNSAPIError)
 async def pdns_error_handler(request: Request, exc: PowerDNSAPIError):
     """Handle PowerDNS API errors."""
+    logger.warning("PowerDNS error for client: server=%s status=%s detail=%s", exc.server, exc.status_code, exc.detail)
+    public_detail = exc.detail
+    if exc.status_code >= 500:
+        public_detail = "PowerDNS-Server ist derzeit nicht erreichbar. Bitte Server-Konfiguration und Erreichbarkeit prüfen."
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "error": "PowerDNS API Error",
             "server": exc.server,
-            "detail": exc.detail,
+            "detail": public_detail,
         },
     )
 
@@ -184,10 +219,36 @@ app.include_router(acme.router, prefix=API_PREFIX)
 # ========================
 STATIC_DIR = Path(__file__).parent / "static_new"
 
-# Serve static assets (JS, CSS, images)
-if STATIC_DIR.exists():
+# Serve static assets (JS, CSS, images). Assets are optional at import time so a
+# broken build does not crash API-only diagnostics; the SPA route explains it.
+if (STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+if STATIC_DIR.exists():
     app.mount("/uploads", StaticFiles(directory=str(STATIC_DIR / "uploads"), check_dir=False), name="uploads")
+
+
+@app.get("/vite.svg", include_in_schema=False)
+async def vite_icon():
+    icon = STATIC_DIR / "vite.svg"
+    if icon.exists():
+        return FileResponse(str(icon), media_type="image/svg+xml")
+    return JSONResponse(status_code=404, content={"error": "Not found"})
+
+
+@app.get(f"{API_PREFIX}/metrics", tags=["Health"])
+async def app_metrics(
+    current_user: User = Depends(get_current_user),
+):
+    """Einfache Laufzeit-Metriken (für Admins) – ungefähre Request-Anzahl + Uptime."""
+    if current_user.role != "admin":
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nur Admins")
+    return {
+        "app": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "uptime_seconds": int(time.time() - _METRICS_START),
+        "api_request_count": _REQUEST_COUNT,
+    }
 
 
 @app.get("/api", tags=["Health"])
@@ -204,7 +265,14 @@ async def api_info():
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Health check endpoint."""
+    """Health check: DB + PowerDNS-APIs."""
+    db_ok = True
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+
     server_status = {}
     for name, client in pdns_manager.get_all_clients().items():
         try:
@@ -212,11 +280,25 @@ async def health_check():
             server_status[name] = "healthy"
         except Exception:
             server_status[name] = "unreachable"
-    
-    all_healthy = all(s == "healthy" for s in server_status.values()) if server_status else True
-    
+
+    pdns_ok = all(s == "healthy" for s in server_status.values()) if server_status else True
+    if not db_ok:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "disconnected",
+                "servers": server_status,
+            },
+        )
+    if not pdns_ok:
+        return {
+            "status": "degraded",
+            "database": "connected",
+            "servers": server_status,
+        }
     return {
-        "status": "healthy" if all_healthy else "degraded",
+        "status": "healthy",
         "database": "connected",
         "servers": server_status,
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import api from './api'
@@ -17,11 +17,13 @@ import AuditLogPage from './pages/AuditLogPage'
 import UsersPage from './pages/UsersPage'
 import SettingsPage from './pages/SettingsPage'
 import { UpdateAvailabilityProvider } from './context/UpdateAvailabilityContext'
+import AppErrorBoundary from './components/AppErrorBoundary'
 
 function ProtectedRoute({ children }) {
   const { t } = useTranslation()
   const [authChecked, setAuthChecked] = useState(api.isLoggedIn())
   const [authorized, setAuthorized] = useState(api.isLoggedIn())
+  const [authError, setAuthError] = useState('')
 
   /* eslint-disable react-hooks/set-state-in-effect -- sync auth state from api on mount */
   useEffect(() => {
@@ -36,17 +38,34 @@ function ProtectedRoute({ children }) {
         setAuthorized(true)
         setAuthChecked(true)
       })
-      .catch(() => {
-        setAuthorized(false)
+      .catch((err) => {
+        if (err?.status === 401) {
+          setAuthorized(false)
+        } else {
+          setAuthError(err?.message || t('common.serverUnavailable', { defaultValue: 'Server nicht erreichbar. Bitte später erneut versuchen.' }))
+        }
         setAuthChecked(true)
       })
-  }, [])
+  }, [t])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-bg-primary flex items-center justify-center">
         <div className="text-text-muted">{t('common.checkingAuth')}</div>
+      </div>
+    )
+  }
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center p-6">
+        <div className="glass-card max-w-lg w-full p-6 space-y-3">
+          <h1 className="text-xl font-bold text-text-primary">{t('common.connectionProblem', { defaultValue: 'Verbindungsproblem' })}</h1>
+          <p className="text-sm text-text-muted">{authError}</p>
+          <button type="button" onClick={() => window.location.reload()} className="px-4 py-2 rounded-lg bg-accent text-white text-sm">
+            {t('common.reloadPage', { defaultValue: 'Seite neu laden' })}
+          </button>
+        </div>
       </div>
     )
   }
@@ -59,6 +78,7 @@ function ProtectedRoute({ children }) {
 export default function App() {
   const { t } = useTranslation()
   const [setupStatus, setSetupStatus] = useState(null)
+  const [setupError, setSetupError] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -72,29 +92,43 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
-    // Check setup status on app load
-    // eslint-disable-next-line react-hooks/immutability -- function declared below, called once on mount
-    checkSetupStatus()
-  }, [])
-
-  const checkSetupStatus = async () => {
+  const checkSetupStatus = useCallback(async () => {
+    setSetupError('')
     try {
       const res = await fetch('/api/v1/setup/status')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setSetupStatus(data)
     } catch (err) {
       console.error('Failed to check setup status:', err)
+      setSetupError(t('common.setupStatusFailed', { defaultValue: 'Setup-Status konnte nicht geladen werden. Bitte prüfe, ob Backend und Datenbank laufen.' }))
     } finally {
       setLoading(false)
     }
-  }
+  }, [t])
 
-  // Loading state
+  useEffect(() => {
+    // Check setup status on app load
+    queueMicrotask(() => checkSetupStatus())
+  }, [checkSetupStatus])
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white text-xl">{t('common.appLoading')}</div>
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center">
+        <div className="text-text-primary text-xl">{t('common.appLoading')}</div>
+      </div>
+    )
+  }
+
+  if (setupError) {
+    return (
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center p-6">
+        <div className="glass-card max-w-lg w-full p-6 space-y-3">
+          <h1 className="text-xl font-bold text-text-primary">{t('common.connectionProblem', { defaultValue: 'Verbindungsproblem' })}</h1>
+          <p className="text-sm text-text-muted">{setupError}</p>
+          <button type="button" onClick={checkSetupStatus} className="px-4 py-2 rounded-lg bg-accent text-white text-sm">
+            {t('common.retry', { defaultValue: 'Erneut versuchen' })}
+          </button>
+        </div>
       </div>
     )
   }
@@ -110,31 +144,33 @@ export default function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/setup" element={<SetupWizard />} />
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <UpdateAvailabilityProvider>
-              <Layout />
-            </UpdateAvailabilityProvider>
-          </ProtectedRoute>
-        }
-      >
-        <Route index element={<DashboardPage />} />
-        <Route path="zones" element={<ZonesPage />} />
-        <Route path="zones/:server/:zoneId" element={<ZoneDetailPage />} />
-        <Route path="search" element={<SearchPage />} />
-        <Route path="audit" element={<AuditLogPage />} />
-        <Route path="users" element={<UsersPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AppErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/setup" element={<SetupWizard />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <UpdateAvailabilityProvider>
+                <Layout />
+              </UpdateAvailabilityProvider>
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<DashboardPage />} />
+          <Route path="zones" element={<ZonesPage />} />
+          <Route path="zones/:server/:zoneId" element={<ZoneDetailPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="audit" element={<AuditLogPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AppErrorBoundary>
   )
 }

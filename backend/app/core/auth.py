@@ -1,4 +1,5 @@
 """Authentication and authorization utilities."""
+import hashlib
 import logging
 import secrets as _secrets
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import User, UserZoneAccess
+from app.models.models import User, UserZoneAccess, PanelToken
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 # damit ein Reset-Link nie als Session-Token missbraucht werden kann.
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_PASSWORD_RESET = "password_reset"
+TOKEN_TYPE_2FA_PENDING = "2fa_pending"
+
+# Panel-API-Bearer, unterscheidbar von zufälligen Zeichen und ACME-Token
+PANEL_TOKEN_PREFIX = "dnsmgr_usr_"
 
 # Mindestlänge für Passwörter (gilt für Setup, Register, Reset und Admin-Updates).
 MIN_PASSWORD_LENGTH = 8
@@ -87,6 +92,31 @@ def create_password_reset_token(user_id: int) -> str:
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
+def create_two_factor_pending_token(user_id: int) -> str:
+    """Kurzlebiger JWT (5 min) – beweist erfolgreiche Passwort-Prüfung vor TOTP-Abschluss."""
+    to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_2FA_PENDING}
+    expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_two_factor_pending_token(token: str) -> Optional[int]:
+    """Liefert user_id aus einem pending-2FA-Token oder None."""
+    payload = decode_token(token)
+    if not payload:
+        return None
+    typ = payload.get("typ") or payload.get("type")
+    if typ != TOKEN_TYPE_2FA_PENDING:
+        return None
+    sub = payload.get("sub")
+    if not sub:
+        return None
+    try:
+        return int(sub)
+    except (TypeError, ValueError):
+        return None
+
+
 def decode_password_reset_token(token: str) -> Optional[int]:
     """Decode password reset token; returns user_id or None.
 
@@ -103,10 +133,11 @@ def decode_password_reset_token(token: str) -> Optional[int]:
 
 
 async def get_current_user(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     token: Optional[str] = Depends(get_token_from_cookie_or_bearer),
 ) -> User:
-    """Aktuellen Benutzer aus JWT (Cookie oder Bearer) holen.
+    """Aktuellen Benutzer aus JWT (Cookie oder Bearer) oder Panel-API-Token holen.
 
     Lehnt ausdrücklich Tokens ab, die keine Session-Tokens sind (z.B. Password-Reset).
     """
@@ -114,6 +145,33 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Nicht angemeldet",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # --- Panel-API-Token (Bearer, Prefix dnsmgr_usr_ – kein JWT) -------------------
+    if token.startswith(PANEL_TOKEN_PREFIX):
+        t_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        result = await db.execute(
+            select(PanelToken).where(
+                PanelToken.token_hash == t_hash,
+                PanelToken.is_active.is_(True),
+            )
+        )
+        pt = result.scalar_one_or_none()
+        if pt:
+            r_ip = request.client.host if request.client else None
+            now = datetime.now(timezone.utc)
+            pt.last_used_at = now
+            if r_ip:
+                pt.last_used_ip = r_ip
+            await db.flush()
+            result = await db.execute(select(User).where(User.id == pt.user_id))
+            user = result.scalar_one_or_none()
+            if user and user.is_active:
+                return user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Ungültiger API-Token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -126,7 +184,6 @@ async def get_current_user(
         )
 
     # Strenge Trennung: nur typ=access wird als Session akzeptiert.
-    # Bestands-Tokens ohne typ-Claim werden NICHT mehr akzeptiert (kurzes Re-Login nach Update OK).
     typ = payload.get("typ") or payload.get("type")
     if typ != TOKEN_TYPE_ACCESS:
         raise HTTPException(
@@ -181,26 +238,38 @@ def _normalize_zone_name(zone_id: str) -> str:
     return z
 
 
-async def assert_zone_access(db: AsyncSession, user: User, zone_id: str) -> None:
-    """Wirft 403, wenn der Benutzer (Nicht-Admin) keinen Zugriff auf die Zone hat.
-
-    Admins haben immer Zugriff. Für Nutzer wird die Zuordnung in UserZoneAccess geprüft.
-    """
+async def assert_zone_access(
+    db: AsyncSession,
+    user: User,
+    zone_id: str,
+    *,
+    write: bool = False,
+) -> None:
+    """403 wenn Nicht-Admin die Zone nicht sieht; bei write=True zusätzlich bei Rolle „read“."""
     if user.role == "admin":
         return
     zone_name = _normalize_zone_name(zone_id)
     if not zone_name:
         raise HTTPException(status_code=400, detail="Zone-Name fehlt")
     result = await db.execute(
-        select(UserZoneAccess.id).where(
+        select(UserZoneAccess.permission).where(
             UserZoneAccess.user_id == user.id,
             UserZoneAccess.zone_name == zone_name,
         ).limit(1)
     )
-    if result.scalar_one_or_none() is None:
+    perm = result.scalar_one_or_none()
+    if perm is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Keine Berechtigung für diese Zone",
+        )
+    if not write:
+        return
+    p = (perm or "manage").strip().lower() or "manage"
+    if p == "read":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Nur Lese-Zugriff auf diese Zone",
         )
 
 

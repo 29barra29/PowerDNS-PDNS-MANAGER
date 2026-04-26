@@ -1,103 +1,99 @@
-# Plan: Validierung, Basis-URL & Mehrsprachigkeit
+# Stand: Validierung, Basis-URL & Mehrsprachigkeit
+
+> Dieses Dokument war ursprünglich ein Planungspapier. Alle drei Themen sind inzwischen umgesetzt – die Datei beschreibt jetzt **wie** und **wo**, damit Wartung und Erweiterung einfach bleiben.
 
 ## 1. Validierung der Profilfelder
 
-### Ausgangslage
-- **PLZ:** Es wurden Buchstaben + Zahlen eingetragen (z. B. „dasd555“).
-- **Ort:** Zahlen drin (z. B. „61adas5a651“).
-- **Land:** Gemischt (z. B. „asdasdas21d56a“).
-- **Telefon:** Nur Buchstaben – sollte Nummer/Format sein.
+**Ziel:** International tauglich, ohne Länder-Sonderregeln. Pragmatisch, nicht streng.
 
-### Internationaler Ansatz (nicht zu weit aus dem Fenster)
-- **Keine harten Länder-Regeln** wie „nur 5 Ziffern in DE“. Sonst wird es schnell unüberschaubar (UK, USA, NL, etc.).
-- **Pragmatisch:**
-  - **Telefon:** Erlauben: Ziffern, Leerzeichen, `+`, `-`, `()`, ggf. `/` (Durchwahl). Keine reinen Buchstaben – mindestens eine Ziffer erforderlich. Max. Länge z. B. 25 Zeichen.
-  - **PLZ:** Freitext, aber **max. Länge** (z. B. 20 Zeichen). Optional: „nur Ziffern und Buchstaben“ (keine Sonderzeichen), damit internationale Formate (UK: „SW1A 1AA“, DE: „12345“) funktionieren.
-  - **Ort:** Freitext, max. Länge (z. B. 100). Keine Validierung auf „nur Buchstaben“ – viele Städte haben Zahlen/Bindestriche.
-  - **Land:** Freitext, max. Länge (z. B. 100). Oder später: Dropdown mit ISO-Ländern (einmalige Liste), dann ist „Land“ einheitlich und übersetzbar.
-- **Frontend:** Live-Hinweise (z. B. „Mindestens eine Ziffer“ bei Telefon, „Max. 20 Zeichen“ bei PLZ), **Backend** prüft dasselbe, damit die API nicht mit Unsinn befüllt wird.
+| Feld     | Regel                                                                 |
+|----------|-----------------------------------------------------------------------|
+| Telefon  | Erlaubt: Ziffern, Leerzeichen, `+`, `-`, `()`, `/`. Mindestens **eine Ziffer**. Max. 25 Zeichen. |
+| PLZ      | Frei, max. 20 Zeichen, alphanumerisch + Leerzeichen (UK „SW1A 1AA“ klappt, DE „12345“ auch). |
+| Ort      | Freitext, max. 100 Zeichen. Keine Buchstaben-only-Regel (Städte mit Zahlen/Bindestrichen). |
+| Land     | Freitext, max. 100 Zeichen.                                           |
 
-### Technik
-- **Backend:** Pydantic-Validatoren für die neuen Profilfelder (z. B. `Field(..., max_length=20, pattern=r'...')` für PLZ/Telefon).
-- **Frontend:** `pattern`, `maxLength`, `minLength` wo sinnvoll; optional Fehlermeldung unter dem Feld bei Ungültigkeit.
+**Wo im Code:**
+
+- Backend: Pydantic-Validatoren in `backend/app/schemas/` (Profil-Schemas).
+- Frontend: `pattern` / `maxLength` an den Inputs + Live-Hinweis aus `src/locales/<lang>.json` unter `profile.*`.
+- Fehlerschlüssel sind übersetzt in **allen** Sprachen (en/de/sr/hr/bs/hu).
 
 ---
 
-## 2. Basis-URL für E-Mails (Passwort zurücksetzen)
+## 2. Öffentliche Basis-URL für E-Mails
 
-### Problem
-- Der Link in der E-Mail „Passwort zurücksetzen“ wird aus **request.base_url** gebaut.
-- Das ist oft: `http://10.1.0.27:5380` (IP, HTTP, evtl. interner Port).
-- Nutzer bekommen dann einen unbrauchbaren oder unsicheren Link (HTTP, interne IP).
+**Problem damals:** `request.base_url` lieferte oft `http://10.x.x.x:5380` und damit unbrauchbare Reset-Links.
 
-### Lösung: Konfigurierbare „Öffentliche App-URL“
-- **Eine Einstellung** (nur Admin), z. B. in **Einstellungen → System / Allgemein** oder bei „App-Info“:
-  - **„Öffentliche Basis-URL“** (z. B. `https://dns.meinefirma.de`).
-- **Speicherort:** In der Datenbank (z. B. `SystemSetting`: Key `app_base_url`), wie schon `app_name`, `registration_enabled`, etc.
-- **Verwendung:**
-  - Beim **Passwort-zurücksetzen-E-Mail** den Link so bauen:  
-    `{app_base_url}/reset-password?token=...`  
-    Wenn `app_base_url` leer ist: Fallback auf `request.base_url` (wie bisher).
-- **Hinweis in der UI:** „Wird z. B. für Links in E-Mails (Passwort zurücksetzen) genutzt. Sollte die öffentlich erreichbare URL sein (z. B. https://dns.example.com).“
+**Lösung:** Admin pflegt eine **Öffentliche App-URL** in `Einstellungen → System / Allgemein`. Wert wird in `system_settings` als Schlüssel `public_base_url` (bzw. `app_base_url`) abgelegt.
 
-### Wo eintragen?
-- Gleicher Bereich wie **System-Titel** und **Login & Registrierung** (Einstellungen → Profil für Admins), oder eigener Block „Allgemein“:
-  - System-Titel  
-  - **Öffentliche Basis-URL** (neu)  
-  - Registrierung erlauben  
-  - Passwort vergessen erlauben  
+**Verwendung:**
+
+- Passwort-zurücksetzen-Mail, Welcome-Mail, alle anderen E-Mail-Links bauen Links als `{public_base_url}/...`.
+- Ist der Wert leer, fällt das Backend auf `request.base_url` zurück (alter Pfad).
+
+**Wo im Code:**
+
+- Setting: `backend/app/routers/settings.py`, gespeichert pro Schlüssel in der `system_settings`-Tabelle.
+- Verwendung: `backend/app/services/email_templates.py` und Aufrufer in `backend/app/routers/auth.py`.
+- UI: `Einstellungen → System` (Admin-Bereich).
+
+**Hinweis in der UI:** „Wird z. B. für Links in E-Mails (Passwort zurücksetzen) genutzt. Sollte die öffentlich erreichbare URL sein – ohne abschließenden `/` (z. B. `https://dns.example.com`).“
 
 ---
 
-## 3. Mehrsprachigkeit (Multi-Language / i18n)
+## 3. Mehrsprachigkeit (i18n)
 
-### Ziel
-- Nutzer (nicht nur Admins) können die Oberfläche in **Englisch** (und später weitere Sprachen) anzeigen.
-- **Vorbereitung:** Infrastruktur so bauen, dass man „nur noch die Übersetzungsdatei einfügen“ muss – ohne jedes Mal am Code zu drehen.
+**Status:** Komplett eingebaut. `react-i18next` + `i18next`. Aktuell **6 Sprachen**: en, de, sr, hr, bs, hu.
 
-### Wie macht man das technisch?
-- **Nicht** „ein eigenes JS pro Sprache“. Üblich ist:
-  - **Eine Übersetzungsdatei pro Sprache** (JSON oder JS-Objekt), z. B.:
-    - `locales/de.json` (Deutsch)
-    - `locales/en.json` (Englisch)
-  - **Keys** sind immer gleich, z. B. `profile.title`, `profile.save`, `zones.myZones`.
-  - Im Code steht nur der Key: `t('profile.title')`. Die Bibliothek liefert je nach gewählter Sprache den Text aus der passenden Datei.
-- **Bibliothek:** z. B. **react-i18next** (mit **i18next**). Standard in React, gut wartbar, Lazy-Loading pro Sprache möglich.
+### Wie es funktioniert
 
-### Ablauf im Frontend
-1. Beim App-Start: aktuelle Sprache laden (z. B. aus User-Einstellung oder Cookie/Browser).
-2. Alle sichtbaren Texte kommen aus `t('key')` (oder aus einer Komponente, die das nutzt).
-3. Beim Sprachwechsel: Sprache speichern (siehe unten), neu laden/umswitchen – keine neue „JS-Datei pro Sprache“ nötig; nur die JSON-Dateien werden getauscht.
+- **Source of Truth:** `frontend/src/locales/en.json`.
+- **Andere Sprachen:** liegen daneben (`de.json`, `sr.json`, `hr.json`, `bs.json`, `hu.json`).
+- **Keys** sind dieselben in allen Dateien. Ist ein Key fehlend, fällt die UI per `fallbackLng: 'en'` auf den englischen Wert zurück. Nichts bricht ab.
+- **Code:** Komponenten greifen Texte über `t('bereich.aktion')` ab. Direkte deutsche/englische Strings im JSX sind ein Lint-Smell.
+- **User-Sprache:** liegt in der DB am User-Account (`users.preferred_language`) und überstimmt den Browser-Default. Der Sprachschalter in der Sidebar (Dropdown mit Flagge) speichert sofort.
 
-### Wo Sprache speichern?
-- **Pro Benutzer (empfohlen):** In der Datenbank beim User (z. B. `preferred_language`). Nach Login lädt das Frontend diese Sprache. Dann hat jeder User „Englisch“ oder „Deutsch“ unabhängig vom Gerät.
-- **Alternativ/Fallback:** Nur im Browser (localStorage/Cookie), wenn du keine DB-Spalte willst. Dann ist die Wahl geräteabhängig.
-- **Einstellungen-UI:** In **Einstellungen → Profil** (für alle User): Dropdown „Sprache / Language“ (Deutsch, English, …). Beim Speichern: Backend speichert `preferred_language`, Frontend wechselt sofort die Sprache.
+### Übersetzungen pflegen
 
-### Einzelne Übersetzung bearbeitbar
-- Die **einzige** Stelle, die du bei neuen Texten oder Änderungen anpassen musst, sind die **Übersetzungsdateien** (z. B. `de.json`, `en.json`).
-- Kein separates „JS pro Sprache“ – genau **eine** Datei pro Sprache. Keys bleiben gleich, nur die Werte ändern sich pro Sprache.
-- Bei jeder **Aktion/Änderung** in der App: Wenn neuer Text in der UI kommt, einen neuen Key anlegen (z. B. `newFeature.button`) und in **allen** Sprachdateien den Wert eintragen (DE + EN + später weitere). So bleibt alles zentral und bearbeitbar.
+Das Sync-Skript hält alle Sprachen auf identische Key-Liste:
 
-### Konkret: Vorbereitung „multi“
-1. **i18n einbauen** (react-i18next + i18next), z. B. nur **Deutsch** zuerst (alle Texte in `de.json` auslagern).
-2. **Sprachumschalter** in den Einstellungen (Profil) – sichtbar für alle User.
-3. **Backend:** Optional User-Feld `preferred_language` (z. B. `de`, `en`); GET/PUT Profil erweitern; beim Login/GetMe mitgeben.
-4. **Weitere Sprachen:** Einfach neue Datei `en.json` (und evtl. `fr.json` etc.) anlegen und in der Konfiguration registrieren – **kein** neues JS, nur neue Übersetzungsdatei.
+```bash
+node scripts/sync-locales.mjs
+```
 
-### Nachteil (von dir angesprochen)
-- Bei **jeder** Änderung/neuen Aktion in der UI: In **allen** Sprachdateien den passenden Key ergänzen/anpassen. Das ist der normale Aufwand bei i18n; mit einem Plan (z. B. „immer Key = Bereich.aktion“, z. B. `zones.create`) und kurzen Keys bleibt es überschaubar.
+- ergänzt fehlende Keys in nicht-`en`-Dateien mit dem englischen Wert,
+- entfernt Keys, die nicht mehr in `en.json` existieren,
+- listet pro Datei auf, was hinzugefügt/entfernt wurde,
+- lässt bestehende Übersetzungen unverändert.
+
+Stand v2.3.7: 770 Keys identisch in allen 6 Sprachen.
+
+### Neue Sprache beisteuern
+
+1. `frontend/src/locales/en.json` als Vorlage kopieren, z. B. zu `it.json`.
+2. Werte übersetzen, Keys nicht anfassen.
+3. In `frontend/src/i18n.js` einen Eintrag in `LANGUAGES` (Code, Label, Flagge) und im `resources`-Block ergänzen.
+4. PR aufmachen.
+
+### Backend-Sprache
+
+E-Mail-Templates folgen `users.preferred_language`, dann `DEFAULT_LANGUAGE` aus der `.env`, dann Englisch. Templates liegen zentral in `backend/app/services/email_templates.py` – neue Sprache → da eintragen.
 
 ---
 
-## Reihenfolge (Vorschlag)
+## Reihenfolge der Umsetzung (historisch)
 
-| Schritt | Inhalt |
-|--------|--------|
-| 1 | **Basis-URL** in Einstellungen (Admin) speichern und beim Passwort-zurücksetzen-Link verwenden. |
-| 2 | **Validierung** Profilfelder (Backend + Frontend): Telefon, PLZ, Ort, Land mit sinnvollen Regeln (international tauglich). |
-| 3 | **i18n vorbereiten:** react-i18next einrichten, alle aktuellen Texte in `de.json` auslagern, `t('...')` im Frontend nutzen. |
-| 4 | **Sprachwahl** in Einstellungen (für alle User), Backend `preferred_language` (optional). |
-| 5 | **Englisch:** `en.json` anlegen und Sprache „English“ anbieten. |
+| Schritt | Status |
+|---------|--------|
+| Basis-URL als System-Setting + E-Mail-Links | umgesetzt (v2.3.x)             |
+| Profil-Validierung (Telefon/PLZ/Ort/Land)   | umgesetzt                      |
+| i18n-Infrastruktur (react-i18next)          | umgesetzt                      |
+| User-Sprache (`preferred_language`)         | umgesetzt                      |
+| Englisch + 5 weitere Sprachen               | umgesetzt (en/de/sr/hr/bs/hu)  |
+| Backend-Mails übersetzt                     | umgesetzt                      |
 
-Wenn du magst, können wir als Nächstes mit **Basis-URL** oder **Validierung** starten und das konkret im Code umsetzen; danach i18n Schritt für Schritt.
+Wer hier weitermachen will, sollte als Nächstes überlegen:
+
+- Dropdown mit ISO-Ländern für „Land“ (statt Freitext) – einheitlich + automatisch übersetzbar.
+- Optionale länderabhängige Telefon-/PLZ-Validierung mit `libphonenumber-js` (Frontend) und `phonenumbers` (Python). Aktuell bewusst nicht eingebaut, weil das Helper-Bibliotheken zieht und beim Falsch-Land mehr Frust als Nutzen bringt.

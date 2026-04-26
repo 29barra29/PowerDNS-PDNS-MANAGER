@@ -252,6 +252,10 @@ class ServerInfo(BaseModel):
     version: Optional[str] = None
     daemon_type: Optional[str] = None
     zone_count: Optional[int] = None
+    # True wenn dieser Server Schreibvorgaenge entgegennimmt (Records / Zonen).
+    # Default True fuer Server, die nur via env definiert sind und keinen
+    # ServerConfig-Eintrag haben (Backwards-Compat).
+    allow_writes: bool = True
 
 
 class ServerListResponse(BaseModel):

@@ -22,30 +22,41 @@ export default function SearchPage() {
         if (!searchTerm.trim() || servers.length === 0) return
         setLoading(true)
         setSearched(true)
-        const all = []
+        const merged = new Map()
         for (const s of servers) {
             if (!s.is_reachable) continue
             try {
                 const data = await api.search(s.name, searchTerm)
-                ;(data.results || []).forEach(r => all.push({ ...r, _server: s.name }))
+                ;(data.results || []).forEach(r => {
+                    const key = `${r.name}|${r.type}|${r.content}`
+                    if (!merged.has(key)) {
+                        merged.set(key, { ...r, _servers: [s.name] })
+                    } else {
+                        const cur = merged.get(key)
+                        if (!cur._servers.includes(s.name)) cur._servers.push(s.name)
+                    }
+                })
             } catch { /* ignore */ }
         }
-        setResults(all)
+        setResults(Array.from(merged.values()))
         setLoading(false)
     }, [servers])
 
     // Live-Suche: ab 3 Zeichen nach kurzer Pause automatisch suchen
-    /* eslint-disable react-hooks/set-state-in-effect -- debounced search + clear when query short */
     useEffect(() => {
         const t = query.trim()
         if (t.length < MIN_QUERY_LENGTH) {
-            if (searched) setResults([])
+            if (searched || results.length) {
+                queueMicrotask(() => {
+                    setResults([])
+                    setSearched(false)
+                })
+            }
             return
         }
         const timer = setTimeout(() => runSearch(t), DEBOUNCE_MS)
         return () => clearTimeout(timer)
-    }, [query, runSearch]) // eslint-disable-line react-hooks/exhaustive-deps -- searched intentionally omitted
-    /* eslint-enable react-hooks/set-state-in-effect */
+    }, [query, runSearch, searched, results.length])
 
     async function handleSearch(e) {
         e.preventDefault()
@@ -93,19 +104,28 @@ export default function SearchPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {results.map((r, i) => (
-                                <tr key={i} className="border-b border-border/30 hover:bg-bg-hover/30">
+                            {results.map((r) => {
+                                const srvList = r._servers && r._servers.length ? r._servers : [r._server]
+                                return (
+                                <tr key={`${r.name}|${r.type}|${r.content}`} className="border-b border-border/30 hover:bg-bg-hover/30">
                                     <td className="p-3 font-mono text-xs text-text-primary">{r.name}</td>
                                     <td className="p-3"><span className="text-xs px-1.5 py-0.5 bg-accent/10 text-accent-light rounded">{r.type}</span></td>
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{r.content}</td>
-                                    <td className="p-3 text-text-muted text-xs">{r._server}</td>
+                                    <td className="p-3 text-text-muted text-xs">
+                                        <div className="flex flex-wrap gap-1">
+                                            {srvList.map(srv => (
+                                                <span key={srv} className="text-xs px-1.5 py-0.5 rounded bg-bg-secondary border border-border">{srv}</span>
+                                            ))}
+                                        </div>
+                                    </td>
                                 </tr>
-                            ))}
+                                )
+                            })}
                         </tbody>
                     </table>
                   </div>
                 </div>
-            ) : searched ? (
+            ) : searched && query.trim().length >= MIN_QUERY_LENGTH ? (
                 <div className="text-center py-12 text-text-muted">
                     <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
                     <p>{t('search.noResults', { query })}</p>

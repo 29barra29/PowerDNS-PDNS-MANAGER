@@ -123,12 +123,13 @@ class APIClient {
     }
 
     // ========== Auth ==========
-    async login(username, password, captchaToken = null) {
+    async login(username, password, captchaToken = null, totpCode = null) {
         const form = new URLSearchParams();
         form.append('username', username);
         form.append('password', password);
         // Captcha-Token als zusaetzliches Form-Field (Backend nimmt es per Form(...) entgegen).
         if (captchaToken) form.append('captcha_token', captchaToken);
+        if (totpCode) form.append('totp_code', totpCode);
 
         let res;
         try {
@@ -144,8 +145,24 @@ class APIClient {
 
         const data = await res.json().catch(() => null);
         if (!res.ok) {
-            throw new Error(extractErrorMessage(data, res.statusText, res.status) || 'Login fehlgeschlagen');
+            const err = new Error(extractErrorMessage(data, res.statusText, res.status) || 'Login fehlgeschlagen');
+            err.status = res.status;
+            err.payload = data;
+            throw err;
         }
+        if (data.need_two_factor) {
+            return { needTwoFactor: true, twoFactorToken: data.two_factor_token };
+        }
+        this.setUser(data.user);
+        return data;
+    }
+
+    async completeLogin2fa(twoFactorToken, totpCode) {
+        const data = await this._publicJson(
+            '/auth/login/2fa',
+            { two_factor_token: twoFactorToken, totp_code: String(totpCode || '').replace(/\s/g, '') },
+            '2FA fehlgeschlagen',
+        );
         this.setUser(data.user);
         return data;
     }
@@ -163,12 +180,32 @@ class APIClient {
         }
         const data = await res.json().catch(() => null);
         if (!res.ok) {
-            throw new Error(extractErrorMessage(data, res.statusText, res.status) || fallbackMsg);
+            const err = new Error(extractErrorMessage(data, res.statusText, res.status) || fallbackMsg);
+            err.status = res.status;
+            err.payload = data;
+            throw err;
         }
         return data;
     }
 
     getMe() { return this.request('GET', '/auth/me'); }
+    // 2FA
+    getTotpStatus() { return this.request('GET', '/auth/me/totp/status'); }
+    // Leerer JSON-Body: manche Setups stolpern bei POST mit Content-Type json aber ohne Body
+    totpBegin() { return this.request('POST', '/auth/me/totp/begin', {}); }
+    totpEnable(code) { return this.request('POST', '/auth/me/totp/enable', { code }); }
+    totpDisable(password, code) { return this.request('POST', '/auth/me/totp/disable', { password, code }); }
+    // Panel-API-Token
+    getPanelTokens() { return this.request('GET', '/auth/me/panel-tokens'); }
+    createPanelToken(data) { return this.request('POST', '/auth/me/panel-tokens', data); }
+    deletePanelToken(id) { return this.request('DELETE', `/auth/me/panel-tokens/${id}`); }
+    // Webhooks
+    getWebhooks() { return this.request('GET', '/auth/me/webhooks'); }
+    createWebhook(data) { return this.request('POST', '/auth/me/webhooks', data); }
+    updateWebhook(id, data) { return this.request('PUT', `/auth/me/webhooks/${id}`, data); }
+    deleteWebhook(id) { return this.request('DELETE', `/auth/me/webhooks/${id}`); }
+    // Metriken (Admin)
+    getAppMetrics() { return this.request('GET', '/metrics'); }
     updateProfile(data) { return this.request('PUT', '/auth/me', data); }
     changePassword(data) { return this.request('PUT', '/auth/me/password', data); }
     register(data) { return this._publicJson('/auth/register', data, 'Registrierung fehlgeschlagen'); }
@@ -179,7 +216,9 @@ class APIClient {
     updateUser(id, data) { return this.request('PUT', `/auth/users/${id}`, data); }
     deleteUser(id) { return this.request('DELETE', `/auth/users/${id}`); }
     resetUserPassword(id) { return this.request('PUT', `/auth/users/${id}/reset-password`); }
-    updateUserZones(id, zones) { return this.request('PUT', `/auth/users/${id}/zones`, { zones }); }
+    updateUserZones(id, payload) {
+        return this.request('PUT', `/auth/users/${id}/zones`, payload);
+    }
     getUserZones(id) { return this.request('GET', `/auth/users/${id}/zones`); }
 
     // ========== Server ==========
@@ -187,10 +226,12 @@ class APIClient {
 
     // ========== Zones ==========
     listZones(server) { return this.request('GET', `/zones/${server}`); }
-    getZone(server, zone) { return this.request('GET', `/zones/${server}/${zone}`); }
+    /** Volle Zone inkl. Metadaten (dnssec, rrsets, …) – Backend: GET …/zones/{server}/{zone}/detail */
+    getZone(server, zone) { return this.request('GET', `/zones/${server}/${zone}/detail`); }
     createZone(data) { return this.request('POST', '/zones', data); }
     deleteZone(server, zone) { return this.request('DELETE', `/zones/${server}/${zone}`); }
     importZone(data) { return this.request('POST', '/zones/import', data); }
+    previewZoneImport(data) { return this.request('POST', '/zones/import/preview', data); }
     exportZone(server, zone) { return this.request('GET', `/zones/${server}/${zone}/export`); }
 
     // ========== Records ==========
@@ -201,6 +242,8 @@ class APIClient {
 
     // ========== DNSSEC ==========
     listKeys(server, zone) { return this.request('GET', `/dnssec/${server}/${zone}/keys`); }
+    /** DS-RRs für Registrar (aus PowerDNS Cryptokeys) */
+    getDsRecords(server, zone) { return this.request('GET', `/dnssec/${server}/${zone}/ds`); }
     enableDNSSEC(server, zone, data) { return this.request('POST', `/dnssec/${server}/${zone}/enable`, data); }
     disableDNSSEC(server, zone) { return this.request('POST', `/dnssec/${server}/${zone}/disable`); }
 
@@ -209,6 +252,32 @@ class APIClient {
 
     // ========== Audit Log ==========
     getAuditLog(limit = 100) { return this.request('GET', `/audit-log?limit=${limit}`); }
+    /** CSV-Download (Admin) – triggert Browser-Download, kein JSON */
+    async downloadAuditLogCsv() {
+        let res;
+        try {
+            res = await fetch(`${API_BASE}/audit-log/export`, { ...FETCH_OPTS, method: 'GET' });
+        } catch (e) {
+            throw new Error(`Server nicht erreichbar (${e.message || e})`, { cause: e });
+        }
+        if (res.status === 401) {
+            this.clearUser();
+            if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
+            throw new Error('Sitzung abgelaufen – bitte erneut anmelden');
+        }
+        if (!res.ok) {
+            const msg = (await res.text()) || res.statusText || `HTTP ${res.status}`;
+            throw new Error(msg);
+        }
+        const blob = await res.blob();
+        const name = 'audit-log.csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 
     // ========== Templates ==========
     getTemplates() { return this.request('GET', '/templates'); }

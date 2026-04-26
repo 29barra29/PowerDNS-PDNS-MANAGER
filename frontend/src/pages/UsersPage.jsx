@@ -13,6 +13,8 @@ export default function UsersPage() {
     const [editPasswordUser, setEditPasswordUser] = useState(null)
     const [newPassword, setNewPassword] = useState('')
     const [selectedZones, setSelectedZones] = useState([])
+    /** Pro Zonenname: 'manage' | 'read' */
+    const [zonePerm, setZonePerm] = useState({})
     const [form, setForm] = useState({ username: '', password: '', display_name: '', role: 'user' })
     const [error, setError] = useState('')
     const [success, setSuccess] = useState('')
@@ -140,7 +142,13 @@ export default function UsersPage() {
 
     function openZoneEditor(user) {
         setEditZonesUser(user)
-        setSelectedZones(user.zones || [])
+        setSelectedZones([...(user.zones || [])])
+        const zp = user.zone_permissions || {}
+        const next = {}
+        for (const z of user.zones || []) {
+            next[z] = zp[z] === 'read' ? 'read' : 'manage'
+        }
+        setZonePerm(next)
         setZonesError('')
     }
 
@@ -150,11 +158,22 @@ export default function UsersPage() {
     }
 
     function toggleZone(zoneName) {
-        setSelectedZones(prev =>
-            prev.includes(zoneName)
-                ? prev.filter(z => z !== zoneName)
-                : [...prev, zoneName]
-        )
+        setSelectedZones((prev) => {
+            if (prev.includes(zoneName)) {
+                setZonePerm((p) => {
+                    const n = { ...p }
+                    delete n[zoneName]
+                    return n
+                })
+                return prev.filter(z => z !== zoneName)
+            }
+            setZonePerm((p) => ({ ...p, [zoneName]: p[zoneName] || 'manage' }))
+            return [...prev, zoneName]
+        })
+    }
+
+    function setZonePermission(zoneName, perm) {
+        setZonePerm((p) => ({ ...p, [zoneName]: perm === 'read' ? 'read' : 'manage' }))
     }
 
     async function saveZones() {
@@ -162,7 +181,11 @@ export default function UsersPage() {
         setSaving(true)
         setZonesError('')
         try {
-            await api.updateUserZones(editZonesUser.id, selectedZones)
+            const zperm = {}
+            for (const z of selectedZones) {
+                zperm[z] = zonePerm[z] === 'read' ? 'read' : 'manage'
+            }
+            await api.updateUserZones(editZonesUser.id, { zones: selectedZones, zone_permissions: zperm })
             const name = editZonesUser.username
             setEditZonesUser(null)
             setSuccess(t('users.zonesAssigned', { name }))
@@ -382,22 +405,40 @@ export default function UsersPage() {
                                 allZones.map(z => {
                                     const active = selectedZones.includes(z.name)
                                     return (
-                                        <button
+                                        <div
                                             key={z.name}
-                                            onClick={() => toggleZone(z.name)}
-                                            className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${active
-                                                ? 'bg-accent/10 border-accent/40 text-text-primary'
+                                            className={`flex items-stretch gap-2 rounded-lg border transition-all ${active
+                                                ? 'bg-accent/10 border-accent/40'
                                                 : 'bg-bg-primary border-border text-text-secondary hover:border-border hover:bg-bg-hover'
                                                 }`}
                                         >
-                                            <div className={`w-5 h-5 rounded shrink-0 flex items-center justify-center border ${active ? 'bg-accent border-accent' : 'border-border'
-                                                }`}>
-                                                {active && <Check className="w-3 h-3 text-white" />}
-                                            </div>
-                                            <Globe className={`w-4 h-4 shrink-0 ${active ? 'text-accent-light' : 'text-text-muted'}`} />
-                                            <span className="font-mono text-sm">{z.name.replace(/\.$/, '')}</span>
-                                            <span className="text-xs text-text-muted ml-auto">({z.server})</span>
-                                        </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleZone(z.name)}
+                                                className="flex-1 min-w-0 flex items-center gap-3 p-3 text-left"
+                                            >
+                                                <div className={`w-5 h-5 rounded shrink-0 flex items-center justify-center border ${active ? 'bg-accent border-accent' : 'border-border'}`}>
+                                                    {active && <Check className="w-3 h-3 text-white" />}
+                                                </div>
+                                                <Globe className={`w-4 h-4 shrink-0 ${active ? 'text-accent-light' : 'text-text-muted'}`} />
+                                                <span className="font-mono text-sm text-text-primary">{z.name.replace(/\.$/, '')}</span>
+                                                <span className="text-xs text-text-muted ml-auto shrink-0">({z.server})</span>
+                                            </button>
+                                            {active && (
+                                                <label className="flex items-center gap-1.5 pr-2 shrink-0 self-center">
+                                                    <span className="text-[10px] text-text-muted sr-only sm:not-sr-only sm:inline">{t('users.zonePermColumn')}</span>
+                                                    <select
+                                                        value={zonePerm[z.name] || 'manage'}
+                                                        onClick={e => e.stopPropagation()}
+                                                        onChange={e => setZonePermission(z.name, e.target.value)}
+                                                        className="text-xs bg-bg-primary border border-border rounded-md px-2 py-1.5 max-w-[7.5rem] text-text-primary"
+                                                    >
+                                                        <option value="manage">{t('users.zonePermManage')}</option>
+                                                        <option value="read">{t('users.zonePermRead')}</option>
+                                                    </select>
+                                                </label>
+                                            )}
+                                        </div>
                                     )
                                 })
                             )}

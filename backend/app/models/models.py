@@ -33,6 +33,10 @@ class User(Base):
     country = Column(String(100), nullable=True)
     date_of_birth = Column(DateTime, nullable=True)
     preferred_language = Column(String(10), nullable=True)  # de, en, etc.
+    # 2FA (TOTP) – secret nur gesetzt wenn aktiviert oder während des Setups
+    totp_enabled = Column(Boolean, default=False, nullable=False)
+    totp_secret = Column(String(64), nullable=True)  # base32, aktiv
+    totp_pending_secret = Column(String(64), nullable=True)  # während /auth/.../totp/begin → enable
 
 
 class UserZoneAccess(Base):
@@ -128,4 +132,37 @@ class AcmeToken(Base):
     last_used_at = Column(DateTime, nullable=True)
     last_used_ip = Column(String(64), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+
+
+class PanelToken(Base):
+    """Bearer-Token für Voll-API (wie Session-JWT) – z. B. Skripte, Terraform."""
+
+    __tablename__ = "panel_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    token_prefix = Column(String(20), nullable=False, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    last_used_ip = Column(String(64), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class Webhook(Base):
+    """Outbound-Webhook: POST JSON + HMAC-Signatur (X-DNS-Manager-Signature)."""
+
+    __tablename__ = "webhooks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    url = Column(String(1024), nullable=False)
+    # Shared secret für HMAC; wird im Klartext gespeichert (nur Eigentümer-Zugriff)
+    secret = Column(String(256), nullable=False)
+    # z. B. ["*"] oder ["zone", "record"] (Präfix-Match: zone.* trifft zone.imported)
+    events = Column(JSON, nullable=False, default=list)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
 

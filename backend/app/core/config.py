@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "DNS Manager"
     APP_VERSION: str = Field(default_factory=_read_version_file)
     LOG_LEVEL: str = "info"
+    # text (Standard) oder json für strukturierte Zeilen
+    LOG_FORMAT: str = "text"
 
     @model_validator(mode="after")
     def _app_version_always_from_file(self) -> "Settings":
@@ -75,6 +77,8 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = ""
     # OpenAPI-/ReDoc-/Swagger-UI nur einschalten, wenn explizit gewünscht (Default: aus).
     DOCS_ENABLED: bool = False
+    # Webhooks sind serverseitige HTTP-Requests. Private Ziele nur bewusst erlauben.
+    WEBHOOK_ALLOW_PRIVATE_URLS: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

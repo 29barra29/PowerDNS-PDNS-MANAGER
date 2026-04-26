@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, GitCommit, Code, Sliders, Copy, Check, Star, Send, Shield, UserPlus, Key } from 'lucide-react'
+import { Settings, Server, Database, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap, UserCog, Lock, Mail, User, Download, GitCommit, Code, Sliders, Copy, Check, Star, Send, Shield, UserPlus, Key, Link2 } from 'lucide-react'
 import CaptchaWidget from '../components/CaptchaWidget'
 import api from '../api'
 import { ALL_RECORD_TYPE_KEYS, TEMPLATE_CONTENT_PLACEHOLDERS } from '../constants/dnsRecordTypes'
 import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
+import SettingsIntegrationsPanel from '../components/SettingsIntegrationsPanel'
 import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
 import { compareSemver } from '../utils/semverCompare'
 import { LANGUAGES } from '../i18n'
@@ -103,7 +104,7 @@ export default function SettingsPage() {
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- guard rail to keep non-admins on allowed tab
-        if (profile && profile.role !== 'admin' && !['profile', 'about'].includes(activeTab)) setActiveTab('profile')
+        if (profile && profile.role !== 'admin' && !['profile', 'about', 'integrations'].includes(activeTab)) setActiveTab('profile')
         // eslint-disable-next-line react-hooks/exhaustive-deps -- profile intentionally partial to avoid loops
     }, [profile?.role, activeTab])
 
@@ -825,6 +826,7 @@ export default function SettingsPage() {
 
     const allTabs = [
         { id: 'profile', labelKey: 'settings.profile', icon: UserCog },
+        { id: 'integrations', labelKey: 'settings.integrationsTab', icon: Link2 },
         { id: 'servers', labelKey: 'settings.servers', icon: Server },
         { id: 'templates', labelKey: 'settings.templates', icon: Copy },
         { id: 'smtp', labelKey: 'settings.smtp', icon: Mail },
@@ -834,7 +836,7 @@ export default function SettingsPage() {
         { id: 'updates', labelKey: 'settings.updates', icon: Download },
         { id: 'about', labelKey: 'settings.about', icon: Database },
     ]
-    const tabs = profile?.role === 'admin' ? allTabs : allTabs.filter(tab => tab.id === 'profile' || tab.id === 'about')
+    const tabs = profile?.role === 'admin' ? allTabs : allTabs.filter((tab) => ['profile', 'integrations', 'about'].includes(tab.id))
 
     if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 text-accent animate-spin" /></div>
 
@@ -1248,6 +1250,8 @@ export default function SettingsPage() {
                     </div>
                 </div>
             )}
+
+            {activeTab === 'integrations' && <SettingsIntegrationsPanel />}
 
             {/* =================== SMTP TAB =================== */}
             {activeTab === 'smtp' && (
