@@ -17,6 +17,13 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 
 Ein Video-Walkthrough (Installation, ersten Server anbinden, Zone + DNSSEC anlegen) folgt auf YouTube. Sobald es online ist, steht der Link hier. Wer zwischendurch fragen hat: einfach ein Issue aufmachen.
 
+## Dokumentation
+
+Ausführliche Doku, Screenshots, Setup-Guides, Changelog & FAQ:
+**[pdns-manager.gemtecgames.com](https://pdns-manager.gemtecgames.com)**
+
+Dieses README gibt nur den Schnellüberblick (Installation, Stack, Troubleshooting). Tiefergehende Anleitungen — PowerDNS-Anbindung, ACME / Auto-TLS, Webhooks, Multi-Server-Sync, API-Token, Branding — stehen auf der Doku-Seite und werden dort gepflegt.
+
 ---
 
 ## Was es kann
