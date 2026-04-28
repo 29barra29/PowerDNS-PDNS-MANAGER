@@ -1,6 +1,6 @@
 #!/bin/bash
-# DNS Manager - One-Click Installation Script
-# This script downloads and sets up DNS Manager automatically
+# PDNS Manager - One-Click Installation Script
+# This script downloads and sets up PDNS Manager automatically
 
 set -e
 
@@ -26,7 +26,7 @@ print_info()    { echo -e "${YELLOW}→${NC} $1"; }
 # ---------- Language selection (first thing the user sees) ----------
 clear
 echo "================================================"
-echo "   🌐 DNS Manager - Installation"
+echo "   🌐 PDNS Manager - Installation"
 echo "================================================"
 echo ""
 echo "Sprache / Language:"
@@ -44,7 +44,7 @@ fi
 
 # ---------- Set all messages in chosen language ----------
 if [ "$LANG_APP" = "en" ]; then
-    M_BANNER_TITLE="DNS Manager - Installation"
+    M_BANNER_TITLE="PDNS Manager - Installation"
     M_CHECK_PREREQ="Checking prerequisites..."
     M_NO_ROOT="Do not run this installer as root. Use a regular user with sudo rights - Docker commands will use sudo automatically when needed."
     M_DOCKER_MISSING="Docker is not installed!"
@@ -58,10 +58,10 @@ if [ "$LANG_APP" = "en" ]; then
     M_DOCKER_OK="Docker permissions OK"
     M_PORT_IN_USE="Port 5380 is already in use!"
     M_CONTINUE_ANYWAY="Continue anyway? (y/n): "
-    M_INSTALL_DIR="Installation directory [./dns-manager]: "
+    M_INSTALL_DIR="Installation directory [./pdns-manager]: "
     M_DIR_EXISTS="Directory %s already exists!"
     M_OVERWRITE="Overwrite? (y/n): "
-    M_DOWNLOAD="Downloading DNS Manager..."
+    M_DOWNLOAD="Downloading PDNS Manager..."
     M_GIT_TRY="Git not available, trying direct download..."
     M_NEED_CURL_WGET="Neither git, curl nor wget available!"
     M_DOWNLOAD_DONE="Download complete"
@@ -70,14 +70,19 @@ if [ "$LANG_APP" = "en" ]; then
     M_ENV_CREATED=".env created with secure passwords"
     M_START_CONTAINERS="Starting Docker containers..."
     M_WAIT_SERVICES="Waiting for services..."
-    M_BACKEND_UP="Backend is running"
-    M_BACKEND_DOWN="Backend failed to start!"
+    M_BACKEND_UP="Backend is healthy"
+    M_BACKEND_DOWN="Backend did not become healthy in time!"
+    M_BACKEND_WAITING="Waiting for backend health endpoint..."
     M_CHECK_LOGS_BACKEND="Check logs: %s logs backend"
     M_DB_UP="Database is running"
     M_DB_DOWN="Database failed to start!"
     M_CHECK_LOGS_DB="Check logs: %s logs mariadb"
+    M_OPENSSL_MISSING="openssl is required to generate secure passwords."
+    M_PORT_CHECK_SKIPPED="No tool to probe ports (lsof/ss/netstat). Skipping port check."
+    M_TARBALL_TAG="Downloaded release %s as tarball."
+    M_TARBALL_MAIN="No release tag found - downloading main branch (unstable)."
     M_DONE_TITLE="Installation complete!"
-    M_ACCESS="DNS Manager is available at:"
+    M_ACCESS="PDNS Manager is available at:"
     M_NEXT="Next steps:"
     M_NEXT_1="Open http://localhost:5380 in your browser"
     M_NEXT_2="Register as first user (becomes Admin)"
@@ -93,7 +98,7 @@ if [ "$LANG_APP" = "en" ]; then
     M_SEC_3="See INSTALL.md for details"
     M_HELP="Need help?"
 else
-    M_BANNER_TITLE="DNS Manager - Automatische Installation"
+    M_BANNER_TITLE="PDNS Manager - Automatische Installation"
     M_CHECK_PREREQ="Prüfe Voraussetzungen..."
     M_NO_ROOT="Bitte nicht als root ausführen. Nutze einen normalen Benutzer mit sudo-Rechten - Docker-Befehle verwenden sudo automatisch, wenn nötig."
     M_DOCKER_MISSING="Docker ist nicht installiert!"
@@ -107,10 +112,10 @@ else
     M_DOCKER_OK="Docker Berechtigungen geprüft ok"
     M_PORT_IN_USE="Port 5380 ist bereits belegt!"
     M_CONTINUE_ANYWAY="Trotzdem fortfahren? (j/n): "
-    M_INSTALL_DIR="Installationsverzeichnis [./dns-manager]: "
+    M_INSTALL_DIR="Installationsverzeichnis [./pdns-manager]: "
     M_DIR_EXISTS="Verzeichnis %s existiert bereits!"
     M_OVERWRITE="Überschreiben? (j/n): "
-    M_DOWNLOAD="Lade DNS Manager herunter..."
+    M_DOWNLOAD="Lade PDNS Manager herunter..."
     M_GIT_TRY="Git nicht verfügbar, versuche direkten Download..."
     M_NEED_CURL_WGET="Weder git, curl noch wget verfügbar!"
     M_DOWNLOAD_DONE="Download abgeschlossen"
@@ -119,14 +124,19 @@ else
     M_ENV_CREATED=".env erstellt mit sicheren Passwörtern"
     M_START_CONTAINERS="Starte Docker Container..."
     M_WAIT_SERVICES="Warte auf Services..."
-    M_BACKEND_UP="Backend läuft"
-    M_BACKEND_DOWN="Backend startet nicht!"
+    M_BACKEND_UP="Backend ist healthy"
+    M_BACKEND_DOWN="Backend wurde nicht rechtzeitig healthy!"
+    M_BACKEND_WAITING="Warte auf Backend-Health-Endpoint..."
     M_CHECK_LOGS_BACKEND="Prüfe Logs mit: %s logs backend"
     M_DB_UP="Datenbank läuft"
     M_DB_DOWN="Datenbank startet nicht!"
     M_CHECK_LOGS_DB="Prüfe Logs mit: %s logs mariadb"
+    M_OPENSSL_MISSING="openssl wird benötigt, um sichere Passwörter zu erzeugen."
+    M_PORT_CHECK_SKIPPED="Kein Tool zur Port-Prüfung gefunden (lsof/ss/netstat). Port-Check übersprungen."
+    M_TARBALL_TAG="Release %s als Tarball geladen."
+    M_TARBALL_MAIN="Kein Release-Tag gefunden – nutze main-Branch (instabil)."
     M_DONE_TITLE="Installation abgeschlossen!"
-    M_ACCESS="DNS Manager ist erreichbar unter:"
+    M_ACCESS="PDNS Manager ist erreichbar unter:"
     M_NEXT="Nächste Schritte:"
     M_NEXT_1="Öffne http://localhost:5380 im Browser"
     M_NEXT_2="Registriere dich als erster Benutzer (wird Admin)"
@@ -195,18 +205,36 @@ else
     print_success "$M_DOCKER_OK"
 fi
 
-if lsof -Pi :5380 -sTCP:LISTEN -t >/dev/null 2>&1; then
+# Port-Check mit Fallback (lsof -> ss -> netstat). Returncode:
+#   0 = belegt, 1 = frei, 2 = kein Tool verfügbar
+port_in_use() {
+    local port="$1"
+    if command -v lsof &>/dev/null; then
+        lsof -Pi :"$port" -sTCP:LISTEN -t >/dev/null 2>&1 && return 0 || return 1
+    elif command -v ss &>/dev/null; then
+        ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$" && return 0 || return 1
+    elif command -v netstat &>/dev/null; then
+        netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$" && return 0 || return 1
+    fi
+    return 2
+}
+
+PORT_CHECK_RC=0
+port_in_use 5380 || PORT_CHECK_RC=$?
+if [ "$PORT_CHECK_RC" = "0" ]; then
     print_error "$M_PORT_IN_USE"
     read -p "$M_CONTINUE_ANYWAY" -n 1 -r
     echo
     if [[ ! $REPLY =~ $YES_PATTERN ]]; then
         exit 1
     fi
+elif [ "$PORT_CHECK_RC" = "2" ]; then
+    print_info "$M_PORT_CHECK_SKIPPED"
 fi
 
 echo ""
 read -p "$M_INSTALL_DIR" INSTALL_DIR
-INSTALL_DIR=${INSTALL_DIR:-./dns-manager}
+INSTALL_DIR=${INSTALL_DIR:-./pdns-manager}
 
 if [ -d "$INSTALL_DIR" ]; then
     print_error "$(printf "$M_DIR_EXISTS" "$INSTALL_DIR")"
@@ -224,12 +252,30 @@ cd "$INSTALL_DIR"
 INSTALL_PATH_ABS=$(pwd)
 
 print_info "$M_DOWNLOAD"
-git clone https://github.com/29barra29/dns-manager.git . 2>/dev/null || {
+GH_REPO="29barra29/PowerDNS-PDNS-MANAGER"
+git clone "https://github.com/${GH_REPO}.git" . 2>/dev/null || {
     print_info "$M_GIT_TRY"
+
+    # Versuche zuerst, das neueste Release-Tag von der GitHub-API zu holen.
+    # Wenn das klappt, liefern wir den Tarball dieses Release aus -> stabiler Stand.
+    LATEST_TAG_FROM_API=""
     if command -v curl &> /dev/null; then
-        curl -L https://github.com/29barra29/dns-manager/archive/main.tar.gz | tar xz --strip-components=1
+        LATEST_TAG_FROM_API=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" 2>/dev/null \
+            | sed -nE 's/.*"tag_name": *"([^"]+)".*/\1/p' | head -1 || true)
+    fi
+
+    if [ -n "$LATEST_TAG_FROM_API" ]; then
+        TARBALL_URL="https://github.com/${GH_REPO}/archive/refs/tags/${LATEST_TAG_FROM_API}.tar.gz"
+        print_info "$(printf "$M_TARBALL_TAG" "$LATEST_TAG_FROM_API")"
+    else
+        TARBALL_URL="https://github.com/${GH_REPO}/archive/main.tar.gz"
+        print_info "$M_TARBALL_MAIN"
+    fi
+
+    if command -v curl &> /dev/null; then
+        curl -fL "$TARBALL_URL" | tar xz --strip-components=1
     elif command -v wget &> /dev/null; then
-        wget -qO- https://github.com/29barra29/dns-manager/archive/main.tar.gz | tar xz --strip-components=1
+        wget -qO- "$TARBALL_URL" | tar xz --strip-components=1
     else
         print_error "$M_NEED_CURL_WGET"
         exit 1
@@ -257,6 +303,11 @@ else
     # Achtung: Niemals auf vorhandene Platzhalter in .env.example verlassen
     # (Namen ändern sich) -> wir setzen jede Variable zeilenweise.
     print_info "$M_NO_SETUP"
+
+    if ! command -v openssl &> /dev/null; then
+        print_error "$M_OPENSSL_MISSING"
+        exit 1
+    fi
 
     DB_ROOT_PW=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
     DB_PW=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32)
@@ -292,21 +343,47 @@ fi
 print_info "$M_START_CONTAINERS"
 $COMPOSE_CMD up -d
 
+# 1) Datenbank: Compose-Service läuft?
+#    Wir nutzen `compose ps -q` weil das nicht von einem festen Container-Namen
+#    abhängt. Wenn die ID leer ist, ist der Service nicht da.
 print_info "$M_WAIT_SERVICES"
-sleep 10
-
-if $COMPOSE_CMD ps 2>/dev/null | grep -E "dns-manager-api|backend" | grep -qi "Up"; then
-    print_success "$M_BACKEND_UP"
-else
-    print_error "$M_BACKEND_DOWN"
-    echo "$(printf "$M_CHECK_LOGS_BACKEND" "$COMPOSE_CMD")"
-fi
-
-if $COMPOSE_CMD ps 2>/dev/null | grep -E "dns-manager-db|mariadb" | grep -qi "Up"; then
+DB_CID=$($COMPOSE_CMD ps -q mariadb 2>/dev/null || true)
+if [ -n "$DB_CID" ] && docker inspect "$DB_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
     print_success "$M_DB_UP"
 else
     print_error "$M_DB_DOWN"
     echo "$(printf "$M_CHECK_LOGS_DB" "$COMPOSE_CMD")"
+fi
+
+# 2) Backend: aktiv auf /health pollen statt blind 10 s schlafen.
+#    Damit erfährt der User wirklich, ob das Backend bereit ist (DB-Init,
+#    Migrations etc. können einen Moment dauern).
+print_info "$M_BACKEND_WAITING"
+HEALTH_OK=false
+for _i in $(seq 1 60); do
+    if command -v curl &> /dev/null; then
+        if curl -fsS "http://localhost:5380/health" >/dev/null 2>&1; then
+            HEALTH_OK=true; break
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -qO- "http://localhost:5380/health" >/dev/null 2>&1; then
+            HEALTH_OK=true; break
+        fi
+    else
+        # Kein HTTP-Tool -> Fallback auf Container-Status
+        BE_CID=$($COMPOSE_CMD ps -q backend 2>/dev/null || true)
+        if [ -n "$BE_CID" ] && docker inspect "$BE_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
+            HEALTH_OK=true; break
+        fi
+    fi
+    sleep 2
+done
+
+if $HEALTH_OK; then
+    print_success "$M_BACKEND_UP"
+else
+    print_error "$M_BACKEND_DOWN"
+    echo "$(printf "$M_CHECK_LOGS_BACKEND" "$COMPOSE_CMD")"
 fi
 
 echo ""
@@ -334,5 +411,5 @@ echo "   - $M_SEC_2"
 echo "   - $M_SEC_3"
 echo ""
 echo "💡 $M_HELP"
-echo "   https://github.com/29barra29/dns-manager/issues"
+echo "   https://github.com/29barra29/PowerDNS-PDNS-MANAGER/issues"
 echo ""

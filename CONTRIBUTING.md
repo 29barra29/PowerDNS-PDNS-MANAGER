@@ -1,10 +1,10 @@
 # Mitwirken / Contributing
 
-Danke für dein Interesse am **DNS Manager**! Kurz und technisch – passend zu einem Self-Hosting-Projekt.
+Danke für dein Interesse am **PDNS Manager**! Kurz und technisch – passend zu einem Self-Hosting-Projekt.
 
 ## Issues
 
-* **Bug oder Feature?** Nutze die [Issue-Templates](https://github.com/29barra29/dns-manager/issues/new/choose) (Bug, Feature, Installation).
+* **Bug oder Feature?** Nutze die [Issue-Templates](https://github.com/29barra29/PowerDNS-PDNS-MANAGER/issues/new/choose) (Bug, Feature, Installation).
 * **Sicherheit:** Keine öffentlichen Issues – siehe [SECURITY.md](SECURITY.md) (GitHub **Security** → *Report a vulnerability*).
 
 ## Pull Requests

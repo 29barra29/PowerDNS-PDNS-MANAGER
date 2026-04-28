@@ -1,5 +1,5 @@
 /** GitHub-Repo für Releases / Tags */
-export const GITHUB_REPO = '29barra29/dns-manager'
+export const GITHUB_REPO = '29barra29/PowerDNS-PDNS-MANAGER'
 
 export async function fetchLatestRemoteVersion() {
     try {

@@ -20,7 +20,7 @@ export default function RegisterPage() {
     const [captchaToken, setCaptchaToken] = useState('')
     const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
-        app_name: 'DNS Manager',
+        app_name: 'PDNS Manager',
         registration_enabled: false,
         app_tagline: 'PowerDNS Admin Panel',
         app_creator: '',

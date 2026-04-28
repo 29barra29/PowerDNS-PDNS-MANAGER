@@ -13,7 +13,7 @@ export default function Layout() {
     const navigate = useNavigate()
     const location = useLocation()
     const [user, setUser] = useState(() => api.getUser())
-    const [appInfo, setAppInfo] = useState({ app_name: 'DNS Manager', app_version: '', app_logo_url: '' })
+    const [appInfo, setAppInfo] = useState({ app_name: 'PDNS Manager', app_version: '', app_logo_url: '' })
     const [sidebarOpen, setSidebarOpen] = useState(false)
     const { updateAvailable } = useUpdateAvailability()
 

@@ -32,7 +32,7 @@ def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, s
     """Liefert ``(subject, body_html, body_text)`` fuer die Passwort-Reset-Mail."""
     name = display_name or ""
     if lang == "de":
-        subject = "Passwort zuruecksetzen - DNS Manager"
+        subject = "Passwort zuruecksetzen - PDNS Manager"
         body_html = (
             f"<p>Hallo {name},</p>"
             f"<p>du hast eine Zuruecksetzung deines Passworts angefordert.</p>"
@@ -45,7 +45,7 @@ def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, s
         return subject, body_html, body_text
 
     # Fallback / en
-    subject = "Reset your password - DNS Manager"
+    subject = "Reset your password - PDNS Manager"
     body_html = (
         f"<p>Hi {name},</p>"
         f"<p>You requested a password reset.</p>"
@@ -62,18 +62,18 @@ def test_email(lang: str) -> Tuple[str, str, str]:
     """Liefert ``(subject, body_html, body_text)`` fuer die Admin-Test-Mail."""
     if lang == "de":
         return (
-            "DNS Manager - Test-E-Mail",
+            "PDNS Manager - Test-E-Mail",
             "<h2>Test erfolgreich!</h2>"
-            "<p>Diese E-Mail wurde vom DNS Manager gesendet.</p>"
+            "<p>Diese E-Mail wurde vom PDNS Manager gesendet.</p>"
             "<p>Dein SMTP ist korrekt konfiguriert.</p>",
-            "Test erfolgreich! Diese E-Mail wurde vom DNS Manager gesendet.",
+            "Test erfolgreich! Diese E-Mail wurde vom PDNS Manager gesendet.",
         )
     return (
-        "DNS Manager - Test email",
+        "PDNS Manager - Test email",
         "<h2>Test successful!</h2>"
-        "<p>This email was sent by DNS Manager.</p>"
+        "<p>This email was sent by PDNS Manager.</p>"
         "<p>Your SMTP is configured correctly.</p>",
-        "Test successful! This email was sent by DNS Manager.",
+        "Test successful! This email was sent by PDNS Manager.",
     )
 
 

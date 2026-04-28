@@ -1,4 +1,4 @@
-"""Database models for the DNS Manager backend.
+"""Database models for the PDNS Manager backend.
 
 These models store backend-specific data like audit logs, server configs,
 and zone templates. The actual DNS data lives in PowerDNS (accessed via API).

@@ -39,7 +39,7 @@ async def get_smtp_settings(db: AsyncSession) -> dict:
         "username": settings.get("smtp_username", ""),
         "password": settings.get("smtp_password", ""),
         "from_email": settings.get("smtp_from_email", ""),
-        "from_name": settings.get("smtp_from_name", "DNS Manager"),
+        "from_name": settings.get("smtp_from_name", "PDNS Manager"),
         "encryption": settings.get("smtp_encryption", "starttls"),
         "enabled": settings.get("smtp_enabled", "false") == "true",
     }
@@ -85,7 +85,7 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
         raise RuntimeError("Kein SMTP-Server konfiguriert.")
     
     msg = MIMEMultipart("alternative")
-    msg["From"] = f"{smtp_settings.get('from_name', 'DNS Manager')} <{smtp_settings['from_email']}>"
+    msg["From"] = f"{smtp_settings.get('from_name', 'PDNS Manager')} <{smtp_settings['from_email']}>"
     msg["To"] = to_email
     msg["Subject"] = subject
     

@@ -20,7 +20,7 @@ export default function LoginPage() {
     const [captchaToken, setCaptchaToken] = useState('')
     const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
-        app_name: 'DNS Manager',
+        app_name: 'PDNS Manager',
         app_version: '',
         registration_enabled: false,
         forgot_password_enabled: false,

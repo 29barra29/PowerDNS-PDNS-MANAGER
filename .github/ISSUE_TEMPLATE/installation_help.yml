@@ -58,7 +58,7 @@ body:
       description: Relevante Teile deiner .env (OHNE Passwörter!)
       render: shell
       placeholder: |
-        APP_NAME=DNS Manager
+        APP_NAME=PDNS Manager
         ENABLE_REGISTRATION=true
         # Bitte keine Passwörter oder API-Keys posten!
 

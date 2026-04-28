@@ -551,7 +551,7 @@ class SmtpSettings(BaseModel):
     username: str = Field(default="", description="SMTP Benutzername")
     password: str = Field(default="", description="SMTP Passwort")
     from_email: str = Field(default="", description="Absender E-Mail")
-    from_name: str = Field(default="DNS Manager", description="Absender Name")
+    from_name: str = Field(default="PDNS Manager", description="Absender Name")
     encryption: str = Field(default="starttls", description="Verschlüsselung: none, starttls, ssl")
     enabled: bool = Field(default=False, description="SMTP aktiviert")
 
@@ -811,7 +811,7 @@ async def send_welcome_test_email(
     welcome_settings = await _welcome(db)
 
     name_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_name"))
-    app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "DNS Manager").strip()
+    app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "PDNS Manager").strip()
     base_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
     base_url = (base_row.scalar_one_or_none() or "").strip() or "http://localhost:5380"
 

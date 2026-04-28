@@ -16,7 +16,7 @@ export default function ForgotPasswordPage() {
     const [captchaToken, setCaptchaToken] = useState('')
     const captchaRef = useRef(null)
     const [appInfo, setAppInfo] = useState({
-        app_name: 'DNS Manager',
+        app_name: 'PDNS Manager',
         forgot_password_enabled: false,
         app_tagline: 'PowerDNS Admin Panel',
         app_creator: '',

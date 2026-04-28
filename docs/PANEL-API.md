@@ -1,4 +1,4 @@
-# DNS Manager – API für Skripte (Panel-Token & Session)
+# PDNS Manager – API für Skripte (Panel-Token & Session)
 
 Die Weboberfläche spricht standardmäßig dieselbe **REST-API** unter dem Pfad-Präfix `/api/v1` an. Wenn du **keinen Browser** einsetzen willst (Terraform, Skripte, Monitoring, CI), legst du dir einen **Panel-API-Token** an und schickst ihn als `Authorization: Bearer …`.
 
@@ -102,7 +102,7 @@ curl -sS -H "$H_AUTH" -X POST "$DNSMGR/api/v1/dnssec/<server-name>/example.com./
 
 ### Multi-Server-Verhalten
 
-Wenn mehrere PowerDNS-Server `Speichern: Ja` (`allow_writes=true`) haben **und** dieselbe Zone führen, schreibt der DNS Manager **automatisch auf alle**. Das gilt für `POST`, `PUT`, `DELETE` und `bulk` von Records sowie für DNSSEC-Operationen. Das Response-JSON enthält dann `details` mit Pro-Server-Status (`ok` / `skipped` / `error`):
+Wenn mehrere PowerDNS-Server `Speichern: Ja` (`allow_writes=true`) haben **und** dieselbe Zone führen, schreibt der PDNS Manager **automatisch auf alle**. Das gilt für `POST`, `PUT`, `DELETE` und `bulk` von Records sowie für DNSSEC-Operationen. Das Response-JSON enthält dann `details` mit Pro-Server-Status (`ok` / `skipped` / `error`):
 
 ```json
 {
@@ -149,7 +149,7 @@ Komplette Liste mit Body-Schemas im Browser unter `/docs` (mit `DOCS_ENABLED=tru
 
 ## Webhooks (eingehende Empfangs-Seite)
 
-DNS Manager kann nach Änderungen an Zonen, Records, DNSSEC, ACME oder Audit-Events ein **POST**-Request an deinen Endpunkt schicken (konfigurierbar in **Einstellungen → API & Sicherheit → Webhooks**).
+PDNS Manager kann nach Änderungen an Zonen, Records, DNSSEC, ACME oder Audit-Events ein **POST**-Request an deinen Endpunkt schicken (konfigurierbar in **Einstellungen → API & Sicherheit → Webhooks**).
 
 - **Methode:** POST
 - **Body:** JSON, z. B.

@@ -418,7 +418,7 @@ async def _send_welcome_email_safe(user_id: int, base_url: str) -> None:
             name_row = await session.execute(
                 select(SystemSetting.value).where(SystemSetting.key == "app_name")
             )
-            app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "DNS Manager").strip()
+            app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "PDNS Manager").strip()
             base_row = await session.execute(
                 select(SystemSetting.value).where(SystemSetting.key == "app_base_url")
             )
@@ -820,7 +820,7 @@ async def totp_begin(
     await db.flush()
     t = pyotp.totp.TOTP(sec)
     # Klarer Label-Text für Authenticator-Apps; Sonderzeichen/Zeilenumbruch vermeiden
-    iss = (app_settings.APP_NAME or "DNS Manager").strip()[:64]
+    iss = (app_settings.APP_NAME or "PDNS Manager").strip()[:64]
     uname = (current_user.username or "user").strip()[:200]
     uri = t.provisioning_uri(name=uname, issuer_name=iss)
     return {

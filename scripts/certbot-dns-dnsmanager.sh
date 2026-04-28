@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # certbot-dns-dnsmanager.sh
 #
-# certbot Hook-Skript fuer DNS-01-Challenges via DNS Manager (PowerDNS-Frontend).
+# certbot Hook-Skript fuer DNS-01-Challenges via PDNS Manager (PowerDNS-Frontend).
 # Wird sowohl als --manual-auth-hook als auch als --manual-cleanup-hook benutzt;
 # certbot setzt die Variable $CERTBOT_AUTH_OUTPUT nur beim Cleanup, daran
 # erkennt das Skript, welche Phase gerade laeuft.
 #
 # Voraussetzungen:
-#   1. Im DNS Manager unter Settings -> ACME / Auto-TLS einen Token erstellen.
+#   1. Im PDNS Manager unter Settings -> ACME / Auto-TLS einen Token erstellen.
 #      Der Token wird genau EINMAL angezeigt - sicher abspeichern.
 #   2. Token + Manager-URL hier ueber Env-Variablen oder /etc/dnsmgr.env setzen:
 #         DNSMGR_URL="https://dns.example.com"

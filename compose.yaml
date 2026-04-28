@@ -1,6 +1,6 @@
 services:
   # ============================================
-  # MariaDB - Datenbank für DNS Manager
+  # MariaDB - Datenbank für PDNS Manager
   # ============================================
   mariadb:
     image: mariadb:11
@@ -48,7 +48,7 @@ services:
       PDNS_SERVERS: ${PDNS_SERVERS:-}
 
       # App Settings (Version = eine Stelle: VERSION-Datei im Projektroot)
-      APP_NAME: ${APP_NAME:-DNS Manager}
+      APP_NAME: ${APP_NAME:-PDNS Manager}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Host-Pfad zum Projektordner (für Einstellungen → Updates: „cd …“) – aus .env (install.sh / setup.sh)
       INSTALL_PATH: ${INSTALL_PATH:-}

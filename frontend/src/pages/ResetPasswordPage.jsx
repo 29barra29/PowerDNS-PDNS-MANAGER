@@ -16,7 +16,7 @@ export default function ResetPasswordPage() {
     const [loading, setLoading] = useState(false)
     const [success, setSuccess] = useState(false)
     const [appInfo, setAppInfo] = useState({
-        app_name: 'DNS Manager',
+        app_name: 'PDNS Manager',
         app_tagline: 'PowerDNS Admin Panel',
         app_creator: '',
         app_logo_url: '',

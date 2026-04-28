@@ -1,6 +1,6 @@
-# DNS Manager – Frontend
+# PDNS Manager – Frontend
 
-Single-Page-Web-UI des [DNS Managers](../README.md). React 19 + Vite 8 (Rolldown) + Tailwind CSS 4 + i18next. Spricht ausschließlich die Backend-API unter `/api/v1` an und wird im Backend-Image als Static ausgeliefert (`backend/Dockerfile` kopiert das Build-Result in `/app/static/`).
+Single-Page-Web-UI des [PDNS Managers](../README.md). React 19 + Vite 8 (Rolldown) + Tailwind CSS 4 + i18next. Spricht ausschließlich die Backend-API unter `/api/v1` an und wird im Backend-Image als Static ausgeliefert (`backend/Dockerfile` kopiert das Build-Result in `/app/static/`).
 
 Im Produktivbetrieb baut das Backend-Dockerfile dieses Frontend automatisch mit – du musst hier nichts manuell ausführen, außer du arbeitest am Frontend.
 

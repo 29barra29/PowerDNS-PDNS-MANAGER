@@ -1,5 +1,5 @@
 name: Feature Request
-description: Schlage eine neue Funktion für DNS Manager vor
+description: Schlage eine neue Funktion für PDNS Manager vor
 title: "[FEATURE] "
 labels: ["enhancement", "triage"]
 assignees: []
@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Danke für deinen Vorschlag zur Verbesserung des DNS Managers!
+        Danke für deinen Vorschlag zur Verbesserung des PDNS Managers!
         Bitte beschreibe deine Idee so detailliert wie möglich.
 
   - type: textarea

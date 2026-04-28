@@ -1,5 +1,5 @@
 /**
- * API Client für das DNS Manager Backend.
+ * API Client für das PDNS Manager Backend.
  * Token wird nur per HttpOnly-Cookie gesetzt (nicht in localStorage – sicherer gegen XSS).
  */
 const API_BASE = '/api/v1';

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DNS Manager - Interaktives Setup Script
+# PDNS Manager - Interaktives Setup Script
 # Dieses Script hilft bei der Ersteinrichtung
 
 set -e
@@ -9,7 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "================================================"
-echo "   🌐 DNS Manager - Setup Assistent"
+echo "   🌐 PDNS Manager - Setup Assistent"
 echo "================================================"
 echo ""
 
@@ -32,26 +32,43 @@ if [ -f .env ]; then
         echo "Setup abgebrochen."
         exit 1
     fi
-    cp .env .env.backup
-    echo "✅ Backup erstellt: .env.backup"
+    # Zeitgestempeltes Backup, damit ältere Backups nicht überschrieben werden.
+    BACKUP_FILE=".env.backup.$(date +%Y%m%d-%H%M%S)"
+    cp .env "$BACKUP_FILE"
+    echo "✅ Backup erstellt: $BACKUP_FILE"
 fi
+
+# Auch wenn das Skript zwischendrin abbricht (Ctrl-C, Fehler), kein halbfertiges
+# .env.tmp im Repo liegen lassen.
+trap 'rm -f .env.tmp 2>/dev/null || true' EXIT INT TERM
 
 echo ""
 echo "📋 Basis-Konfiguration"
 echo "----------------------"
 
-# Language: from install.sh (--from-install <de|en>) or default de
+# Sprache: aus install.sh (--from-install <de|en>) oder aktiv erfragen.
+# Vorher hartkodiert "de" – jetzt fragt Standalone-Aufruf den User explizit.
 if [ "$1" = "--from-install" ] && [ -n "$2" ]; then
     DEFAULT_LANGUAGE="$2"
 else
-    DEFAULT_LANGUAGE="de"
+    echo "Sprache / Language:"
+    echo "   [1] Deutsch"
+    echo "   [2] English"
+    read -p "Choose [1/2] (default 1): " -n 1 -r LANG_CHOICE
+    echo
+    LANG_CHOICE=${LANG_CHOICE:-1}
+    if [ "$LANG_CHOICE" = "2" ]; then
+        DEFAULT_LANGUAGE="en"
+    else
+        DEFAULT_LANGUAGE="de"
+    fi
 fi
 INSTALL_PATH=$(pwd)
 
 # App Name
 echo "Wie soll das Panel heißen? (Dieser Name wird später oben links im Panel angezeigt)"
-read -p "Eingabe (z.B. Firmenname oder Eigenname) [DNS Manager]: " APP_NAME
-APP_NAME=${APP_NAME:-DNS Manager}
+read -p "Eingabe (z.B. Firmenname oder Eigenname) [PDNS Manager]: " APP_NAME
+APP_NAME=${APP_NAME:-PDNS Manager}
 
 # Installation Mode
 echo ""
@@ -177,9 +194,11 @@ fi
 echo ""
 echo "📝 Erstelle .env Datei..."
 
-cat > .env << EOF
+# Atomisches Schreiben: erst nach .env.tmp, dann atomar mv -> .env.
+# Wenn das Skript dazwischen abbricht, bleibt die alte .env unverändert.
+cat > .env.tmp << EOF
 # ====================================
-# DNS Manager - Konfiguration
+# PDNS Manager - Konfiguration
 # Generiert: $(date)
 # Hinweis: APP_VERSION wird ausschliesslich aus der Datei VERSION gelesen.
 # ====================================
@@ -206,6 +225,10 @@ AUTH_COOKIE_MAX_AGE=2592000
 ALLOWED_ORIGINS=
 DOCS_ENABLED=false
 
+# Webhooks: SSRF-Schutz - blockt standardmaessig Localhost / private IPs.
+# Auf true setzen, wenn interne Webhook-Ziele (z. B. innerhalb Docker-Netz) gewollt sind.
+WEBHOOK_ALLOW_PRIVATE_URLS=false
+
 # Datenbank
 DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
 DB_NAME=dns_manager
@@ -224,8 +247,9 @@ ${SMTP_FROM:+SMTP_FROM=${SMTP_FROM}}
 PDNS_SERVERS=${PDNS_SERVERS}
 EOF
 
-# .env Datei nur fuer den User lesbar machen (enthaelt Geheimnisse)
-chmod 600 .env 2>/dev/null || true
+# Erst chmod auf das Temp-File, damit der mv-Schritt direkt das Endergebnis ist.
+chmod 600 .env.tmp 2>/dev/null || true
+mv .env.tmp .env
 
 echo "✅ .env Datei erstellt (chmod 600)!"
 
@@ -260,8 +284,8 @@ if [ "$1" != "--from-install" ]; then
     
     echo ""
     echo "📚 Weitere Hilfe:"
-    echo "   GitHub: https://github.com/29barra29/dns-manager"
-    echo "   Setup:  https://github.com/29barra29/dns-manager/blob/main/INSTALL.md"
-    echo "   Issues: https://github.com/29barra29/dns-manager/issues"
+    echo "   GitHub: https://github.com/29barra29/PowerDNS-PDNS-MANAGER"
+    echo "   Setup:  https://github.com/29barra29/PowerDNS-PDNS-MANAGER/blob/main/INSTALL.md"
+    echo "   Issues: https://github.com/29barra29/PowerDNS-PDNS-MANAGER/issues"
     echo ""
 fi

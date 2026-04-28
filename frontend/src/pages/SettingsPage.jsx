@@ -22,7 +22,7 @@ export default function SettingsPage() {
     // Profile
     const [profile, setProfile] = useState(null)
     const [profileForm, setProfileForm] = useState({
-        username: '', display_name: '', email: '', app_name: 'DNS Manager', app_base_url: '',
+        username: '', display_name: '', email: '', app_name: 'PDNS Manager', app_base_url: '',
         registration_enabled: false, forgot_password_enabled: false,
         app_tagline: '', app_creator: '', app_logo_url: '',
         phone: '', company: '', street: '', postal_code: '', city: '', country: '', date_of_birth: '', preferred_language: 'de',
@@ -153,7 +153,7 @@ export default function SettingsPage() {
         setLoadingCommits(true)
         setCommitError('')
         try {
-            const res = await fetch('https://api.github.com/repos/29barra29/dns-manager/commits?per_page=5')
+            const res = await fetch('https://api.github.com/repos/29barra29/PowerDNS-PDNS-MANAGER/commits?per_page=5')
             if (!res.ok) throw new Error('Repository ist privat (Änderungen können nicht abgerufen werden)')
             const data = await res.json()
             setCommits(data)
@@ -167,7 +167,7 @@ export default function SettingsPage() {
     async function loadProfile() {
         try {
             const data = await api.getMe()
-            const app = await api.getAppInfo().catch(() => ({ app_name: 'DNS Manager' }))
+            const app = await api.getAppInfo().catch(() => ({ app_name: 'PDNS Manager' }))
             setProfile(data)
             const lang = data.preferred_language || 'de'
             if (lang !== i18n.language) i18n.changeLanguage(lang)
@@ -175,7 +175,7 @@ export default function SettingsPage() {
                 username: data.username || '',
                 display_name: data.display_name || '',
                 email: data.email || '',
-                app_name: app.app_name || 'DNS Manager',
+                app_name: app.app_name || 'PDNS Manager',
                 // app_base_url wird gleich für Admins aus getAdminInfo nachgereicht (siehe useEffect oben)
                 app_base_url: '',
                 registration_enabled: !!app.registration_enabled,
@@ -402,7 +402,7 @@ export default function SettingsPage() {
 
     // ===== SMTP =====
     const [smtpForm, setSmtpForm] = useState({
-        host: '', port: 587, username: '', password: '', from_email: '', from_name: 'DNS Manager', encryption: 'starttls', enabled: false
+        host: '', port: 587, username: '', password: '', from_email: '', from_name: 'PDNS Manager', encryption: 'starttls', enabled: false
     })
     const [loadingSmtp, setLoadingSmtp] = useState(false)
     const [savingSmtp, setSavingSmtp] = useState(false)
@@ -419,7 +419,7 @@ export default function SettingsPage() {
             setSmtpForm({
                 host: data.host || '', port: data.port || 587, username: data.username || '',
                 password: data.password || '', from_email: data.from_email || '',
-                from_name: data.from_name || 'DNS Manager', encryption: data.encryption || 'starttls',
+                from_name: data.from_name || 'PDNS Manager', encryption: data.encryption || 'starttls',
                 enabled: data.enabled || false,
             })
         } catch { /* ignore */ }
@@ -587,7 +587,7 @@ export default function SettingsPage() {
             username: profile?.username || 'maxmustermann',
             display_name: profile?.display_name || profile?.username || 'Max Mustermann',
             email: profile?.email || 'max@example.com',
-            app_name: profileForm.app_name || 'DNS Manager',
+            app_name: profileForm.app_name || 'PDNS Manager',
             login_url: (adminInfo?.app_base_url || profileForm.app_base_url || 'http://localhost:5380').replace(/\/$/, '') + '/login',
         }
         const replace = (s) => s.replace(/\{(\w+)\}/g, (_m, k) => (k in sample ? sample[k] : `{${k}}`))

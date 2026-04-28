@@ -1,4 +1,4 @@
-# 🚀 DNS Manager - Installation Guide
+# 🚀 PDNS Manager - Installation Guide
 
 ## Schnellstart (3 Minuten)
 
@@ -6,7 +6,7 @@
 
 ```bash
 # 1. Repository klonen
-git clone https://github.com/29barra29/dns-manager.git
+git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
 cd dns-manager
 
 # 2. Setup-Assistent starten
@@ -23,7 +23,7 @@ docker compose up -d
 ### Option 2: One-Liner Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/29barra29/dns-manager/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/29barra29/PowerDNS-PDNS-MANAGER/main/install.sh | bash
 ```
 
 ---
@@ -40,7 +40,7 @@ curl -sSL https://raw.githubusercontent.com/29barra29/dns-manager/main/install.s
 ### 1. Repository klonen
 
 ```bash
-git clone https://github.com/29barra29/dns-manager.git
+git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
 cd dns-manager
 ```
 
@@ -166,7 +166,7 @@ webserver-address=0.0.0.0
 webserver-port=8081
 ```
 
-### Im DNS Manager hinzufügen
+### Im PDNS Manager hinzufügen
 
 1. Login als Admin
 2. Einstellungen → DNS-Server
@@ -303,10 +303,10 @@ asyncio.run(reset())
 
 ## 📚 Weitere Ressourcen
 
-- [GitHub Repository](https://github.com/29barra29/dns-manager)
-- [README](https://github.com/29barra29/dns-manager/blob/main/README.md)
-- [Issue Tracker](https://github.com/29barra29/dns-manager/issues)
-- [Security Policy](https://github.com/29barra29/dns-manager/security)
+- [GitHub Repository](https://github.com/29barra29/PowerDNS-PDNS-MANAGER)
+- [README](https://github.com/29barra29/PowerDNS-PDNS-MANAGER/blob/main/README.md)
+- [Issue Tracker](https://github.com/29barra29/PowerDNS-PDNS-MANAGER/issues)
+- [Security Policy](https://github.com/29barra29/PowerDNS-PDNS-MANAGER/security)
 
 ---
 

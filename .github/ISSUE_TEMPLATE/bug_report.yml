@@ -1,5 +1,5 @@
 name: Bug Report
-description: Melde einen Fehler im DNS Manager
+description: Melde einen Fehler im PDNS Manager
 title: "[BUG] "
 labels: ["bug", "triage"]
 assignees: []
@@ -68,7 +68,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: DNS Manager Version
+      label: PDNS Manager Version
       description: Welche Version verwendest du? (siehe Dashboard oder docker images)
       placeholder: "v2.0.0"
     validations:

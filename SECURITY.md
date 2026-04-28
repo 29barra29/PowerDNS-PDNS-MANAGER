@@ -24,7 +24,7 @@ Please do **not** report security vulnerabilities through public GitHub issues.
 
 
 Please include the following information in your report:
-* The version of DNS Manager you are using
+* The version of PDNS Manager you are using
 * Steps to reproduce the vulnerability
 * What you expected to happen
 * What actually happened
@@ -55,7 +55,7 @@ Bitte melden Sie Sicherheitslücken **nicht** in öffentlichen GitHub-Issues.
 
 
 Bitte geben Sie in Ihrer Meldung an:
-* Welche Version des DNS Manager Sie verwenden
+* Welche Version des PDNS Manager Sie verwenden
 * Schritte zur Reproduktion der Lücke
 * Was Sie erwartet haben
 * Was tatsächlich passiert ist

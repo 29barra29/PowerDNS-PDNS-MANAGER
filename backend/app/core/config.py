@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # App – Version **nur** aus VERSION-Datei (nie aus .env überschreiben; dort stand z. B. noch 2.0.0)
-    APP_NAME: str = "DNS Manager"
+    APP_NAME: str = "PDNS Manager"
     APP_VERSION: str = Field(default_factory=_read_version_file)
     LOG_LEVEL: str = "info"
     # text (Standard) oder json für strukturierte Zeilen

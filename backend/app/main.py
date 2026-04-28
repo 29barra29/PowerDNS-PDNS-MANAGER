@@ -1,4 +1,4 @@
-"""DNS Manager Backend - Main Application.
+"""PDNS Manager Backend - Main Application.
 
 A custom backend for managing PowerDNS servers.
 Replaces PowerDNS-Admin with a cleaner, more stable solution.
@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    logger.info("Shutting down DNS Manager")
+    logger.info("Shutting down PDNS Manager")
 
 
 # Create FastAPI app – /docs, /redoc und /openapi.json sind standardmäßig AUS,
@@ -121,7 +121,7 @@ _openapi_url = "/openapi.json" if settings.DOCS_ENABLED else None
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="DNS Manager backend for PowerDNS.",
+    description="PDNS Manager backend for PowerDNS.",
     docs_url=_docs_url,
     redoc_url=_redoc_url,
     openapi_url=_openapi_url,
