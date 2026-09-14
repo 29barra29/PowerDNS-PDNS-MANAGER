@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # 2 = z. B. Cloudflare -> nginx). Bestimmt, welcher X-Forwarded-For-Eintrag von
     # rechts als echte Client-IP gilt.
     TRUSTED_PROXY_HOPS: int = 1
+    # Groesse des DB-Verbindungspools. 0 = kein Pool (jede Session oeffnet/schliesst ihre
+    # Verbindung selbst) – sinnvoll fuer Tests, bei denen jeder Testfall einen eigenen
+    # Event-Loop hat; Default 10 fuer den Betrieb.
+    DB_POOL_SIZE: int = 10
     # Content-Security-Policy-Header. Leer = Header wird nicht gesetzt.
     # Standard deckt die SPA (gleicher Origin), Google Fonts, die Captcha-Provider
     # (Turnstile/hCaptcha/reCAPTCHA) und den GitHub-Versionscheck ab. Bei reCAPTCHA-

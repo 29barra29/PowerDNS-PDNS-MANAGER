@@ -7,8 +7,14 @@ im naechsten Test mit "attached to a different loop" / "Event loop is closed" sc
 die alten Verbindungen im (bereits geschlossenen) Loop schliessen zu wollen.
 """
 import asyncio
+import os
 
 import pytest
+
+# Vor dem ersten App-Import: kein Verbindungspool in Tests. Sonst bleiben aiomysql-
+# Verbindungen aus dem Event-Loop eines TestClients haengen und erzeugen beim naechsten
+# Test "attached to a different loop" bzw. beim GC "Event loop is closed"-Tracebacks.
+os.environ.setdefault("DB_POOL_SIZE", "0")
 
 
 @pytest.fixture(autouse=True)

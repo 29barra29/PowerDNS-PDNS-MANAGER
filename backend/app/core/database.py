@@ -6,13 +6,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+from sqlalchemy.pool import NullPool
+
+if settings.DB_POOL_SIZE <= 0:
+    # Kein Pool: Verbindungen leben nur innerhalb einer Session (Tests mit wechselnden Event-Loops).
+    engine = create_async_engine(settings.DATABASE_URL, echo=False, poolclass=NullPool)
+else:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=20,
+    )
 
 async_session = async_sessionmaker(
     engine,
