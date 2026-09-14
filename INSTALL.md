@@ -54,6 +54,11 @@ nano .env
 **Wichtige Variablen:**
 
 ```env
+# PFLICHT: beide DB-Passwörter setzen (z. B. openssl rand -base64 32) –
+# bleiben sie leer, bricht compose absichtlich mit einer Fehlermeldung ab
+DB_ROOT_PASSWORD=...
+DB_PASSWORD=...
+
 # Für automatisches Setup beim ersten Start
 ENABLE_REGISTRATION=true
 
@@ -61,9 +66,8 @@ ENABLE_REGISTRATION=true
 ENABLE_REGISTRATION=false
 INITIAL_ADMIN_PASSWORD=dein-sicheres-passwort
 
-# Sicherheit – Pflicht in Production!
-# (Wenn leer, wird bei jedem Container-Restart ein neuer Schlüssel erzeugt
-# und alle Logins sind ungültig.)
+# Sicherheit – empfohlen (keine Pflicht): Wenn leer, erzeugt das Backend einmalig
+# einen Schlüssel im Volume backend_data (Warnung im Log); für Produktion selbst setzen
 JWT_SECRET_KEY=$(openssl rand -hex 64)
 
 # Auth-Cookies: auf "true" sobald HTTPS via Reverse-Proxy aktiv ist
@@ -132,8 +136,9 @@ server {
 > (und bei einem zusätzlichen Proxy davor, z. B. Cloudflare, `TRUSTED_PROXY_HOPS=2`), sonst
 > sieht das Backend für alle Nutzer nur die Proxy-IP: 25 Fehlversuche von irgendjemandem
 > sperren dann 15 Minuten lang **jeden** Login. Gleichzeitig Port 5380 nicht öffentlich
-> lassen, am einfachsten in der `compose.yaml` mit `"127.0.0.1:5380:8000"` binden – eine
-> Host-Firewall greift bei Docker-Ports nicht. Der Proxy muss den `Host`-Header durchreichen
+> lassen, am einfachsten mit `BIND_ADDR=127.0.0.1` in der `.env` (die `compose.yaml` nicht
+> editieren, sonst scheitert `update.sh` am `git checkout`) – eine Host-Firewall greift bei
+> Docker-Ports nicht. Der Proxy muss den `Host`-Header durchreichen
 > (`proxy_set_header Host $host`, bei Traefik/Caddy Standard), sonst lehnt der CSRF-Schutz
 > zustandsändernde Anfragen ab; für abweichende Hostnamen `ALLOWED_ORIGINS` setzen.
 
@@ -197,7 +202,7 @@ webserver-port=8081
 services:
   dns-manager:
     extends:
-      file: docker-compose.yml
+      file: compose.yaml
       service: backend
     networks:
       - my-network
@@ -232,7 +237,7 @@ cd /pfad/zu/dns-manager
 ### Manuelles Update
 
 ```bash
-git fetch origin --tags --force --prune --prune-tags
+git fetch origin --tags --force --prune
 git checkout main && git pull origin main
 # alternativ festes Release: git checkout v2.3.3
 docker compose build --no-cache backend
@@ -246,21 +251,25 @@ docker compose up -d
 ### Backup erstellen
 
 ```bash
-# Datenbank sichern
-docker exec dns-manager-db mysqldump -u root -p dns_manager > backup.sql
+# Datenbank sichern (Root-Passwort aus dem Container-Environment; ein nacktes -p
+# würde ohne Terminal ein leeres Backup schreiben). ./update.sh bietet den Dump auch an.
+docker exec dns-manager-db sh -c 'mysqldump --single-transaction -u root -p"$MARIADB_ROOT_PASSWORD" dns_manager' > backup.sql
 
-# Volumes sichern
-docker run --rm -v dns-manager_mariadb_data:/data -v $(pwd):/backup alpine tar czf /backup/volumes-backup.tar.gz /data
+# Volumes sichern – der echte Volume-Name hat den Projektordner als Prefix
+# (z. B. pdns-manager_mariadb_data), daher erst ermitteln:
+VOL=$(docker volume ls -q -f name=mariadb_data)
+docker run --rm -v "$VOL":/data -v $(pwd):/backup alpine tar czf /backup/volumes-backup.tar.gz /data
 ```
 
 ### Restore
 
 ```bash
 # Datenbank wiederherstellen
-docker exec -i dns-manager-db mysql -u root -p dns_manager < backup.sql
+docker exec -i dns-manager-db sh -c 'mysql -u root -p"$MARIADB_ROOT_PASSWORD" dns_manager' < backup.sql
 
-# Volumes wiederherstellen
-docker run --rm -v dns-manager_mariadb_data:/data -v $(pwd):/backup alpine tar xzf /backup/volumes-backup.tar.gz -C /
+# Volumes wiederherstellen (Container vorher stoppen: docker compose down)
+VOL=$(docker volume ls -q -f name=mariadb_data)
+docker run --rm -v "$VOL":/data -v $(pwd):/backup alpine tar xzf /backup/volumes-backup.tar.gz -C /
 ```
 
 ---

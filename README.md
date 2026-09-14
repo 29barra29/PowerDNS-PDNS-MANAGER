@@ -58,7 +58,7 @@ Dieses README gibt nur den Schnellüberblick (Installation, Stack, Troubleshooti
 
 ### Voraussetzungen
 
-Docker und Docker Compose. Port `5380` muss frei sein – wer ihn ändern will, passt das `ports:`-Mapping in der `compose.yaml` an.
+Docker und Docker Compose. Port `5380` muss frei sein – wer ihn ändern oder nur lokal binden will, setzt `HOST_PORT=…` bzw. `BIND_ADDR=127.0.0.1` in der `.env` (die `compose.yaml` selbst nicht editieren, sonst scheitert `update.sh` am `git checkout`).
 
 ### Variante A – One-Liner
 
@@ -87,8 +87,10 @@ Wer keinen Wizard mag und alle Variablen selbst setzen will:
 git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
 cd PowerDNS-PDNS-MANAGER
 cp .env.example .env
-# WICHTIG: DB_ROOT_PASSWORD, DB_PASSWORD und JWT_SECRET_KEY ausfüllen,
-# sonst startet compose mit einer Fehlermeldung. Beispiel:
+# PFLICHT: DB_ROOT_PASSWORD und DB_PASSWORD ausfüllen (z. B. openssl rand -base64 32),
+# sonst bricht compose absichtlich mit einer Fehlermeldung ab.
+# EMPFOHLEN: JWT_SECRET_KEY setzen – fehlt er, erzeugt das Backend einmalig einen
+# Schlüssel im Volume backend_data (Warnung im Log). Beispiel:
 #   sed -i "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=$(openssl rand -hex 64)|" .env
 nano .env
 chmod 600 .env
@@ -139,17 +141,17 @@ cd /pfad/zu/dns-manager
 2. `docker compose build --no-cache backend` und `up -d`.
 3. Datenbank, `.env` und Logo bleiben unangetastet (`backend_uploads`-Volume).
 
-Vor dem Update lohnt sich ein DB-Dump:
+Vor dem Update lohnt sich ein DB-Dump – `update.sh` bietet ihn automatisch an (`backup_<version>_<zeitstempel>.sql`). Manuell, mit dem Root-Passwort aus dem Container-Environment (ein nacktes `-p` würde ohne Terminal ein leeres Backup schreiben):
 
 ```bash
-docker exec dns-manager-db mysqldump -u root -p dns_manager > backup_$(date +%Y%m%d).sql
+docker exec dns-manager-db sh -c 'mysqldump --single-transaction -u root -p"$MARIADB_ROOT_PASSWORD" dns_manager' > backup_$(date +%Y%m%d).sql
 ```
 
 Manuell auf eine bestimmte Version wechseln:
 
 ```bash
 cd PowerDNS-PDNS-MANAGER
-git fetch origin --tags --force --prune --prune-tags
+git fetch origin --tags --force --prune
 git checkout v2.4.1              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
@@ -161,7 +163,7 @@ docker compose up -d
 
 Was beim Setup automatisch passiert:
 
-- `JWT_SECRET_KEY` wird mit `openssl rand -hex 64` erzeugt – ohne den Schlüssel sind nach jedem Container-Restart alle Logins ungültig.
+- `JWT_SECRET_KEY` wird mit `openssl rand -hex 64` erzeugt. Fehlt er in der `.env` (etwa bei Variante C), erzeugt das Backend seit 2.4.1 einmalig einen Schlüssel im Volume `backend_data` und warnt im Log – für Produktion trotzdem selbst setzen.
 - DB-Passwörter werden zufällig generiert.
 - `.env` bekommt `chmod 600`.
 - Die OpenAPI-/Swagger-Doku unter `/docs` ist standardmäßig aus (`DOCS_ENABLED=false`). Wer sie braucht, setzt die Variable in der `.env` auf `true`.
@@ -172,7 +174,7 @@ Was du selbst noch machen solltest:
 - Admin-Passwort nach dem ersten Login ändern.
 - Reverse-Proxy mit TLS davorschalten (Caddy ist mit Abstand am schnellsten aufgesetzt). Sobald HTTPS läuft, in der `.env` `AUTH_COOKIE_SECURE=true` setzen und einmal `docker compose up -d` – sonst bleibt der Login-Cookie unter HTTPS unzuverlässig.
 - `ENABLE_REGISTRATION=false` setzen, sobald alle Accounts angelegt sind.
-- Port `5380` nicht öffentlich lassen: in der `compose.yaml` `"127.0.0.1:5380:8000"` binden (eine Host-Firewall greift bei Docker-Ports nicht). Hinter dem Proxy `TRUST_PROXY_HEADERS=true` setzen, sonst teilen sich alle Nutzer ein Login-Rate-Limit.
+- Port `5380` nicht öffentlich lassen: `BIND_ADDR=127.0.0.1` in der `.env` setzen (eine Host-Firewall greift bei Docker-Ports nicht; die `compose.yaml` nicht editieren, sonst scheitert `update.sh` am `git checkout`). Hinter dem Proxy `TRUST_PROXY_HEADERS=true` setzen, sonst teilen sich alle Nutzer ein Login-Rate-Limit.
 - Optional Fail2Ban auf die Reverse-Proxy-Logs.
 
 Kompletter nginx-Block und Traefik-/Cloudflare-Tunnel-Beispiele stehen in [INSTALL.md](INSTALL.md) im Abschnitt „HTTPS mit Reverse Proxy".
@@ -306,6 +308,13 @@ Sicherheits- und Stabilitäts-Release nach einem vollständigen Code-Review. **K
 - Skripte: `install.sh` sichert eine vorhandene `.env`, bevor ein Ordner überschrieben wird; `update.sh` gibt dem Uploads-Volume den App-Benutzer.
 - Abhängigkeiten aktualisiert (fastapi 0.141, uvicorn 0.53, sqlalchemy 2.0.52, pydantic 2.13.5, pydantic-settings 2.15, cryptography 50), `.dockerignore` ergänzt, tote Dateien (`test.py`, `Dockerfile.simple`) entfernt.
 - Doku: korrekter Clone-Ordner, funktionierender Installations-One-Liner, Reverse-Proxy-Hinweise zu `TRUST_PROXY_HEADERS` und Port-Bindung, SECURITY.md aktualisiert, `docs/PANEL-API.md` an die tatsächliche API angepasst.
+- Die Laufzeit des Session-Tokens folgt jetzt `AUTH_COOKIE_MAX_AGE` (vorher lief das Token nach 24 h ab, obwohl der Cookie 30 Tage galt).
+
+**Betrieb, Skripte**
+
+- Port-Bindung ohne Eingriff in die `compose.yaml`: `BIND_ADDR` (z. B. `127.0.0.1` hinter einem Reverse-Proxy) und `HOST_PORT` kommen aus der `.env`; `update.sh` warnt vor `git checkout`, wenn versionierte Dateien lokal geändert wurden. `.env.example` lässt die DB-Passwörter leer, damit der Compose-Schutz greift.
+- `setup.sh` fragt kein SMTP mehr ab – die Werte landeten in der `.env`, wurden aber nie ausgewertet; SMTP wird im Panel unter Einstellungen → SMTP konfiguriert. Der Wizard schreibt jetzt `TRUST_PROXY_HEADERS`/`TRUSTED_PROXY_HOPS` (Ja bei der HTTPS-Frage → `true`), akzeptiert `j`/`y`, hat einen Default für den Admin-Modus und nennt bei festem Passwort den Benutzernamen `admin`.
+- `install.sh` nutzt `sudo` auch für `docker inspect`, fasst nach einem Tarball-Download kein übergeordnetes Fremd-Git-Repo mehr an und nennt am Ende den passenden Login-Weg; `update.sh` übergibt das DB-Passwort für den Dump per `MYSQL_PWD` statt als Argument.
 
 ### v2.4.0
 

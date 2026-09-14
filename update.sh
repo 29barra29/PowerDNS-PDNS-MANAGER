@@ -45,6 +45,19 @@ VERSION_BEFORE=$(cat VERSION 2>/dev/null | head -1 | tr -d '\r\n' || echo "?")
 # Git: Tags + neueste Commits holen
 # ----------------------------------------------------------------------------
 if ! $SKIP_FETCH; then
+    # Lokale Aenderungen an versionierten Dateien (typisch: compose.yaml fuer die Port-Bindung
+    # editiert) lassen git checkout/pull mit "would be overwritten" scheitern -> vorher klar sagen.
+    if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        echo ""
+        echo "⚠️  Lokale Änderungen an versionierten Dateien gefunden:"
+        git status --short --untracked-files=no 2>/dev/null | sed 's/^/     /'
+        echo "    Damit bricht das Update (git checkout/pull) gleich ab."
+        echo "    Bitte compose.yaml nicht editieren – die Port-Bindung gehört als"
+        echo "    BIND_ADDR=127.0.0.1 / HOST_PORT=5380 in die .env."
+        echo "    Änderungen beiseitelegen: git stash   (oder verwerfen: git checkout -- <datei>)"
+        echo ""
+    fi
+
     # `--prune` raeumt entfernte Branches auf. Bewusst KEIN --prune-tags mehr,
     # weil das lokale Tags wischt, die nicht im Remote sind (User-eigene Marker).
     git fetch origin --tags --force --prune
@@ -119,9 +132,9 @@ if [ -n "$MAJOR_BEFORE" ] && [ -n "$MAJOR_AFTER" ] \
     echo "  Bitte CHANGELOG / README lesen, BEVOR du fortfährst."
     echo "  https://github.com/29barra29/PowerDNS-PDNS-MANAGER/releases"
     echo "════════════════════════════════════════════════════"
-    read -p "Trotzdem fortfahren? (j/n): " -n 1 -r
+    read -p "Trotzdem fortfahren? (j/y/n): " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Jj]$ ]]; then
+    if [[ ! $REPLY =~ ^[JjYy]$ ]]; then
         echo "Update abgebrochen."
         exit 0
     fi
@@ -161,8 +174,10 @@ if ! $SKIP_BACKUP && [ -f .env ]; then
                 echo "ℹ️  MariaDB-Container läuft nicht – Backup übersprungen."
             else
                 echo "→ Schreibe $BACKUP_FILE …"
-                if $DOCKER_CMD exec "$DB_CID" mysqldump --single-transaction --quick \
-                        -u root -p"$DB_ROOT_PW" "$DB_NAME_VAL" > "$BACKUP_FILE" 2>/dev/null; then
+                # Passwort per Umgebungsvariable statt als -p-Argument, damit es nicht in der
+                # Prozessliste (ps / /proc) des Containers auftaucht.
+                if $DOCKER_CMD exec -e MYSQL_PWD="$DB_ROOT_PW" "$DB_CID" mysqldump --single-transaction --quick \
+                        -u root "$DB_NAME_VAL" > "$BACKUP_FILE" 2>/dev/null; then
                     SIZE=$(du -h "$BACKUP_FILE" 2>/dev/null | cut -f1 || echo "?")
                     echo "✅ Backup ok ($SIZE) – $BACKUP_FILE"
                 else

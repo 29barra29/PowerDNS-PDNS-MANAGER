@@ -37,8 +37,11 @@ services:
       dockerfile: backend/Dockerfile
     container_name: dns-manager-api
     restart: unless-stopped
+    # Host-Bindung ueber die .env steuerbar: BIND_ADDR=127.0.0.1 (nur lokal – hinter einem
+    # Reverse-Proxy empfohlen) und HOST_PORT=5380. Bitte dort setzen statt diese Datei zu
+    # editieren: lokale Aenderungen an versionierten Dateien lassen update.sh am git checkout scheitern.
     ports:
-      - "5380:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${HOST_PORT:-5380}:8000"
     environment:
       # Datenbank-Verbindung – DB_PASSWORD muss in .env gesetzt sein.
       DATABASE_URL: mysql+aiomysql://${DB_USER:-dns_admin}:${DB_PASSWORD:?DB_PASSWORD ist leer – bitte .env aus .env.example anlegen oder ./setup.sh ausfuehren}@mariadb:3306/${DB_NAME:-dns_manager}

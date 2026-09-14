@@ -87,7 +87,8 @@ if [ "$LANG_APP" = "en" ]; then
     M_ACCESS="PDNS Manager is available at:"
     M_NEXT="Next steps:"
     M_NEXT_1="Open http://localhost:5380 in your browser"
-    M_NEXT_2="Register as first user (becomes Admin)"
+    M_NEXT_2_REG="Open the setup wizard in your browser and register the first user (becomes Admin)"
+    M_NEXT_2_LOGIN="Log in as 'admin' (password from the wizard, or: %s exec backend cat /app/.initial-admin-password)"
     M_NEXT_3="Add your PowerDNS servers"
     M_COMMANDS="Useful commands:"
     M_LOGS="View logs:"
@@ -143,7 +144,8 @@ else
     M_ACCESS="PDNS Manager ist erreichbar unter:"
     M_NEXT="Nächste Schritte:"
     M_NEXT_1="Öffne http://localhost:5380 im Browser"
-    M_NEXT_2="Registriere dich als erster Benutzer (wird Admin)"
+    M_NEXT_2_REG="Setup-Wizard im Browser: ersten Benutzer registrieren (wird Admin)"
+    M_NEXT_2_LOGIN="Login als admin (Passwort aus dem Wizard bzw.: %s exec backend cat /app/.initial-admin-password)"
     M_NEXT_3="Füge deine PowerDNS Server hinzu"
     M_COMMANDS="Hilfreiche Befehle:"
     M_LOGS="Logs anzeigen:"
@@ -196,10 +198,12 @@ else
 fi
 print_success "$M_COMPOSE_FOUND"
 
+DOCKER_CMD="docker"
 if ! docker ps &> /dev/null; then
     if sudo docker ps &> /dev/null 2>&1; then
         print_info "$M_DOCKER_SUDO"
         COMPOSE_CMD="sudo $COMPOSE_CMD"
+        DOCKER_CMD="sudo docker"
     else
         print_error "$M_DOCKER_NO_PERM"
         print_info "$M_DOCKER_ADD_USER"
@@ -295,8 +299,10 @@ git clone "https://github.com/${GH_REPO}.git" . 2>/dev/null || {
 }
 print_success "$M_DOWNLOAD_DONE"
 
-# Neuestes v*-Tag verwenden (entspricht GitHub-Release), falls vorhanden – vermeidet „alte“ main ohne aktuelle VERSION
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+# Neuestes v*-Tag verwenden (entspricht GitHub-Release), falls vorhanden – vermeidet „alte“ main ohne aktuelle VERSION.
+# Nur wenn DIESER Ordner das Repo ist: nach einem Tarball-Download (kein .git) darf ein
+# übergeordnetes, fremdes Git-Repo (z. B. per Git verwaltetes Home) nicht angefasst werden.
+if [ -d .git ] && [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ]; then
     git fetch --tags --force 2>/dev/null || true
     LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname 2>/dev/null | head -1)
     if [ -n "$LATEST_TAG" ] && git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
@@ -360,7 +366,7 @@ $COMPOSE_CMD up -d
 #    abhängt. Wenn die ID leer ist, ist der Service nicht da.
 print_info "$M_WAIT_SERVICES"
 DB_CID=$($COMPOSE_CMD ps -q mariadb 2>/dev/null || true)
-if [ -n "$DB_CID" ] && docker inspect "$DB_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
+if [ -n "$DB_CID" ] && $DOCKER_CMD inspect "$DB_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
     print_success "$M_DB_UP"
 else
     print_error "$M_DB_DOWN"
@@ -384,7 +390,7 @@ for _i in $(seq 1 60); do
     else
         # Kein HTTP-Tool -> Fallback auf Container-Status
         BE_CID=$($COMPOSE_CMD ps -q backend 2>/dev/null || true)
-        if [ -n "$BE_CID" ] && docker inspect "$BE_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
+        if [ -n "$BE_CID" ] && $DOCKER_CMD inspect "$BE_CID" --format '{{.State.Status}}' 2>/dev/null | grep -qi "running"; then
             HEALTH_OK=true; break
         fi
     fi
@@ -396,6 +402,13 @@ if $HEALTH_OK; then
 else
     print_error "$M_BACKEND_DOWN"
     echo "$(printf "$M_CHECK_LOGS_BACKEND" "$COMPOSE_CMD")"
+fi
+
+# Naechster Schritt je nach gewaehltem Admin-Modus (aus der erzeugten .env ableiten)
+if grep -qE '^ENABLE_REGISTRATION=true' .env 2>/dev/null; then
+    M_NEXT_2="$M_NEXT_2_REG"
+else
+    M_NEXT_2="$(printf "$M_NEXT_2_LOGIN" "$COMPOSE_CMD")"
 fi
 
 echo ""

@@ -40,13 +40,25 @@ class Settings(BaseSettings):
     # JWT Auth - Automatisch generieren wenn nicht gesetzt
     JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 1440  # 24 Stunden
+    # Laufzeit des Session-Tokens. Ohne explizite Env-Angabe folgt der Wert
+    # AUTH_COOKIE_MAX_AGE (Sekunden / 60), damit Cookie und Token gleich lang gelten
+    # (siehe _jwt_expiry_follows_cookie). compose.yaml reicht JWT_EXPIRE_MINUTES nicht durch.
+    JWT_EXPIRE_MINUTES: int = 1440  # 24 Stunden – nur Fallback, s. o.
 
     # Auth-Cookie (sicherer als localStorage; HttpOnly, kein Zugriff per JavaScript)
     AUTH_COOKIE_NAME: str = "dns_manager_token"
-    AUTH_COOKIE_MAX_AGE: int = 86400  # Sekunden, 24h (sollte zu JWT_EXPIRE_MINUTES passen)
+    AUTH_COOKIE_MAX_AGE: int = 86400  # Sekunden, 24h; JWT_EXPIRE_MINUTES folgt diesem Wert
     AUTH_COOKIE_SECURE: bool = False  # True wenn nur HTTPS
     AUTH_COOKIE_SAMESITE: str = "lax"
+
+    @model_validator(mode="after")
+    def _jwt_expiry_follows_cookie(self) -> "Settings":
+        # JWT_EXPIRE_MINUTES nur dann selbst ableiten, wenn es nicht explizit gesetzt wurde
+        # (Env, .env oder Konstruktor). Sonst lebt der Cookie (compose-Default 30 Tage)
+        # laenger als das darin gespeicherte Token (24 h) und Nutzer fliegen frueher raus.
+        if "JWT_EXPIRE_MINUTES" not in self.model_fields_set:
+            object.__setattr__(self, "JWT_EXPIRE_MINUTES", max(1, self.AUTH_COOKIE_MAX_AGE // 60))
+        return self
 
     # First-Run Settings
     ENABLE_REGISTRATION: bool = False

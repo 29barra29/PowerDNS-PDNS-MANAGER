@@ -26,9 +26,9 @@ generate_secret() {
 # Prüfe ob .env bereits existiert
 if [ -f .env ]; then
     echo "⚠️  Eine .env Datei existiert bereits!"
-    read -p "Möchtest du sie überschreiben? (j/n): " -n 1 -r
+    read -p "Möchtest du sie überschreiben? (j/y/n): " -n 1 -r
     echo
-    if [[ ! $REPLY =~ ^[Jj]$ ]]; then
+    if [[ ! $REPLY =~ ^[JjYy]$ ]]; then
         echo "Setup abgebrochen."
         exit 1
     fi
@@ -76,7 +76,7 @@ echo "Wie möchtest du den Admin-Account erstellen?"
 echo "1) Automatisch (generiertes Passwort)"
 echo "2) Registrierung beim ersten Besuch (empfohlen)"
 echo "3) Jetzt festlegen"
-read -p "Wähle [1-3]: " ADMIN_MODE
+read -p "Wähle [1-3] [2]: " ADMIN_MODE
 
 ENABLE_REGISTRATION="false"
 ADMIN_PASSWORD=""
@@ -107,40 +107,20 @@ case $ADMIN_MODE in
             fi
         done
         ;;
+    *)
+        # Leere oder ungültige Eingabe: Default ist Modus 2 (Registrierung beim ersten Besuch).
+        ADMIN_MODE=2
+        ENABLE_REGISTRATION="true"
+        echo "ℹ️  Keine gültige Auswahl – Registrierung beim ersten Besuch wird aktiviert (Modus 2)"
+        ;;
 esac
 
 echo ""
-echo "📧 E-Mail Konfiguration (optional)"
-echo "-----------------------------------"
-echo "Für Benachrichtigungen und Passwort-Reset"
-echo ""
-
-read -p "E-Mail aktivieren? (j/n): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Jj]$ ]]; then
-    read -p "SMTP Server [smtp.gmail.com]: " SMTP_HOST
-    SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
-
-    read -p "SMTP Port [587]: " SMTP_PORT
-    SMTP_PORT=${SMTP_PORT:-587}
-
-    read -p "SMTP Benutzer (E-Mail): " SMTP_USER
-
-    read -sp "SMTP Passwort: " SMTP_PASSWORD
-    echo
-
-    read -p "Absender E-Mail [$SMTP_USER]: " SMTP_FROM
-    SMTP_FROM=${SMTP_FROM:-$SMTP_USER}
-
-    MAIL_ENABLED="true"
-else
-    MAIL_ENABLED="false"
-    SMTP_HOST=""
-    SMTP_PORT=""
-    SMTP_USER=""
-    SMTP_PASSWORD=""
-    SMTP_FROM=""
-fi
+echo "📧 E-Mail / SMTP"
+echo "----------------"
+# SMTP wird bewusst NICHT hier abgefragt: die Werte aus der .env wurden vom Backend nie
+# gelesen (SMTP-Einstellungen liegen in der Datenbank, siehe Einstellungen -> SMTP).
+echo "ℹ️  SMTP wird im Panel unter Einstellungen -> SMTP konfiguriert (mit Test-Mail-Funktion)."
 
 echo ""
 echo "🔐 Sicherheit"
@@ -158,14 +138,18 @@ echo "✅ Datenbank-Passwörter generiert"
 echo ""
 echo "Wirst du das Panel hinter einem Reverse-Proxy mit HTTPS betreiben?"
 echo "(Caddy, nginx, Traefik, Cloudflare Tunnel, …)"
-read -p "HTTPS aktivieren? (j/n) [n]: " -n 1 -r HTTPS_REPLY
+read -p "HTTPS aktivieren? (j/y/n) [n]: " -n 1 -r HTTPS_REPLY
 echo
-if [[ $HTTPS_REPLY =~ ^[Jj]$ ]]; then
+if [[ $HTTPS_REPLY =~ ^[JjYy]$ ]]; then
     AUTH_COOKIE_SECURE="true"
+    TRUST_PROXY_HEADERS="true"
     echo "✅ AUTH_COOKIE_SECURE=true (Cookies nur über HTTPS gültig)"
+    echo "✅ TRUST_PROXY_HEADERS=true (echte Client-IP aus X-Forwarded-For; Cloudflare vor nginx: TRUSTED_PROXY_HOPS=2)"
+    echo "ℹ️  Port 5380 dann nur lokal binden: BIND_ADDR=127.0.0.1 in der .env einkommentieren (nicht die compose.yaml editieren)"
 else
     AUTH_COOKIE_SECURE="false"
-    echo "ℹ️  AUTH_COOKIE_SECURE=false (in der .env später auf true setzen, sobald HTTPS steht)"
+    TRUST_PROXY_HEADERS="false"
+    echo "ℹ️  AUTH_COOKIE_SECURE=false (in der .env später auf true setzen, sobald HTTPS steht – dann auch TRUST_PROXY_HEADERS=true)"
 fi
 
 echo ""
@@ -174,9 +158,9 @@ echo "-----------------------------"
 echo "Du kannst PowerDNS Server auch später über das Web-Interface hinzufügen."
 echo ""
 
-read -p "Möchtest du jetzt einen PowerDNS Server konfigurieren? (j/n): " -n 1 -r
+read -p "Möchtest du jetzt einen PowerDNS Server konfigurieren? (j/y/n): " -n 1 -r
 echo
-if [[ $REPLY =~ ^[Jj]$ ]]; then
+if [[ $REPLY =~ ^[JjYy]$ ]]; then
     read -p "Server Name [server1]: " PDNS_NAME
     PDNS_NAME=${PDNS_NAME:-server1}
 
@@ -219,7 +203,23 @@ ${ADMIN_PASSWORD:+INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}}
 # Auth-Cookies (auf true setzen, sobald HTTPS via Reverse-Proxy aktiv ist)
 AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
 AUTH_COOKIE_SAMESITE=lax
+# Login-Dauer in Sekunden (30 Tage); die Laufzeit des Session-Tokens folgt automatisch diesem Wert.
 AUTH_COOKIE_MAX_AGE=2592000
+
+# Reverse-Proxy: echte Client-IP aus X-Forwarded-For uebernehmen (Login-Rate-Limit, Audit-Log).
+# Nur true, wenn das Backend ausschliesslich ueber den Proxy erreichbar ist.
+# TRUSTED_PROXY_HOPS=2, wenn z. B. Cloudflare VOR dem eigenen nginx/Caddy steht.
+TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS}
+TRUSTED_PROXY_HOPS=1
+
+# Oeffentliche Basis-URL (Passwort-Reset-Links, Passkeys) – alternativ im Panel unter
+# Einstellungen -> Profil -> Oeffentliche Basis-URL eintragen.
+# WEBAUTHN_ORIGIN=https://dns.example.com
+
+# Port 5380 nur lokal binden (hinter einem Reverse-Proxy empfohlen). Hier setzen,
+# NICHT in der compose.yaml – sonst scheitert ./update.sh am git checkout.
+# BIND_ADDR=127.0.0.1
+# HOST_PORT=5380
 
 # CORS / API-Doku (Defaults: leer / aus -> sicher)
 ALLOWED_ORIGINS=
@@ -235,13 +235,7 @@ DB_NAME=dns_manager
 DB_USER=dns_admin
 DB_PASSWORD=${DB_PASSWORD}
 
-# E-Mail (optional)
-MAIL_ENABLED=${MAIL_ENABLED}
-${SMTP_HOST:+SMTP_HOST=${SMTP_HOST}}
-${SMTP_PORT:+SMTP_PORT=${SMTP_PORT}}
-${SMTP_USER:+SMTP_USER=${SMTP_USER}}
-${SMTP_PASSWORD:+SMTP_PASSWORD=${SMTP_PASSWORD}}
-${SMTP_FROM:+SMTP_FROM=${SMTP_FROM}}
+# E-Mail/SMTP wird im Panel konfiguriert: Einstellungen -> SMTP
 
 # PowerDNS Server (optional)
 PDNS_SERVERS=${PDNS_SERVERS}
@@ -265,6 +259,10 @@ if [ "$ADMIN_MODE" = "1" ]; then
     echo "   Passwort: ${ADMIN_PASSWORD}"
     echo ""
     echo "   BITTE NOTIEREN! Das Passwort wird nur jetzt angezeigt."
+elif [ "$ADMIN_MODE" = "3" ]; then
+    echo "🔑 Admin-Zugangsdaten"
+    echo "   Benutzername: admin"
+    echo "   Passwort:     das eben festgelegte Passwort"
 elif [ "$ENABLE_REGISTRATION" = "true" ]; then
     echo "📝 Registrierung aktiviert!"
     echo "   Der erste Benutzer, der sich registriert, wird automatisch Admin."
