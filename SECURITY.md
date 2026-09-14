@@ -6,11 +6,12 @@
 
 ### Supported Versions
 
-Use this section to tell people about which versions of your project are currently being supported with security updates.
+Security fixes are provided for the current minor release line only. Please update to the latest version before reporting.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| v2.3.x  | :white_check_mark: |
+| v2.4.x  | :white_check_mark: |
+| v2.3.x  | :x:                |
 | v2.2.x  | :x:                |
 | v2.1.x  | :x:                |
 | v2.0.x  | :x:                |
@@ -41,7 +42,8 @@ Diese Tabelle zeigt, welche Versionen des Projekts mit Sicherheitsupdates unters
 
 | Version | Unterstützt         |
 | ------- | ------------------- |
-| v2.3.x  | :white_check_mark:  |
+| v2.4.x  | :white_check_mark:  |
+| v2.3.x  | :x:                 |
 | v2.2.x  | :x:                 |
 | v2.1.x  | :x:                 |
 | v2.0.x  | :x:                 |

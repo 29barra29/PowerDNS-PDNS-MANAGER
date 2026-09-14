@@ -79,6 +79,33 @@ class Settings(BaseSettings):
     DOCS_ENABLED: bool = False
     # Webhooks sind serverseitige HTTP-Requests. Private Ziele nur bewusst erlauben.
     WEBHOOK_ALLOW_PRIVATE_URLS: bool = False
+    # Hinter einem Reverse-Proxy: X-Forwarded-For/X-Real-IP für die echte Client-IP
+    # auswerten (Login-Rate-Limit, Audit-Log). NUR aktivieren, wenn das Backend
+    # ausschließlich über den vertrauenswürdigen Proxy erreichbar ist – sonst sind
+    # diese Header fälschbar.
+    TRUST_PROXY_HEADERS: bool = False
+    # Anzahl vertrauenswürdiger Proxys vor dem Backend (1 = nur der eigene Reverse-Proxy,
+    # 2 = z. B. Cloudflare -> nginx). Bestimmt, welcher X-Forwarded-For-Eintrag von
+    # rechts als echte Client-IP gilt.
+    TRUSTED_PROXY_HOPS: int = 1
+    # Content-Security-Policy-Header. Leer = Header wird nicht gesetzt.
+    # Standard deckt die SPA (gleicher Origin), Google Fonts, die Captcha-Provider
+    # (Turnstile/hCaptcha/reCAPTCHA) und den GitHub-Versionscheck ab. Bei reCAPTCHA-
+    # Problemen ggf. "'unsafe-eval'" zu script-src ergänzen.
+    CONTENT_SECURITY_POLICY: str = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "img-src 'self' data: blob: https:; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self' https://challenges.cloudflare.com https://js.hcaptcha.com "
+        "https://*.hcaptcha.com https://www.google.com https://www.gstatic.com https://www.recaptcha.net; "
+        "connect-src 'self' https://api.github.com https://challenges.cloudflare.com "
+        "https://*.hcaptcha.com; "
+        "frame-src https://challenges.cloudflare.com https://*.hcaptcha.com https://www.google.com https://www.recaptcha.net https://recaptcha.google.com"
+    )
 
     # WebAuthn / Passkeys
     # RP-ID = die registrierbare Domain (OHNE Schema/Port), z. B. "dns.example.com".
@@ -134,11 +161,46 @@ class Settings(BaseSettings):
 # Initialisiere Settings und generiere JWT Secret wenn nötig
 _settings = Settings()
 
-# Generiere JWT Secret wenn nicht gesetzt
+# JWT-Secret prüfen. In Produktion (HTTPS-Cookies) ist ein fester Schlüssel Pflicht:
+# Ein pro Prozess zufällig generierter Key macht bei jedem Neustart ALLE Sessions
+# ungültig und bricht den Betrieb mit mehreren Workern komplett. Lieber sofort mit
+# klarer Meldung abbrechen als still ein unsicheres/instabiles Setup fahren.
 if not _settings.JWT_SECRET_KEY:
-    _settings.JWT_SECRET_KEY = secrets.token_hex(32)
     import logging
-    logging.warning("JWT_SECRET_KEY not set in environment, generated a random one. "
-                   "For production, please set JWT_SECRET_KEY in your .env file!")
+    import os
+    from pathlib import Path
+
+    # Kein Key in der .env: einen persistenten Key im Uploads-Volume ablegen, damit
+    # Sessions Neustarts ueberleben. Bewusst KEIN Abbruch: ein RuntimeError wuerde
+    # Bestandsinstallationen mit leerem Key in eine Container-Restart-Schleife schicken.
+    _key_file = Path(
+        os.getenv("JWT_SECRET_FILE")
+        # NICHT unter static_new/uploads: das wird unauthentifiziert per /uploads ausgeliefert.
+        or Path(__file__).resolve().parents[2] / "data" / ".jwt_secret"
+    )
+    try:
+        if _key_file.exists():
+            _settings.JWT_SECRET_KEY = _key_file.read_text(encoding="utf-8").strip()
+        if not _settings.JWT_SECRET_KEY:
+            _key_file.parent.mkdir(parents=True, exist_ok=True)
+            _settings.JWT_SECRET_KEY = secrets.token_hex(32)
+            _key_file.write_text(_settings.JWT_SECRET_KEY, encoding="utf-8")
+            try:
+                os.chmod(_key_file, 0o600)
+            except OSError:
+                pass
+        logging.warning(
+            "JWT_SECRET_KEY ist nicht in der .env gesetzt – es wird der Schluessel aus %s "
+            "verwendet. Fuer Produktion JWT_SECRET_KEY in der .env setzen "
+            "(z. B. openssl rand -hex 64).",
+            _key_file,
+        )
+    except OSError as exc:
+        _settings.JWT_SECRET_KEY = secrets.token_hex(32)
+        logging.error(
+            "JWT_SECRET_KEY nicht gesetzt und %s nicht schreibbar (%s): temporaerer Schluessel, "
+            "alle Sessions enden bei jedem Neustart! Bitte JWT_SECRET_KEY in der .env setzen.",
+            _key_file, exc,
+        )
 
 settings = _settings

@@ -3,9 +3,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.audit import write_audit_detached
 from app.core.database import get_db
 from app.core.auth import get_current_user, assert_zone_access
-from app.services.pdns_client import pdns_manager, PowerDNSAPIError, PowerDNSClient
+from app.services.pdns_client import pdns_manager, PowerDNSAPIError, PowerDNSClient, RecordNotFoundError
 from app.schemas.dns import (
     RecordCreate, RecordDelete, BulkRecordUpdate, MessageResponse, RecordUpdate
 )
@@ -93,10 +94,13 @@ def _zone_not_found_for(name: str, exc: PowerDNSAPIError) -> bool:
     We treat this as "skip silently" during fan-out, because in mixed setups
     not every writable server hosts every zone.
     """
-    if exc.status_code in (404, 422):
-        return True
     detail = (exc.detail or "").lower()
-    return "could not find domain" in detail or "no such zone" in detail
+    if exc.status_code == 404:
+        return True
+    # 422 bedeutet bei PowerDNS "Input validation failed" (ungueltiger Content, Name
+    # ausserhalb der Zone, CNAME-Konflikt ...). Nur wenn der Text eindeutig eine fehlende
+    # Zone nennt, wird uebersprungen – sonst muss der Fehler beim Nutzer ankommen.
+    return "could not find domain" in detail or "no such zone" in detail or "not found" in detail
 
 
 def _read_only_error(server_name: str) -> HTTPException:
@@ -127,6 +131,14 @@ async def _log_action(
     user_id: int = None,
 ):
     """Helper to create audit log entries (mit user_id)."""
+    if status != "success":
+        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
+        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
+        await write_audit_detached(
+            action, "record", resource_name, user_id=user_id, details=details,
+            status=status, error_message=error_message, server_name=server_name,
+        )
+        return
     log = AuditLog(
         action=action,
         resource_type="record",
@@ -179,6 +191,109 @@ async def list_records(
         }
     except PowerDNSAPIError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+# WICHTIG: /bulk muss VOR der allgemeinen POST-Route stehen. Starlette nimmt den ersten
+# passenden Treffer, und {zone_id:path} wuerde sonst auch ".../bulk" als Zonennamen schlucken.
+@router.post("/{server_name}/{zone_id:path}/bulk", response_model=MessageResponse)
+async def bulk_update_records(
+    server_name: str,
+    zone_id: str,
+    bulk: BulkRecordUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk record operations. Fans out to all writable peers."""
+    await assert_zone_access(db, current_user, zone_id, write=True)
+
+    rrsets = []
+    for record in bulk.create:
+        rrsets.append({
+            "name": record.name,
+            "type": record.type,
+            "ttl": record.ttl,
+            "changetype": "REPLACE",
+            "records": [
+                {"content": r.content, "disabled": r.disabled}
+                for r in record.records
+            ],
+        })
+    value_deletes = []  # Einzelwerte (mit content) brauchen ein Lesen des RRsets je Server
+    for record in bulk.delete:
+        if record.content is not None:
+            value_deletes.append(record)
+            continue
+        rrsets.append({
+            "name": record.name,
+            "type": record.type,
+            "changetype": "DELETE",
+        })
+
+    if not rrsets and not value_deletes:
+        raise HTTPException(status_code=400, detail="No records to process")
+
+    targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
+    if not targets:
+        raise _read_only_error(server_name)
+
+    results: dict[str, str] = {}
+    primary_error: PowerDNSAPIError | None = None
+    primary_success = False
+
+    for srv_name, client in targets:
+        try:
+            for vd in value_deletes:
+                await client.delete_record(zone_id, vd.name, vd.type, content=vd.content)
+            if rrsets:
+                await client.update_records(zone_id, rrsets)
+            results[srv_name] = "saved"
+            if srv_name == server_name:
+                primary_success = True
+        except RecordNotFoundError as e:
+            results[srv_name] = f"error: {e.detail}"
+            if srv_name == server_name:
+                primary_error = e
+            continue
+        except PowerDNSAPIError as e:
+            if _zone_not_found_for(srv_name, e):
+                results[srv_name] = "skipped (zone not present)"
+                continue
+            results[srv_name] = f"error: {e.detail}"
+            if srv_name == server_name:
+                primary_error = e
+
+    await _log_action(
+        db, "BULK_UPDATE", zone_id, server_name,
+        {
+            "created": len(bulk.create),
+            "deleted": len(bulk.delete),
+            "fanout": _summarize_results(results, info),
+        },
+        status="success" if primary_success else "error",
+        error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
+        user_id=current_user.id,
+    )
+
+    if not primary_success:
+        if primary_error is not None:
+            raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
+        raise HTTPException(status_code=502, detail="No writable server accepted the change")
+
+    from app.services.webhook_service import deliver_webhooks_background
+    deliver_webhooks_background(
+        current_user.id,
+        "record.bulk",
+        {"server": server_name, "zone": zone_id, "created": len(bulk.create), "deleted": len(bulk.delete)},
+    )
+
+    return MessageResponse(
+        message=f"Bulk update completed: {len(bulk.create)} created/updated, {len(bulk.delete)} deleted",
+        details={
+            "created": len(bulk.create),
+            "deleted": len(bulk.delete),
+            "fanout": _summarize_results(results, info),
+        },
+    )
 
 
 @router.post("/{server_name}/{zone_id:path}", response_model=MessageResponse)
@@ -290,7 +405,7 @@ async def delete_record(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a record set from a zone. Fans out to all writable peers."""
+    """Delete a record set (or a single value, if ``content`` is set). Fans out to all writable peers."""
     await assert_zone_access(db, current_user, zone_id, write=True)
     targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
     if not targets:
@@ -302,10 +417,17 @@ async def delete_record(
 
     for srv_name, client in targets:
         try:
-            await client.delete_record(zone_id, record.name, record.type)
+            await client.delete_record(zone_id, record.name, record.type, content=record.content)
             results[srv_name] = "deleted"
             if srv_name == server_name:
                 primary_success = True
+        except RecordNotFoundError as e:
+            # Zone vorhanden, aber Wert/RRset nicht: auf Peers ueberspringen, auf dem
+            # Primaer-Server als 404 an den Nutzer melden (nicht als "Zone fehlt").
+            results[srv_name] = f"skipped ({e.detail})"
+            if srv_name == server_name:
+                primary_error = e
+            continue
         except PowerDNSAPIError as e:
             if _zone_not_found_for(srv_name, e):
                 results[srv_name] = "skipped (zone not present)"
@@ -316,7 +438,7 @@ async def delete_record(
 
     await _log_action(
         db, "DELETE", record.name, server_name,
-        {"zone": zone_id, "type": record.type, "fanout": _summarize_results(results, info)},
+        {"zone": zone_id, "type": record.type, "content": record.content, "fanout": _summarize_results(results, info)},
         status="success" if primary_success else "error",
         error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
         user_id=current_user.id,
@@ -331,11 +453,15 @@ async def delete_record(
     deliver_webhooks_background(
         current_user.id,
         "record.deleted",
-        {"server": server_name, "zone": zone_id, "name": record.name, "type": record.type},
+        {"server": server_name, "zone": zone_id, "name": record.name, "type": record.type, "content": record.content},
     )
 
     return MessageResponse(
-        message=f"Record '{record.name}' ({record.type}) deleted from zone '{zone_id}'",
+        message=(
+            f"Value '{record.content}' removed from record '{record.name}' ({record.type}) in zone '{zone_id}'"
+            if record.content is not None
+            else f"Record '{record.name}' ({record.type}) deleted from zone '{zone_id}'"
+        ),
         details=_summarize_results(results, info),
     )
 
@@ -448,94 +574,4 @@ async def update_record(
     return MessageResponse(
         message=f"Record '{update.name}' ({update.type}) updated in zone '{zone_id}'",
         details=_summarize_results(results, info),
-    )
-
-
-
-@router.post("/{server_name}/{zone_id:path}/bulk", response_model=MessageResponse)
-async def bulk_update_records(
-    server_name: str,
-    zone_id: str,
-    bulk: BulkRecordUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Bulk record operations. Fans out to all writable peers."""
-    await assert_zone_access(db, current_user, zone_id, write=True)
-
-    rrsets = []
-    for record in bulk.create:
-        rrsets.append({
-            "name": record.name,
-            "type": record.type,
-            "ttl": record.ttl,
-            "changetype": "REPLACE",
-            "records": [
-                {"content": r.content, "disabled": r.disabled}
-                for r in record.records
-            ],
-        })
-    for record in bulk.delete:
-        rrsets.append({
-            "name": record.name,
-            "type": record.type,
-            "changetype": "DELETE",
-        })
-
-    if not rrsets:
-        raise HTTPException(status_code=400, detail="No records to process")
-
-    targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
-    if not targets:
-        raise _read_only_error(server_name)
-
-    results: dict[str, str] = {}
-    primary_error: PowerDNSAPIError | None = None
-    primary_success = False
-
-    for srv_name, client in targets:
-        try:
-            await client.update_records(zone_id, rrsets)
-            results[srv_name] = "saved"
-            if srv_name == server_name:
-                primary_success = True
-        except PowerDNSAPIError as e:
-            if _zone_not_found_for(srv_name, e):
-                results[srv_name] = "skipped (zone not present)"
-                continue
-            results[srv_name] = f"error: {e.detail}"
-            if srv_name == server_name:
-                primary_error = e
-
-    await _log_action(
-        db, "BULK_UPDATE", zone_id, server_name,
-        {
-            "created": len(bulk.create),
-            "deleted": len(bulk.delete),
-            "fanout": _summarize_results(results, info),
-        },
-        status="success" if primary_success else "error",
-        error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
-        user_id=current_user.id,
-    )
-
-    if not primary_success:
-        if primary_error is not None:
-            raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
-        raise HTTPException(status_code=502, detail="No writable server accepted the change")
-
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        current_user.id,
-        "record.bulk",
-        {"server": server_name, "zone": zone_id, "created": len(bulk.create), "deleted": len(bulk.delete)},
-    )
-
-    return MessageResponse(
-        message=f"Bulk update completed: {len(bulk.create)} created/updated, {len(bulk.delete)} deleted",
-        details={
-            "created": len(bulk.create),
-            "deleted": len(bulk.delete),
-            "fanout": _summarize_results(results, info),
-        },
     )

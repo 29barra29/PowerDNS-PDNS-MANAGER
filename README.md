@@ -5,7 +5,7 @@ Ein Web-Panel für **PowerDNS Authoritative Server** zum Self-Hosten. Entstanden
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)
 ![PowerDNS](https://img.shields.io/badge/PowerDNS-4.x-orange.svg)
-![Version](https://img.shields.io/badge/version-v2.4.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.4.1-blue.svg)
 
 ---
 
@@ -74,7 +74,7 @@ Selber Effekt, nur ohne den Download-Wrapper:
 
 ```bash
 git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
-cd dns-manager
+cd PowerDNS-PDNS-MANAGER
 ./setup.sh
 docker compose up -d
 ```
@@ -85,7 +85,7 @@ Wer keinen Wizard mag und alle Variablen selbst setzen will:
 
 ```bash
 git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
-cd dns-manager
+cd PowerDNS-PDNS-MANAGER
 cp .env.example .env
 # WICHTIG: DB_ROOT_PASSWORD, DB_PASSWORD und JWT_SECRET_KEY ausfüllen,
 # sonst startet compose mit einer Fehlermeldung. Beispiel:
@@ -98,7 +98,7 @@ docker compose up -d
 ### Erster Login
 
 1. Browser auf `http://localhost:5380`.
-2. Ist `ENABLE_REGISTRATION=true` (Default beim Setup-Wizard), wird der Setup-Wizard im Browser angezeigt – der erste angelegte User ist automatisch Admin. Anschließend stellt sich die Registrierung selbst ab.
+2. Ist `ENABLE_REGISTRATION=true` in der `.env` gesetzt (Default ist `false`), wird der Setup-Wizard im Browser angezeigt – der erste angelegte User ist automatisch Admin. Anschließend stellt sich die Registrierung selbst ab.
 3. Hat das Setup ein festes Admin-Passwort vergeben, ist der Username `admin`. Wurde gar kein Passwort gesetzt, generiert das Backend beim ersten Start eines und legt es ab unter `/app/.initial-admin-password` im Container plus einmalig im Container-Log:
    ```bash
    docker compose logs backend | grep -i "initial admin"
@@ -148,9 +148,9 @@ docker exec dns-manager-db mysqldump -u root -p dns_manager > backup_$(date +%Y%
 Manuell auf eine bestimmte Version wechseln:
 
 ```bash
-cd dns-manager
+cd PowerDNS-PDNS-MANAGER
 git fetch origin --tags --force --prune --prune-tags
-git checkout v2.4.0              # oder: git checkout main && git pull
+git checkout v2.4.1              # oder: git checkout main && git pull
 docker compose build --no-cache backend
 docker compose up -d
 ```
@@ -172,7 +172,7 @@ Was du selbst noch machen solltest:
 - Admin-Passwort nach dem ersten Login ändern.
 - Reverse-Proxy mit TLS davorschalten (Caddy ist mit Abstand am schnellsten aufgesetzt). Sobald HTTPS läuft, in der `.env` `AUTH_COOKIE_SECURE=true` setzen und einmal `docker compose up -d` – sonst bleibt der Login-Cookie unter HTTPS unzuverlässig.
 - `ENABLE_REGISTRATION=false` setzen, sobald alle Accounts angelegt sind.
-- Port `5380` über die Firewall nur lokal oder hinter dem Reverse-Proxy erreichbar lassen.
+- Port `5380` nicht öffentlich lassen: in der `compose.yaml` `"127.0.0.1:5380:8000"` binden (eine Host-Firewall greift bei Docker-Ports nicht). Hinter dem Proxy `TRUST_PROXY_HEADERS=true` setzen, sonst teilen sich alle Nutzer ein Login-Rate-Limit.
 - Optional Fail2Ban auf die Reverse-Proxy-Logs.
 
 Kompletter nginx-Block und Traefik-/Cloudflare-Tunnel-Beispiele stehen in [INSTALL.md](INSTALL.md) im Abschnitt „HTTPS mit Reverse Proxy".
@@ -219,7 +219,7 @@ Das ist die seit v2.3.3 eingebaute Schutz-Schiene: ohne gesetzte Passwörter wir
 docker compose up -d
 ```
 
-### Backend logt „JWT_SECRET_KEY ist leer"
+### Backend logt „JWT_SECRET_KEY ist nicht in der .env gesetzt"
 
 Schlüssel nachreichen, dann neu starten:
 
@@ -265,6 +265,47 @@ asyncio.run(reset())
 ## Was ist neu (Changelog)
 
 Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.com/29barra29/PowerDNS-PDNS-MANAGER/releases).
+
+### v2.4.1
+
+Sicherheits- und Stabilitäts-Release nach einem vollständigen Code-Review. **Kein Schema-Bruch** – `./update.sh` reicht.
+
+**Nach dem Update bitte prüfen**
+
+- Alle Nutzer müssen sich einmal neu anmelden (Sessions sind jetzt an das Passwort gebunden).
+- **Einstellungen → Profil → Öffentliche Basis-URL** (nur als Admin sichtbar) eintragen (z. B. `https://dns.example.com`), sonst werden keine Passwort-Reset-Mails mehr verschickt. Alternativ `WEBAUTHN_ORIGIN` in der `.env` setzen. Neuinstallationen setzen den Wert beim Setup automatisch.
+- Ist `WEBAUTHN_RP_ID` auf eine übergeordnete Domain gesetzt (z. B. `example.com` bei Panel auf `dns.example.com`), muss jetzt `WEBAUTHN_ORIGIN=https://dns.example.com` gesetzt sein.
+- Passkeys verlangen jetzt PIN oder Biometrie (User-Verification). Sicherheitsschlüssel ohne PIN funktionieren nicht mehr als Passkey; Passwort-Login (mit TOTP) bleibt für diese Nutzer möglich.
+- Hinter einem Reverse-Proxy `TRUST_PROXY_HEADERS=true` setzen und den `Host`-Header durchreichen (`proxy_set_header Host $host`), sonst greift das Login-Rate-Limit für alle Nutzer gemeinsam bzw. der CSRF-Schutz lehnt Anfragen ab.
+
+**Behoben (Sicherheit)**
+
+- DNSSEC: Der Einzel-Key-Endpunkt lieferte den privaten Zonenschlüssel auch an Nutzer mit Nur-Lese-Recht aus. `privatekey` wird jetzt nie mehr ausgegeben, der Endpunkt verlangt Schreibrecht.
+- Sessions und Passwort-Reset-Links sind an den aktuellen Passwort-Hash gebunden: Passwortwechsel oder Reset invalidiert alle bestehenden Sessions, ein Reset-Link funktioniert nur einmal.
+- Reset-Links werden nicht mehr aus dem `Host`-Header der Anfrage gebaut, sondern nur aus der konfigurierten App-Basis-URL (Einstellungen → Profil → Öffentliche Basis-URL, beim Setup automatisch gesetzt) bzw. `WEBAUTHN_ORIGIN`.
+- E-Mail-Adressen werden validiert (genau eine Adresse), der SMTP-Versand geht nur an diese Adresse, STARTTLS/SSL prüfen Zertifikate, Nutzerwerte in Mail-Templates werden HTML-escaped.
+- TOTP-Codes und WebAuthn-Challenges sind nur einmal gültig (Replay-Schutz). Passkeys verlangen User-Verification (PIN/Biometrie), die Origin-Prüfung akzeptiert nur noch konfigurierte Origins bzw. den exakten RP-Host.
+- Passwort, E-Mail, TOTP, Passkeys und Panel-Tokens lassen sich nur noch aus einer Browser-Session verwalten, nicht mit einem Panel-API-Token.
+- Hinter Reverse-Proxy: `TRUST_PROXY_HEADERS` wertet jetzt den vom eigenen Proxy angehängten `X-Forwarded-For`-Eintrag aus (neu: `TRUSTED_PROXY_HOPS`), validiert IPs und verhindert das Umgehen des Login-Rate-Limits. Das Rate-Limit legt bei Lese-Checks keine Einträge mehr an.
+- Abhängigkeiten: `python-multipart` 0.0.32 (vier CVEs), Frontend-Pakete per `npm audit` bereinigt (vite, react-router, postcss).
+
+**Behoben (Funktion)**
+
+- Der Papierkorb in der Record-Tabelle löscht nur noch den geklickten Wert, nicht mehr das komplette RRset (z. B. alle MX- oder TXT-Werte). Audit-Log und Webhook enthalten den gelöschten Inhalt.
+- Der Bulk-Endpunkt `POST /records/{server}/{zone}/bulk` war durch die allgemeine Record-Route verdeckt und nie erreichbar.
+- Fehlt `JWT_SECRET_KEY` in der `.env`, wird ein Schlüssel einmalig im internen Daten-Volume `backend_data` abgelegt und wiederverwendet (vorher: bei jedem Neustart neue Sessions). Dotfiles werden aus `/uploads` nie ausgeliefert.
+- Content-Security-Policy (neu, standardmäßig aktiv) lässt Swagger/ReDoc, externe Logo-URLs und alle Captcha-Provider zu.
+- CSRF-Schutz für Cookie-Sessions: zustandsändernde API-Aufrufe müssen von der eigenen Seite kommen (`Sec-Fetch-Site`/`Origin`), Bearer-Token-Aufrufe sind davon unberührt.
+- Webhooks verbinden sich zur geprüften IP (kein DNS-Rebinding mehr), CGNAT-/NAT64-Bereiche werden geblockt.
+- Audit-Log deckt jetzt auch Logins (Erfolg/Fehlschlag mit IP), Benutzer-, Rollen- und Zonenrechte-Änderungen, Passwort-/2FA-/Passkey-/Token-Aktionen sowie Server-, SMTP- und ACME-Token-Änderungen ab. Fehler-Einträge gehen nicht mehr durch das Rollback verloren.
+- Zonenrechte werden beim Löschen einer Zone mit entfernt; `kind`, `masters` und `account` einer Zone dürfen nur Admins ändern.
+- PowerDNS-Validierungsfehler (422) werden als Fehler gemeldet statt als „Zone fehlt“ übersprungen; Zonen-Import legt die Zone auf jedem schreibbaren Server an; Fan-out-Teilfehler werden in der Oberfläche angezeigt.
+- Ein deaktivierter, aus `PDNS_SERVERS` importierter Server führt beim Neustart nicht mehr in eine Crash-Schleife.
+- Zeitstempel kommen mit UTC-Offset, die Oberfläche zeigt Audit-Log, letzten Login und Token-Nutzung damit in korrekter Ortszeit.
+- Mailversand und SMTP-Test blockieren den Server nicht mehr.
+- Skripte: `install.sh` sichert eine vorhandene `.env`, bevor ein Ordner überschrieben wird; `update.sh` gibt dem Uploads-Volume den App-Benutzer.
+- Abhängigkeiten aktualisiert (fastapi 0.141, uvicorn 0.53, sqlalchemy 2.0.52, pydantic 2.13.5, pydantic-settings 2.15, cryptography 50), `.dockerignore` ergänzt, tote Dateien (`test.py`, `Dockerfile.simple`) entfernt.
+- Doku: korrekter Clone-Ordner, funktionierender Installations-One-Liner, Reverse-Proxy-Hinweise zu `TRUST_PROXY_HEADERS` und Port-Bindung, SECURITY.md aktualisiert, `docs/PANEL-API.md` an die tatsächliche API angepasst.
 
 ### v2.4.0
 

@@ -61,6 +61,8 @@ if [ "$LANG_APP" = "en" ]; then
     M_INSTALL_DIR="Installation directory [./pdns-manager]: "
     M_DIR_EXISTS="Directory %s already exists!"
     M_OVERWRITE="Overwrite? (y/n): "
+    M_ENV_BACKUP="Existing .env saved to: %s (contains DB passwords! Copy them into the new .env if you keep the old database volume.)"
+    M_UPDATE_HINT="Hint: to update an existing installation, prefer ./update.sh inside the project folder."
     M_DOWNLOAD="Downloading PDNS Manager..."
     M_GIT_TRY="Git not available, trying direct download..."
     M_NEED_CURL_WGET="Neither git, curl nor wget available!"
@@ -115,6 +117,8 @@ else
     M_INSTALL_DIR="Installationsverzeichnis [./pdns-manager]: "
     M_DIR_EXISTS="Verzeichnis %s existiert bereits!"
     M_OVERWRITE="Überschreiben? (j/n): "
+    M_ENV_BACKUP="Bestehende .env gesichert nach: %s (enthaelt DB-Passwoerter! Bei Weiterverwendung des alten DB-Volumes in die neue .env uebernehmen.)"
+    M_UPDATE_HINT="Hinweis: Fuer ein Update einer bestehenden Installation lieber ./update.sh im Projektordner nutzen."
     M_DOWNLOAD="Lade PDNS Manager herunter..."
     M_GIT_TRY="Git nicht verfügbar, versuche direkten Download..."
     M_NEED_CURL_WGET="Weder git, curl noch wget verfügbar!"
@@ -241,6 +245,14 @@ if [ -d "$INSTALL_DIR" ]; then
     read -p "$M_OVERWRITE" -n 1 -r
     echo
     if [[ $REPLY =~ $YES_PATTERN ]]; then
+        # Die .env enthaelt die DB-Passwoerter; das DB-Volume bleibt beim Loeschen des
+        # Ordners bestehen. Ohne Sicherung waere man aus der eigenen Datenbank ausgesperrt.
+        if [ -f "$INSTALL_DIR/.env" ]; then
+            ENV_BACKUP="$(cd "$(dirname "$INSTALL_DIR")" && pwd)/$(basename "$INSTALL_DIR").env.backup-$(date +%Y%m%d-%H%M%S)"
+            cp "$INSTALL_DIR/.env" "$ENV_BACKUP" && chmod 600 "$ENV_BACKUP"
+            print_info "$(printf "$M_ENV_BACKUP" "$ENV_BACKUP")"
+        fi
+        print_info "$M_UPDATE_HINT"
         rm -rf "$INSTALL_DIR"
     else
         exit 1

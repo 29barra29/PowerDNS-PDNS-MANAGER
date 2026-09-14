@@ -89,8 +89,18 @@ fi
 if [ -f .env ] && ! grep -qE '^JWT_SECRET_KEY=.+' .env; then
     echo ""
     echo "⚠️  Hinweis: JWT_SECRET_KEY ist in .env nicht gesetzt."
-    echo "    Folge: nach jedem Container-Restart sind alle Logins ungültig."
-    echo "    Fix:   echo \"JWT_SECRET_KEY=\$(openssl rand -hex 64)\" >> .env"
+    echo "    Das Backend nutzt dann einen automatisch erzeugten Schlüssel aus dem Daten-Volume (backend_data)."
+    echo "    Empfohlen: echo \"JWT_SECRET_KEY=\$(openssl rand -hex 64)\" >> .env  (danach einmal neu anmelden)"
+    echo ""
+fi
+
+# ----------------------------------------------------------------------------
+# Hinweis ab v2.4.1: Reset-Mails brauchen die oeffentliche App-Basis-URL
+# ----------------------------------------------------------------------------
+if [ -f .env ] && ! grep -qE '^WEBAUTHN_ORIGIN=.+' .env; then
+    echo "ℹ️  Ab v2.4.1 werden Passwort-Reset-Links nur noch aus der App-Basis-URL gebaut."
+    echo "    Nach dem Update bitte prüfen: Einstellungen → Profil → Öffentliche Basis-URL (z. B. https://dns.example.com)."
+    echo "    Alternativ WEBAUTHN_ORIGIN=https://<dein-host> in der .env setzen."
     echo ""
 fi
 
@@ -178,6 +188,11 @@ fi
 
 $COMPOSE_CMD build "${BUILD_FLAGS[@]}" backend
 $COMPOSE_CMD up -d
+
+# Uploads-Volume dem App-User (UID 1001) geben: Installationen vor v2.3.3 haben es als
+# root angelegt, seitdem laeuft der Prozess ohne root -> Logo-Upload/JWT-Key-Datei wuerden
+# mit "Permission denied" scheitern.
+$COMPOSE_CMD exec -T -u root backend chown -R 1001:1001 /app/app/static_new/uploads /app/data 2>/dev/null || true
 
 echo "✅ App-Update erfolgreich abgeschlossen!"
 

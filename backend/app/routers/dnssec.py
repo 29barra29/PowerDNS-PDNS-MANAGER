@@ -2,6 +2,7 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.audit import write_audit_detached
 from app.core.database import get_db
 from app.core.auth import get_current_user, assert_zone_access
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
@@ -14,6 +15,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dnssec", tags=["DNSSEC"])
 
 
+def _strip_private(key):
+    """Entfernt den privaten Schluessel aus PowerDNS-Cryptokey-Antworten.
+
+    Der Einzel-GET /cryptokeys/{id} liefert 'privatekey' im Klartext (ISC-Format).
+    Der Signaturschluessel der Zone darf das Panel nie verlassen.
+    """
+    if isinstance(key, dict):
+        return {k: v for k, v in key.items() if k != "privatekey"}
+    if isinstance(key, list):
+        return [_strip_private(k) for k in key]
+    return key
+
+
 async def _log_action(
     db: AsyncSession, action: str, resource_name: str,
     server_name: str = None, details: dict = None,
@@ -21,6 +35,14 @@ async def _log_action(
     user_id: int = None,
 ):
     """Helper to create audit log entries (mit user_id)."""
+    if status != "success":
+        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
+        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
+        await write_audit_detached(
+            action, "dnssec_key", resource_name, user_id=user_id, details=details,
+            status=status, error_message=error_message, server_name=server_name,
+        )
+        return
     log = AuditLog(
         action=action,
         resource_type="dnssec_key",
@@ -50,7 +72,7 @@ async def list_cryptokeys(
         raise HTTPException(status_code=404, detail=str(e))
 
     try:
-        keys = await client.get_cryptokeys(zone_id)
+        keys = _strip_private(await client.get_cryptokeys(zone_id))
         return {
             "zone": zone_id,
             "server": server_name,
@@ -69,15 +91,15 @@ async def get_cryptokey(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific DNSSEC key with full details (Auth + Zone-ACL)."""
-    await assert_zone_access(db, current_user, zone_id)
+    """Get a specific DNSSEC key (Auth + Zone-Schreibrecht). privatekey wird nie ausgeliefert."""
+    await assert_zone_access(db, current_user, zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     try:
-        key = await client.get_cryptokey(zone_id, key_id)
+        key = _strip_private(await client.get_cryptokey(zone_id, key_id))
         return {
             "zone": zone_id,
             "server": server_name,
@@ -112,7 +134,7 @@ async def enable_dnssec(
             nsec3param=config.nsec3param,
         )
 
-        keys = await client.get_cryptokeys(zone_id)
+        keys = _strip_private(await client.get_cryptokeys(zone_id))
         ds_records = []
         for key in keys:
             if key.get("ds"):
@@ -127,7 +149,7 @@ async def enable_dnssec(
         return MessageResponse(
             message=f"DNSSEC enabled for zone '{zone_id}' on '{server_name}'",
             details={
-                "key": result,
+                "key": _strip_private(result),
                 "ds_records": ds_records,
                 "info": "Add the DS records to your domain registrar to complete DNSSEC setup.",
             },
@@ -261,7 +283,7 @@ async def get_ds_records(
     await assert_zone_access(db, current_user, zone_id)
     try:
         client = pdns_manager.get_client(server_name)
-        keys = await client.get_cryptokeys(zone_id)
+        keys = _strip_private(await client.get_cryptokeys(zone_id))
 
         ds_records = []
         signing_keys = []

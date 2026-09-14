@@ -25,6 +25,10 @@ export default function ResetPasswordPage() {
 
     useEffect(() => {
         api.getAppInfo().then(setAppInfo).catch(console.error)
+        // Token nicht in Adresszeile/History/Referrer stehen lassen – er ist im State.
+        if (token && window.history && window.history.replaceState) {
+            window.history.replaceState(window.history.state, '', window.location.pathname)
+        }
         // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time error initialisation
         if (!token) setError(t('reset.invalidLink'))
         // eslint-disable-next-line react-hooks/exhaustive-deps -- t from i18n stable

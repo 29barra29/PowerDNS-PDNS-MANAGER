@@ -345,8 +345,9 @@ export default function ZoneDetailPage() {
         }
 
         try {
+            let res
             if (isEdit) {
-                await api.updateRecord(server, zoneId, {
+                res = await api.updateRecord(server, zoneId, {
                     name: fqdn,
                     type: addType,
                     ttl: parseInt(addTTL),
@@ -355,7 +356,7 @@ export default function ZoneDetailPage() {
                     disabled: false,
                 })
             } else {
-                await api.createRecord(server, zoneId, {
+                res = await api.createRecord(server, zoneId, {
                     name: fqdn,
                     type: addType,
                     ttl: parseInt(addTTL),
@@ -363,6 +364,11 @@ export default function ZoneDetailPage() {
                 })
             }
             closeModal()
+            // Fan-out auf Peer-Server: Teilfehler nicht verschlucken (Primary war ok, Peer nicht).
+            const fanoutErrors = Object.entries(res?.details || {})
+                .filter(([, v]) => typeof v === 'string' && v.startsWith('error:'))
+                .map(([srv, v]) => `${srv}: ${v.replace(/^error:\s*/, '')}`)
+            if (fanoutErrors.length) setError(fanoutErrors.join(' · '))
             const displayName = fqdn.replace(/\.$/, '')
             setSuccess(isEdit
                 ? t('zoneDetail.recordUpdated', { type: addType, name: displayName })
@@ -375,10 +381,10 @@ export default function ZoneDetailPage() {
         }
     }
 
-    async function handleDelete(name, type) {
+    async function handleDelete(name, type, content) {
         if (!confirm(t('zoneDetail.deleteRecordConfirm', { name, type }))) return
         try {
-            await api.deleteRecord(server, zoneId, { name, type })
+            await api.deleteRecord(server, zoneId, { name, type, content })
             setSuccess(t('zoneDetail.recordDeleted', { type, name: name.replace(/\.$/, '') }))
             loadZone()
         } catch (err) {
@@ -575,7 +581,7 @@ export default function ZoneDetailPage() {
                                         )}
                                         {type !== 'SOA' && type !== 'NS' && (
                                             <button
-                                                onClick={() => handleDelete(r.name, r.type)}
+                                                onClick={() => handleDelete(r.name, r.type, r.content)}
                                                 disabled={!canEdit}
                                                 className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
                                                 title={t('zoneDetail.deleteRecord')}

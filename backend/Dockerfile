@@ -30,9 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Python dependencies – aus dem voll gepinnten Lockfile, damit der Build reproduzierbar
+# ist und kein transitives Update (z. B. pymysql) den Betrieb bricht.
+COPY backend/requirements.txt backend/requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 # Backend code
 COPY backend/app/ ./app/
@@ -45,6 +46,8 @@ RUN test -f /app/app/static_new/index.html \
 
 # Uploads-Ordner sicherstellen (damit das Volume vom richtigen User beschreibbar ist)
 RUN mkdir -p /app/app/static_new/uploads
+# Datenverzeichnis (nicht oeffentlich): z. B. automatisch erzeugter JWT-Schluessel
+RUN mkdir -p /app/data
 
 # ============================
 # Non-root User anlegen

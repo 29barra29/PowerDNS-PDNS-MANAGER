@@ -73,6 +73,17 @@ class ZoneUpdate(BaseModel):
     soa_edit_api: Optional[str] = None
     account: Optional[str] = None
 
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        vv = v.strip().capitalize()
+        # Consumer/Producer (Katalogzonen) bewusst nicht ueber das Panel setzbar.
+        if vv not in ("Native", "Master", "Slave"):
+            raise ValueError("kind muss Native, Master oder Slave sein")
+        return vv
+
 
 class ZoneResponse(BaseModel):
     """Schema for zone response."""
@@ -137,9 +148,14 @@ class RecordCreate(BaseModel):
 
 
 class RecordDelete(BaseModel):
-    """Schema for deleting a record set."""
+    """Schema for deleting a record set or a single value of it.
+
+    Ohne ``content`` wird das komplette RRset geloescht (alle Werte). Mit
+    ``content`` nur dieser eine Wert; die uebrigen Werte bleiben erhalten.
+    """
     name: str
     type: str
+    content: str | None = None
 
     @field_validator("name")
     @classmethod

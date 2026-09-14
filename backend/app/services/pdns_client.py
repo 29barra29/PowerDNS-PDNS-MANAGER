@@ -191,9 +191,50 @@ class PowerDNSClient:
         return await self.update_records(zone_id, rrsets)
 
     async def delete_record(
-        self, zone_id: str, name: str, record_type: str
+        self, zone_id: str, name: str, record_type: str, content: str | None = None
     ) -> None:
-        """Delete a record set."""
+        """Delete a record set – or, with ``content``, only that single value.
+
+        PowerDNS kennt nur RRset-weite DELETEs. Fuer einen Einzelwert holen wir das
+        aktuelle RRset, entfernen den Wert und schreiben den Rest per REPLACE zurueck
+        (TTL, disabled-Flags und Kommentare bleiben erhalten). Ist der Wert der letzte
+        im RRset, wird das RRset per DELETE entfernt. Fehlt das RRset oder der Wert,
+        wird RecordNotFoundError (404) geworfen. Ohne ``content`` bleibt DELETE idempotent.
+        """
+        if content is not None:
+            zone = await self.get_zone(zone_id)
+            for rrset in zone.get("rrsets", []):
+                if (
+                    str(rrset.get("name", "")).lower() == name.lower()
+                    and str(rrset.get("type", "")).upper() == record_type.upper()
+                ):
+                    records = rrset.get("records", [])
+                    remaining = [r for r in records if r.get("content") != content]
+                    if len(remaining) == len(records):
+                        raise RecordNotFoundError(
+                            404, f"Wert '{content}' nicht im RRset {name} {record_type} vorhanden",
+                            getattr(self, "name", getattr(self, "server_name", "unknown")),
+                        )
+                    if remaining:
+                        replace = {
+                            "name": name,
+                            "type": record_type,
+                            "ttl": rrset.get("ttl"),
+                            "changetype": "REPLACE",
+                            "records": [
+                                {"content": r.get("content"), "disabled": bool(r.get("disabled", False))}
+                                for r in remaining
+                            ],
+                        }
+                        if rrset.get("comments"):
+                            replace["comments"] = rrset["comments"]
+                        return await self.update_records(zone_id, [replace])
+                    break
+            else:
+                raise RecordNotFoundError(
+                    404, f"RRset {name} {record_type} nicht vorhanden",
+                    getattr(self, "name", getattr(self, "server_name", "unknown")),
+                )
         rrsets = [
             {
                 "name": name,
@@ -330,6 +371,14 @@ class PowerDNSAPIError(Exception):
         self.detail = detail
         self.server = server
         super().__init__(f"[{server}] PowerDNS API Error {status_code}: {detail}")
+
+
+class RecordNotFoundError(PowerDNSAPIError):
+    """Der zu loeschende Wert bzw. das RRset existiert nicht (Zone selbst ist vorhanden).
+
+    Eigene Klasse, damit die Fan-out-Handler das nicht mit "Zone fehlt auf diesem Server"
+    verwechseln und dem Nutzer ein sauberes 404 statt 502 liefern.
+    """
 
 
 class PowerDNSManager:

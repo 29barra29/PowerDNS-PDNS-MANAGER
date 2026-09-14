@@ -1,5 +1,7 @@
 """Authentication and authorization utilities."""
 import hashlib
+import time
+import pyotp
 import logging
 import secrets as _secrets
 from datetime import datetime, timedelta, timezone
@@ -14,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.client_ip import get_client_ip
 from app.core.database import get_db
 from app.models.models import User, UserZoneAccess, PanelToken
 
@@ -69,10 +72,68 @@ def generate_random_password(length: int = 16) -> str:
     return _secrets.token_urlsafe(length)[:length]
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access (session) token. Always tagged with typ=access."""
+def password_version(hashed_password: Optional[str]) -> str:
+    """Kurzer Fingerabdruck des aktuellen Passwort-Hashes.
+
+    Wird in Session- und Reset-Tokens eingebettet: aendert sich das Passwort, passen
+    alte Tokens nicht mehr -> alle Sessions sind sofort ungueltig, ein Reset-Link ist
+    nur einmal nutzbar.
+    """
+    return hashlib.sha256((hashed_password or "").encode("utf-8")).hexdigest()[:16]
+
+
+# --- Replay-Schutz fuer TOTP und WebAuthn-Challenges (In-Memory, ein Worker) ---------
+_TOTP_USED: dict[tuple[int, str], float] = {}
+_TOTP_TTL = 120.0  # laenger als 2x30s-Fenster (valid_window=1)
+
+
+def totp_verify_once(user_id: int, secret: str, code: str) -> bool:
+    """Prueft einen TOTP-Code und akzeptiert denselben Code pro Nutzer nur EINMAL.
+
+    pyotp allein wuerde einen mitgelesenen Code innerhalb von +-1 Zeitschritt
+    (bis ~90 s) beliebig oft akzeptieren.
+    """
+    code = (code or "").strip().replace(" ", "")
+    if not code or not secret:
+        return False
+    now = time.time()
+    for k, exp in list(_TOTP_USED.items()):
+        if exp < now:
+            _TOTP_USED.pop(k, None)
+    key = (int(user_id), code)
+    if key in _TOTP_USED:
+        return False
+    if not pyotp.TOTP(secret).verify(code, valid_window=1):
+        return False
+    _TOTP_USED[key] = now + _TOTP_TTL
+    return True
+
+
+_WEBAUTHN_USED: dict[str, float] = {}
+_WEBAUTHN_TTL = 6 * 60.0  # Challenge-Token leben 5 min
+
+
+def _consume_webauthn_challenge(challenge_b64: str) -> bool:
+    """Markiert eine Challenge als verbraucht; False, wenn sie schon benutzt wurde."""
+    now = time.time()
+    for k, exp in list(_WEBAUTHN_USED.items()):
+        if exp < now:
+            _WEBAUTHN_USED.pop(k, None)
+    if challenge_b64 in _WEBAUTHN_USED:
+        return False
+    _WEBAUTHN_USED[challenge_b64] = now + _WEBAUTHN_TTL
+    return True
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, *, user=None) -> str:
+    """Create a JWT access (session) token. Always tagged with typ=access.
+
+    ``user`` (empfohlen) bindet die Session an den aktuellen Passwort-Hash (Claim ``pwv``).
+    """
     to_encode = data.copy()
     to_encode["typ"] = TOKEN_TYPE_ACCESS
+    if user is not None:
+        to_encode["pwv"] = password_version(getattr(user, "hashed_password", None))
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
     )
@@ -88,9 +149,13 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-def create_password_reset_token(user_id: int) -> str:
-    """Create a short-lived JWT for password reset (1 hour). Tagged typ=password_reset."""
-    to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_PASSWORD_RESET}
+def create_password_reset_token(user_id: int, hashed_password: Optional[str] = None) -> str:
+    """Create a short-lived JWT for password reset (1 hour). Tagged typ=password_reset.
+
+    Enthaelt ``pwv`` (Fingerabdruck des aktuellen Hashes): sobald das Passwort gesetzt
+    wurde, passt der Link nicht mehr -> Einmal-Nutzung ohne DB-Tabelle.
+    """
+    to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_PASSWORD_RESET, "pwv": password_version(hashed_password)}
     expire = datetime.now(timezone.utc) + timedelta(hours=1)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
@@ -150,6 +215,10 @@ def decode_webauthn_challenge_token(token: str, *, purpose: str) -> Optional[dic
         return None
     if not payload.get("chal"):
         return None
+    # Einmal-Nutzung: dieselbe Challenge darf keine zweite Zeremonie abschliessen
+    # (sonst waere eine mitgeschnittene Assertion bei sign_count 0 wiederverwendbar).
+    if not _consume_webauthn_challenge(str(payload["chal"])):
+        return None
     return payload
 
 
@@ -166,6 +235,17 @@ def decode_password_reset_token(token: str) -> Optional[int]:
         return None
     sub = payload.get("sub")
     return int(sub) if sub else None
+
+
+def decode_password_reset_payload(token: str) -> Optional[dict]:
+    """Wie decode_password_reset_token, liefert aber das ganze Payload (sub, pwv)."""
+    payload = decode_token(token)
+    if not payload:
+        return None
+    typ = payload.get("typ") or payload.get("type")
+    if typ != TOKEN_TYPE_PASSWORD_RESET or not payload.get("sub"):
+        return None
+    return payload
 
 
 async def get_current_user(
@@ -195,7 +275,7 @@ async def get_current_user(
         )
         pt = result.scalar_one_or_none()
         if pt:
-            r_ip = request.client.host if request.client else None
+            r_ip = get_client_ip(request)
             now = datetime.now(timezone.utc)
             pt.last_used_at = now
             if r_ip:
@@ -204,6 +284,7 @@ async def get_current_user(
             result = await db.execute(select(User).where(User.id == pt.user_id))
             user = result.scalar_one_or_none()
             if user and user.is_active:
+                request.state.auth_via = "panel_token"
                 return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -249,7 +330,42 @@ async def get_current_user(
             detail="Benutzer nicht gefunden oder deaktiviert",
         )
 
+    # Session an den Passwort-Hash gebunden: nach Passwortaenderung/-reset sind alle
+    # bestehenden Sessions ungueltig. Tokens ohne pwv (vor diesem Update) ebenfalls.
+    if payload.get("pwv") != password_version(user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sitzung abgelaufen – bitte erneut anmelden",
+        )
+
+    request.state.auth_via = "session"
     return user
+
+
+async def get_session_user(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Wie get_current_user, aber nur fuer echte Browser-Sessions (kein Panel-API-Token).
+
+    Credential-Verwaltung (Passwort, E-Mail, TOTP, Passkeys, Panel-Tokens) darf nicht mit
+    einem geleakten API-Token moeglich sein, sonst laesst sich dauerhafter Zugang verankern.
+    """
+    if getattr(request.state, "auth_via", None) == "panel_token":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Diese Aktion ist mit einem API-Token nicht erlaubt – bitte im Browser anmelden",
+        )
+    return current_user
+
+
+async def get_admin_session_user(
+    current_user: User = Depends(get_session_user),
+) -> User:
+    """Admin UND echte Browser-Session (kein Panel-API-Token) – fuer Benutzer-/Credential-Verwaltung."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin-Rechte erforderlich")
+    return current_user
 
 
 async def get_admin_user(

@@ -284,7 +284,9 @@ export default function ZonesPage() {
             if (selectedTemplate && (selectedTemplate.records || []).length > 0 && !hasError) {
                 const zoneNameDot = cleaned.endsWith('.') ? cleaned : `${cleaned}.`
                 const sData = await api.getServers()
-                const srv = (sData.servers || []).find(s => s.is_reachable)
+                // Nur ein Server mit Schreibrecht kommt in Frage (sonst 403 und stille Fehler).
+                const srv = (sData.servers || []).find(s => s.is_reachable && s.allow_writes !== false)
+                const failedTemplateRecords = []
                 if (srv) {
                     for (const rec of selectedTemplate.records) {
                         try {
@@ -297,8 +299,14 @@ export default function ZonesPage() {
                                 ttl: rec.ttl || selectedTemplate.default_ttl || 3600,
                                 records: [{ content, disabled: false }],
                             })
-                        } catch (recErr) { console.warn('Template record failed:', recErr) }
+                        } catch (recErr) {
+                            console.warn('Template record failed:', recErr)
+                            failedTemplateRecords.push(`${rec.name} ${rec.type}`)
+                        }
                     }
+                }
+                if (failedTemplateRecords.length) {
+                    setError(`${t('zones.serverReportedError')}: ${failedTemplateRecords.join(', ')}`)
                 }
             }
 

@@ -14,7 +14,7 @@ npm install
 npm run dev
 ```
 
-Vite startet auf `http://localhost:5173` mit HMR. API-Aufrufe gehen per Proxy ans Backend (siehe `vite.config.js`).
+Vite startet auf `http://localhost:3000` mit HMR. API-Aufrufe gehen per Proxy ans Backend (siehe `vite.config.js`).
 
 Weitere Skripte:
 
@@ -39,7 +39,6 @@ frontend/
 ├── public/                 # Static Assets (Logo-Fallback, vite.svg)
 ├── index.html
 ├── vite.config.js
-├── tailwind.config.js
 └── package.json
 ```
 

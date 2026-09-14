@@ -68,6 +68,14 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       DOCS_ENABLED: ${DOCS_ENABLED:-false}
       WEBHOOK_ALLOW_PRIVATE_URLS: ${WEBHOOK_ALLOW_PRIVATE_URLS:-false}
+      # Echte Client-IP hinter Reverse-Proxy (X-Forwarded-For/X-Real-IP) auswerten.
+      # Nur aktivieren, wenn das Backend ausschliesslich ueber den Proxy erreichbar ist.
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      # Content-Security-Policy ist im Code mit sicherem Default AKTIV. Zum Ueberschreiben
+      # die naechste Zeile einkommentieren UND CONTENT_SECURITY_POLICY in der .env setzen
+      # (leer = Header aus). NICHT mit leerem Default durchreichen, sonst waere er aus.
+      # CONTENT_SECURITY_POLICY: ${CONTENT_SECURITY_POLICY:-}
 
       # Passkeys / WebAuthn – leer = Domain automatisch aus dem Browser-Aufruf ableiten.
       # Für Produktion bevorzugt die feste Domain setzen (ohne Schema/Port), z. B. dns.example.com.
@@ -77,6 +85,8 @@ services:
     volumes:
       # Logo und andere Uploads bleiben bei Updates erhalten
       - backend_uploads:/app/app/static_new/uploads
+      # Interne Daten (z. B. automatisch erzeugter JWT-Schluessel) – nie oeffentlich ausgeliefert
+      - backend_data:/app/data
     depends_on:
       mariadb:
         condition: service_healthy
@@ -97,6 +107,8 @@ volumes:
   mariadb_data:
     driver: local
   backend_uploads:
+    driver: local
+  backend_data:
     driver: local
 
 networks:

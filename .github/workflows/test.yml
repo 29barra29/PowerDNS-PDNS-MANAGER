@@ -40,7 +40,9 @@ jobs:
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
+          # Aus dem voll gepinnten Lockfile installieren -> CI testet exakt die Versionen,
+          # die auch im Docker-Image landen (verhindert "geht in CI, bricht in Prod").
+          pip install -r requirements.lock
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run tests

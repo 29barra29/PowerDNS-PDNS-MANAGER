@@ -7,7 +7,7 @@
 ```bash
 # 1. Repository klonen
 git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
-cd dns-manager
+cd PowerDNS-PDNS-MANAGER
 
 # 2. Setup-Assistent starten
 chmod +x setup.sh
@@ -23,7 +23,7 @@ docker compose up -d
 ### Option 2: One-Liner Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/29barra29/PowerDNS-PDNS-MANAGER/main/install.sh | bash
+curl -sSLO https://raw.githubusercontent.com/29barra29/PowerDNS-PDNS-MANAGER/main/install.sh && bash install.sh
 ```
 
 ---
@@ -41,7 +41,7 @@ curl -sSL https://raw.githubusercontent.com/29barra29/PowerDNS-PDNS-MANAGER/main
 
 ```bash
 git clone https://github.com/29barra29/PowerDNS-PDNS-MANAGER.git
-cd dns-manager
+cd PowerDNS-PDNS-MANAGER
 ```
 
 ### 2. Umgebung konfigurieren
@@ -94,7 +94,7 @@ docker compose up -d
 ### Minimal (Pflicht)
 - [ ] Admin-Passwort nach erstem Login geändert
 - [ ] `.env` ist nur für den eigenen User lesbar (`chmod 600 .env`)
-- [ ] `JWT_SECRET_KEY` ist in der `.env` gesetzt (sonst Logout bei jedem Restart)
+- [ ] `JWT_SECRET_KEY` ist in der `.env` gesetzt (sonst erzeugt das Backend einen Schlüssel im Volume `backend_data`; für Produktion besser selbst setzen)
 - [ ] Firewall konfiguriert / Port 5380 nicht öffentlich
 
 ### Empfohlen
@@ -127,6 +127,15 @@ server {
     }
 }
 ```
+
+> **Wichtig hinter jedem Reverse-Proxy:** In der `.env` `TRUST_PROXY_HEADERS=true` setzen
+> (und bei einem zusätzlichen Proxy davor, z. B. Cloudflare, `TRUSTED_PROXY_HOPS=2`), sonst
+> sieht das Backend für alle Nutzer nur die Proxy-IP: 25 Fehlversuche von irgendjemandem
+> sperren dann 15 Minuten lang **jeden** Login. Gleichzeitig Port 5380 nicht öffentlich
+> lassen, am einfachsten in der `compose.yaml` mit `"127.0.0.1:5380:8000"` binden – eine
+> Host-Firewall greift bei Docker-Ports nicht. Der Proxy muss den `Host`-Header durchreichen
+> (`proxy_set_header Host $host`, bei Traefik/Caddy Standard), sonst lehnt der CSRF-Schutz
+> zustandsändernde Anfragen ab; für abweichende Hostnamen `ALLOWED_ORIGINS` setzen.
 
 ### Traefik
 

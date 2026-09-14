@@ -55,6 +55,43 @@ def generate_webhook_secret() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
+    # is_global deckt zusaetzlich CGNAT (100.64/10), NAT64 (64:ff9b::/96) und aehnliche
+    # Bereiche ab, die von is_private/is_reserved nicht erfasst werden.
+    return (
+        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
+        or ip.is_reserved or ip.is_unspecified or not ip.is_global
+    )
+
+
+def _resolve_checked(url: str) -> tuple[str, list[str], bool]:
+    """Liefert (host als A-Label, [geprüfte IPs], host_is_literal) oder wirft ValueError."""
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").strip("[]")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    candidates: list[str] = []
+    is_literal = False
+    try:
+        candidates.append(str(ipaddress.ip_address(host)))
+        is_literal = True
+    except ValueError:
+        try:
+            host = host.encode("idna").decode("ascii")  # Umlaut-Domains -> A-Label (Host-Header/SNI)
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError(f"Ungültiger Webhook-Host: {host}") from exc
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            for info in infos:
+                if info[4][0] not in candidates:
+                    candidates.append(info[4][0])
+        except socket.gaierror as exc:
+            raise ValueError(f"Webhook-Host konnte nicht aufgelöst werden: {host}") from exc
+    for raw_ip in candidates:
+        if _is_blocked_ip(ipaddress.ip_address(raw_ip)):
+            raise ValueError(PRIVATE_WEBHOOK_ERROR)
+    return host, candidates, is_literal
+
+
 def validate_webhook_url(url: str) -> str:
     """Validiert Webhook-URL und blockt standardmäßig private/internal Ziele."""
     value = (url or "").strip()
@@ -63,23 +100,37 @@ def validate_webhook_url(url: str) -> str:
         raise ValueError("URL muss mit http:// oder https:// beginnen")
     if settings.WEBHOOK_ALLOW_PRIVATE_URLS:
         return value
-
-    host = parsed.hostname.strip("[]")
-    candidates: set[str] = set()
-    try:
-        candidates.add(str(ipaddress.ip_address(host)))
-    except ValueError:
-        try:
-            infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-            candidates.update(info[4][0] for info in infos)
-        except socket.gaierror as exc:
-            raise ValueError(f"Webhook-Host konnte nicht aufgelöst werden: {host}") from exc
-
-    for raw_ip in candidates:
-        ip = ipaddress.ip_address(raw_ip)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-            raise ValueError(PRIVATE_WEBHOOK_ERROR)
+    _resolve_checked(value)
     return value
+
+
+def pin_webhook_targets(url: str) -> list[tuple[str, dict, dict]]:
+    """Baut Ziel-URLs mit den GEPRUEFTEN IPs statt des Hostnamens (eine pro Adresse).
+
+    Verhindert DNS-Rebinding: Ohne Pinning koennte der Angreifer-DNS bei der Pruefung
+    eine oeffentliche IP und beim eigentlichen Connect 127.0.0.1 liefern. Host-Header
+    und SNI bleiben auf dem Original-Hostnamen, damit TLS und virtuelle Hosts passen;
+    Basic-Auth-Userinfo der URL bleibt erhalten. IP-Literale brauchen kein Pinning.
+    Liefert [(url, extra_headers, httpx_extensions), ...] in Aufloesungs-Reihenfolge.
+    """
+    if settings.WEBHOOK_ALLOW_PRIVATE_URLS:
+        return [(url, {}, {})]
+    parsed = urlparse(url)
+    host, ips, is_literal = _resolve_checked(url)
+    if is_literal:
+        return [(url, {}, {})]
+    userinfo = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
+    host_header = host if not parsed.port else f"{host}:{parsed.port}"
+    extensions = {"sni_hostname": host} if parsed.scheme == "https" else {}
+    out: list[tuple[str, dict, dict]] = []
+    for ip in ips:
+        is_v6 = isinstance(ipaddress.ip_address(ip), ipaddress.IPv6Address)
+        netloc_ip = f"[{ip}]" if is_v6 else ip
+        if parsed.port:
+            netloc_ip += f":{parsed.port}"
+        pinned = parsed._replace(netloc=userinfo + netloc_ip).geturl()
+        out.append((pinned, {"Host": host_header}, extensions))
+    return out
 
 
 def _build_payload(event: str, data: Dict[str, Any], actor_user_id: int) -> bytes:
@@ -103,17 +154,32 @@ async def _post_one(wh: Webhook, event: str, data: Dict[str, Any], actor_user_id
     raw = _build_payload(event, data, actor_user_id)
     sig = hmac.new(wh.secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                target_url,
-                content=raw,
-                headers={
-                    "Content-Type": "application/json; charset=utf-8",
-                    f"{SIG_HEADER}": f"sha256={sig}",
-                },
-            )
-            if r.status_code >= 400:
-                logger.warning("Webhook %s -> %s %s", wh.id, r.status_code, (r.text or "")[:200])
+        targets = await asyncio.to_thread(pin_webhook_targets, target_url)
+    except ValueError as e:
+        logger.warning("Webhook %s blocked: %s", wh.id, e)
+        return
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False) as client:
+            for idx, (pinned_url, extra_headers, extensions) in enumerate(targets):
+                try:
+                    r = await client.post(
+                        pinned_url,
+                        content=raw,
+                        headers={
+                            "Content-Type": "application/json; charset=utf-8",
+                            f"{SIG_HEADER}": f"sha256={sig}",
+                            **extra_headers,
+                        },
+                        extensions=extensions,
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    # Naechste aufgeloeste Adresse probieren (Happy-Eyeballs-Ersatz)
+                    if idx + 1 < len(targets):
+                        continue
+                    raise
+                if r.status_code >= 400:
+                    logger.warning("Webhook %s -> %s %s", wh.id, r.status_code, (r.text or "")[:200])
+                break
     except Exception as e:
         logger.warning("Webhook %s failed: %s", wh.id, e)
 

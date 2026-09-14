@@ -9,8 +9,9 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, Request
+from urllib.parse import urlparse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -68,20 +69,43 @@ async def lifespan(app: FastAPI):
     async with async_session() as session:
         await create_initial_admin(session)
         await session.commit()
+
+    # Ab 2.4.1 werden Reset-Links nur aus der konfigurierten Basis-URL gebaut – ohne sie
+    # gehen keine Passwort-vergessen-Mails raus. Beim Start deutlich darauf hinweisen.
+    try:
+        from sqlalchemy import select as _select
+        from app.models.models import SystemSetting as _SystemSetting
+        async with async_session() as session:
+            _base = await session.scalar(_select(_SystemSetting.value).where(_SystemSetting.key == "app_base_url"))
+        if not (_base or "").strip() and not (settings.WEBAUTHN_ORIGIN or "").strip():
+            logger.warning(
+                "Keine App-Basis-URL konfiguriert: Passwort-Reset-Mails werden NICHT versendet. "
+                "Bitte unter Einstellungen -> Profil -> Oeffentliche Basis-URL eintragen "
+                "(oder WEBAUTHN_ORIGIN in der .env setzen)."
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("app_base_url-Check beim Start uebersprungen: %s", exc)
     
     # Load server configs from database
-    from sqlalchemy import select
+    from sqlalchemy import select, func
+    from sqlalchemy.exc import IntegrityError
     from app.models.models import ServerConfig
     
     async with async_session() as session:
         result = await session.execute(select(ServerConfig).where(ServerConfig.is_active == True))
         db_configs = result.scalars().all()
+        total_rows = await session.scalar(select(func.count(ServerConfig.id))) or 0
         
         if db_configs:
             # DB has configs -> use them (overrides env)
             pdns_manager.load_from_db_configs(db_configs)
+        elif total_rows:
+            # Es gibt Server in der DB, aber alle sind deaktiviert: KEIN erneuter Env-Import,
+            # sonst kollidiert der Name mit der deaktivierten Zeile (UNIQUE) und der Start
+            # bricht in einer Restart-Schleife ab.
+            logger.info("Alle PowerDNS-Server in der DB sind deaktiviert – kein Import aus PDNS_SERVERS.")
         else:
-            # No DB configs -> check if env has servers, and save them to DB
+            # Leere Tabelle -> Env-Server einmalig in die DB uebernehmen
             env_servers = settings.get_pdns_servers()
             if env_servers:
                 logger.info("Importing server configs from environment to database...")
@@ -96,8 +120,12 @@ async def lifespan(app: FastAPI):
                         allow_writes=True,
                     )
                     session.add(new_cfg)
-                await session.commit()
-                logger.info(f"Saved {len(env_servers)} server configs to database")
+                try:
+                    await session.commit()
+                    logger.info(f"Saved {len(env_servers)} server configs to database")
+                except IntegrityError as exc:
+                    await session.rollback()
+                    logger.warning("PDNS_SERVERS-Import uebersprungen (Name existiert bereits): %s", exc)
     
     # Log configured servers
     server_names = pdns_manager.list_servers()
@@ -141,6 +169,46 @@ if _cors_origins:
     )
 
 
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _is_same_site_request(request: Request) -> bool:
+    """Prueft bei zustandsaendernden Cookie-Requests, dass sie von der eigenen Seite kommen.
+
+    Cookie-Auth allein schuetzt nicht vor Cross-Site-Formularen (CSRF), besonders wenn
+    AUTH_COOKIE_SAMESITE=none gesetzt ist. Browser schicken bei Cross-Site-POSTs immer
+    ``Origin`` und (moderne) ``Sec-Fetch-Site``; beides wird hier geprueft. Requests ganz
+    ohne diese Header stammen nicht aus einem Browser (curl, Skripte) und sind kein CSRF-Vektor.
+    """
+    sfs = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if sfs in ("same-origin", "none"):
+        return True
+    origin = (request.headers.get("origin") or "").strip().rstrip("/")
+    if not origin:
+        return not sfs  # sfs=cross-site/same-site ohne Origin -> ablehnen; gar nichts -> kein Browser
+    origin_host = (urlparse(origin).netloc or "").lower()
+    if origin_host and origin_host == (request.headers.get("host") or "").strip().lower():
+        return True
+    if settings.TRUST_PROXY_HEADERS:
+        fwd_host = ", ".join(request.headers.getlist("x-forwarded-host")).split(",")[-1].strip().lower()
+        if fwd_host and origin_host == fwd_host:
+            return True
+    allowed = {o.strip().rstrip("/").lower() for o in settings.get_allowed_origins()}
+    return origin.lower() in allowed
+
+
+@app.middleware("http")
+async def _csrf_guard(request: Request, call_next):
+    if request.method not in _CSRF_SAFE_METHODS and request.url.path.startswith("/api/"):
+        auth = (request.headers.get("authorization") or "").lower()
+        if not auth.startswith("bearer ") and not _is_same_site_request(request):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Cross-Site-Anfrage abgelehnt (CSRF-Schutz)"},
+            )
+    return await call_next(request)
+
+
 # Security-Header für *alle* Antworten. Hilft gegen Clickjacking, MIME-Sniffing,
 # unkontrolliertes Browser-Feature-Loading und versehentliche Referer-Lecks.
 @app.middleware("http")
@@ -156,6 +224,11 @@ async def _security_headers(request: Request, call_next):
         "Permissions-Policy",
         "interest-cohort=(), camera=(), microphone=(), geolocation=()",
     )
+    # Content-Security-Policy (gegen XSS/Injection). Konfigurierbar; leer = aus.
+    # Swagger-UI/ReDoc (nur bei DOCS_ENABLED) laden ihre Assets von einem CDN und nutzen
+    # Inline-Skripte – dort wuerde die strikte CSP die Seite leer lassen.
+    if settings.CONTENT_SECURITY_POLICY and not request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+        response.headers.setdefault("Content-Security-Policy", settings.CONTENT_SECURITY_POLICY)
     # Cross-Origin-Hardening (für die SPA + API gleichermaßen sicher).
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
@@ -219,12 +292,30 @@ app.include_router(acme.router, prefix=API_PREFIX)
 # ========================
 STATIC_DIR = Path(__file__).parent / "static_new"
 
+
+class _NoDotfiles(StaticFiles):
+    """StaticFiles, das Dotfiles/-Ordner (.jwt_secret, .env, .git ...) nie ausliefert."""
+
+    async def check_config(self) -> None:
+        # Das Uploads-Volume kann beim allerersten Start noch fehlen: dann 404 statt 500.
+        try:
+            await super().check_config()
+        except RuntimeError as exc:
+            logger.warning("Uploads-Verzeichnis fehlt noch (%s) – /uploads liefert vorerst 404", exc)
+            self.config_checked = True
+
+    async def get_response(self, path: str, scope):
+        if any(seg.startswith(".") for seg in path.replace("\\", "/").split("/") if seg):
+            return PlainTextResponse("Not Found", status_code=404)
+        return await super().get_response(path, scope)
+
+
 # Serve static assets (JS, CSS, images). Assets are optional at import time so a
 # broken build does not crash API-only diagnostics; the SPA route explains it.
 if (STATIC_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 if STATIC_DIR.exists():
-    app.mount("/uploads", StaticFiles(directory=str(STATIC_DIR / "uploads"), check_dir=False), name="uploads")
+    app.mount("/uploads", _NoDotfiles(directory=str(STATIC_DIR / "uploads"), check_dir=False), name="uploads")
 
 
 @app.get("/vite.svg", include_in_schema=False)

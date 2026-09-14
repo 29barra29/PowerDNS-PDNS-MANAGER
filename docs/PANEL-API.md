@@ -10,7 +10,7 @@ Drei Wege, je nach Anwendungsfall:
 
 ### 1. Browser-Session (Cookie)
 
-Nach dem Login setzt der Server ein HttpOnly-Cookie (`dnsmgr_token`). Das brauchen **nur** SPA/Browser; Skripte können das nicht sinnvoll nutzen.
+Nach dem Login setzt der Server ein HttpOnly-Cookie (`dns_manager_token`). Das brauchen **nur** SPA/Browser; Skripte können das nicht sinnvoll nutzen.
 
 ### 2. Panel-API-Token (empfohlen für Automation)
 
@@ -18,7 +18,7 @@ Anlegen unter **Einstellungen → API & Sicherheit → Panel-Token**.
 
 - Header: `Authorization: Bearer <vollständiger-Token-String>`
 - Token beginnt mit `dnsmgr_usr_` und wird **nur einmal** bei der Erstellung angezeigt (danach nur noch ein Kurz-Präfix in der Liste).
-- **Gleiche Rechte** wie der erstellende Benutzer: alle Zonen/Records, die seine Rolle + Zonen-ACL erlauben (analog zum eingeloggten Panel).
+- **Gleiche Rechte** wie der erstellende Benutzer: alle Zonen/Records, die seine Rolle + Zonen-ACL erlauben (analog zum eingeloggten Panel). Ausnahme: Passwort, E-Mail, 2FA, Passkeys, Panel-Tokens und die Benutzerverwaltung lassen sich nur aus einer Browser-Session ändern (HTTP 403 per Token).
 - Letzte Verwendung (Zeit + IP) ist im Panel sichtbar; Revoke-Button entzieht den Token sofort.
 
 ### 3. ACME-Token (nur Zertifikate / DNS-01)
@@ -81,20 +81,20 @@ curl -sS -H "$H_AUTH" "$DNSMGR/api/v1/zones/<server-name>"
 # Records einer Zone (zone_id ist der Domainname mit Trailing-Dot, z. B. example.com.)
 curl -sS -H "$H_AUTH" "$DNSMGR/api/v1/records/<server-name>/example.com."
 
-# Record anlegen / aktualisieren
+# Record anlegen / aktualisieren (Werte werden in ein bestehendes RRset gemerged)
 curl -sS -H "$H_AUTH" -H "Content-Type: application/json" \
   -X POST "$DNSMGR/api/v1/records/<server-name>/example.com." \
   -d '{
     "name": "www.example.com.",
     "type": "A",
-    "content": "203.0.113.10",
-    "ttl": 300
+    "ttl": 300,
+    "records": [{ "content": "203.0.113.10", "disabled": false }]
   }'
 
-# Record löschen
+# Einzelnen Wert aus einem RRset löschen (ohne "content": komplettes RRset)
 curl -sS -H "$H_AUTH" -H "Content-Type: application/json" \
   -X DELETE "$DNSMGR/api/v1/records/<server-name>/example.com./delete" \
-  -d '{ "name": "www.example.com.", "type": "A" }'
+  -d '{ "name": "www.example.com.", "type": "A", "content": "203.0.113.10" }'
 
 # DNSSEC für eine Zone aktivieren
 curl -sS -H "$H_AUTH" -X POST "$DNSMGR/api/v1/dnssec/<server-name>/example.com./enable"
@@ -102,17 +102,14 @@ curl -sS -H "$H_AUTH" -X POST "$DNSMGR/api/v1/dnssec/<server-name>/example.com./
 
 ### Multi-Server-Verhalten
 
-Wenn mehrere PowerDNS-Server `Speichern: Ja` (`allow_writes=true`) haben **und** dieselbe Zone führen, schreibt der PDNS Manager **automatisch auf alle**. Das gilt für `POST`, `PUT`, `DELETE` und `bulk` von Records sowie für DNSSEC-Operationen. Das Response-JSON enthält dann `details` mit Pro-Server-Status (`ok` / `skipped` / `error`):
+Wenn mehrere PowerDNS-Server `Speichern: Ja` (`allow_writes=true`) haben **und** dieselbe Zone führen, schreibt der PDNS Manager **automatisch auf alle**. Das gilt für `POST`, `PUT`, `DELETE` und `bulk` von Records sowie für das Anlegen und Importieren von Zonen. DNSSEC-Operationen laufen nur gegen den in der URL genannten Server. Das Response-JSON enthält `details` mit einem Status-String pro Server (`saved` / `deleted` / `skipped (zone not present)` / `error: …`):
 
 ```json
 {
-  "message": "Record updated",
+  "message": "Record 'www.example.com.' (A) created/updated in zone 'example.com.'",
   "details": {
-    "targets": ["pdns-eu", "pdns-us"],
-    "results": {
-      "pdns-eu": { "status": "ok" },
-      "pdns-us": { "status": "ok" }
-    }
+    "pdns-eu": "saved",
+    "pdns-us": "error: Connection refused"
   }
 }
 ```
@@ -149,17 +146,18 @@ Komplette Liste mit Body-Schemas im Browser unter `/docs` (mit `DOCS_ENABLED=tru
 
 ## Webhooks (eingehende Empfangs-Seite)
 
-PDNS Manager kann nach Änderungen an Zonen, Records, DNSSEC, ACME oder Audit-Events ein **POST**-Request an deinen Endpunkt schicken (konfigurierbar in **Einstellungen → API & Sicherheit → Webhooks**).
+PDNS Manager kann nach Änderungen an Records und nach Zonen-Importen ein **POST**-Request an deinen Endpunkt schicken (konfigurierbar in **Einstellungen → API & Sicherheit → Webhooks**). Events: `record.created`, `record.updated`, `record.deleted`, `record.bulk`, `zone.imported` (oder `*` für alle).
 
 - **Methode:** POST
 - **Body:** JSON, z. B.
   ```json
   {
-    "version": 1,
-    "event": "record.create",
-    "occurred_at": "2025-04-26T11:08:42Z",
+    "v": 1,
+    "event": "record.created",
+    "timestamp": "2026-09-14T11:08:42.123456+00:00",
+    "app": "PDNS Manager",
     "actor_user_id": 1,
-    "data": { "...": "..." }
+    "data": { "server": "pdns-eu", "zone": "example.com.", "name": "www.example.com.", "type": "A" }
   }
   ```
 - **Header:** `X-DNS-Manager-Signature: sha256=<hex>`
@@ -211,5 +209,5 @@ export function verify(rawBody, signatureHeader) {
 
 - **Token absichern:** Token nicht in Git, sondern in `~/.config/dnsmgr/token` o. ä. Beispiel-Skripte im Repo lesen `DNSMGR_URL` und `DNSMGR_TOKEN` aus Env oder `/etc/dnsmgr.env`.
 - **Idempotenz:** Records-`POST` ist als „upsert auf gleichem Name+Type“ gedacht – mehrfaches Anlegen ergibt also kein Duplikat. Trotzdem in deiner Pipeline auf `409` reagieren, falls eine Zone-Anlage mit demselben Namen kollidiert.
-- **Multi-Server beobachten:** im Response `details.results` prüfen. `status: error` einzelner Peers zeigt z. B. dass ein PowerDNS-Backend gerade nicht erreichbar ist – die anderen sind aber sauber durchgegangen.
+- **Multi-Server beobachten:** im Response `details` prüfen. Ein `error: …` einzelner Peers zeigt z. B. dass ein PowerDNS-Backend gerade nicht erreichbar ist – die anderen sind aber sauber durchgegangen.
 - **Rate-Limit:** Token-Auth ist nicht rate-limited. Login-Endpoints sind es (HTTP 429), das betrifft Skripte aber nur, wenn sie mit Username/Passwort gegen `/api/v1/auth/login` arbeiten – mach das nicht, nimm einen Panel-Token.

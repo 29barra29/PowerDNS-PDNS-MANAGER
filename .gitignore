@@ -54,3 +54,13 @@ Thumbs.db
 # Old static files (legacy)
 # ========================
 backend/app/static/
+
+# ========================
+# Backups aus setup.sh / update.sh / install.sh (enthalten Passwoerter bzw. DB-Dumps)
+# ========================
+.env.backup*
+*.env.backup-*
+backup_*.sql
+
+# Lokales Datenverzeichnis (JWT-Key-Datei bei Tests/Dev)
+backend/data/

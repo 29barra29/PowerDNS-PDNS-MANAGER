@@ -32,6 +32,9 @@ async def get_db():
             yield session
             await session.commit()
         except Exception:
+            # Rollback bei jedem Fehler (auch HTTPException): Handler, die erst mutieren und
+            # dann validieren, duerfen keine Teilzustaende hinterlassen. Fehler-Audit-Eintraege
+            # werden deshalb in einer EIGENEN Session geschrieben (write_audit_detached).
             await session.rollback()
             raise
         finally:

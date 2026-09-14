@@ -69,7 +69,8 @@ def get_relying_party(request: Request) -> tuple[str, str, list[str]]:
 
     - rp_id: ``WEBAUTHN_RP_ID`` falls gesetzt, sonst der Hostname der Origin (ohne Port).
     - rp_name: ``WEBAUTHN_RP_NAME`` falls gesetzt, sonst der App-Name.
-    - expected_origins: konfigurierte Origins + die Origin dieser Anfrage.
+    - expected_origins: konfigurierte Origins (WEBAUTHN_ORIGIN); die Origin der Anfrage
+      nur, wenn ihr Host exakt der rp_id entspricht.
     """
     origin = _origin_from_request(request)
     parsed = urlparse(origin)
@@ -81,7 +82,10 @@ def get_relying_party(request: Request) -> tuple[str, str, list[str]]:
     allowed: list[str] = []
     if settings.WEBAUTHN_ORIGIN:
         allowed.extend(o.strip().rstrip("/") for o in settings.WEBAUTHN_ORIGIN.split(",") if o.strip())
-    if origin and origin not in allowed:
+    # Die Origin der Anfrage wird NICHT blind akzeptiert (sonst waere die Origin-Pruefung
+    # wirkungslos). Ohne Konfiguration gilt sie nur, wenn ihr Host EXAKT der RP-ID
+    # entspricht – Subdomains einer als RP-ID gesetzten Parent-Domain also nicht.
+    if origin and origin not in allowed and host.lower() == rp_id.lower():
         allowed.append(origin)
     return rp_id, rp_name, allowed
 
@@ -139,7 +143,7 @@ def build_registration_options(request: Request, user, existing_creds: list) -> 
         attestation=AttestationConveyancePreference.NONE,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
         ),
         exclude_credentials=exclude,
         supported_pub_key_algs=[
@@ -162,7 +166,7 @@ def verify_registration(request: Request, credential: dict, challenge_b64: str) 
             expected_challenge=base64url_to_bytes(challenge_b64),
             expected_rp_id=rp_id,
             expected_origin=origins,
-            require_user_verification=False,
+            require_user_verification=True,
         )
     except Exception as exc:  # noqa: BLE001 - library wirft diverse Typen
         logger.warning("WebAuthn registration verification failed: %s", exc)
@@ -204,7 +208,7 @@ def build_authentication_options(request: Request, allow_creds: Optional[list] =
     options = generate_authentication_options(
         rp_id=rp_id,
         allow_credentials=allow,
-        user_verification=UserVerificationRequirement.PREFERRED,
+        user_verification=UserVerificationRequirement.REQUIRED,
     )
     return options_to_json(options), bytes_to_base64url(options.challenge)
 
@@ -223,7 +227,7 @@ def verify_authentication(request: Request, credential: dict, challenge_b64: str
             expected_origin=origins,
             credential_public_key=base64url_to_bytes(cred_row.public_key),
             credential_current_sign_count=int(cred_row.sign_count or 0),
-            require_user_verification=False,
+            require_user_verification=True,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("WebAuthn authentication verification failed: %s", exc)

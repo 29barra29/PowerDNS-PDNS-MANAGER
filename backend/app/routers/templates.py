@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.timeutil import iso_utc
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.models import ZoneTemplate, User
@@ -72,8 +73,8 @@ async def list_templates(
             "default_ttl": records_data.get("default_ttl", 3600),
             "records": records_data.get("records", []),
             "is_default": records_data.get("is_default", False),
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+            "created_at": iso_utc(t.created_at),
+            "updated_at": iso_utc(t.updated_at),
         })
     
     return {"templates": out}

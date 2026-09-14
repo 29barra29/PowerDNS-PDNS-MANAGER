@@ -15,7 +15,7 @@ Danke für dein Interesse am **PDNS Manager**! Kurz und technisch – passend zu
 
 ## Entwicklung (Überblick)
 
-* Stack: siehe [README – Technologie-Stack](README.md#-technologie-stack).
+* Stack: siehe [README – Technologie-Stack](README.md#stack).
 * Lokales Setup typischerweise: Repo klonen, `.env` aus `.env.example`, `docker compose` / Skripte wie im README.
 
 Fragen? Erst ein Issue – dann können andere mitlesen.

@@ -5,6 +5,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from starlette.concurrency import run_in_threadpool
+from app.core.timeutil import iso_utc
+from app.services.audit import write_audit
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from sqlalchemy import select
@@ -324,8 +327,8 @@ async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
         "is_online": is_online,
         "version": version,
         "zone_count": zone_count,
-        "created_at": cfg.created_at.isoformat() if cfg.created_at else None,
-        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+        "created_at": iso_utc(cfg.created_at),
+        "updated_at": iso_utc(cfg.updated_at),
     }
 
 
@@ -370,6 +373,8 @@ async def add_server_config(
     pdns_manager.add_server(cfg.name, cfg.url, cfg.api_key)
     
     logger.info(f"Server config '{data.name}' added by admin '{admin.username}'")
+    await write_audit(db, "SERVER_CREATE", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name,
+                      details={"url": cfg.url, "allow_writes": bool(cfg.allow_writes)})
     return {"message": f"Server '{data.name}' hinzugefuegt", "id": cfg.id}
 
 
@@ -386,6 +391,8 @@ async def update_server_config(
     if not cfg:
         raise HTTPException(status_code=404, detail="Server-Konfiguration nicht gefunden")
     
+    before = {"display_name": cfg.display_name, "url": cfg.url, "api_key": cfg.api_key,
+              "description": cfg.description, "is_active": cfg.is_active, "allow_writes": cfg.allow_writes}
     if data.display_name is not None:
         cfg.display_name = data.display_name
     if data.url is not None:
@@ -410,6 +417,10 @@ async def update_server_config(
         pdns_manager.remove_server(cfg.name)
     
     logger.info(f"Server config '{cfg.name}' updated by admin '{admin.username}'")
+    changed = {k: ({"from": before[k], "to": getattr(cfg, k)} if k != "api_key" else "changed")
+               for k in before if before[k] != getattr(cfg, k)}
+    await write_audit(db, "SERVER_UPDATE", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name,
+                      details={"changed": changed})
     return {"message": f"Server '{cfg.name}' aktualisiert"}
 
 
@@ -434,6 +445,7 @@ async def delete_server_config(
     await db.flush()
     
     logger.info(f"Server config '{server_name}' deleted by admin '{admin.username}'")
+    await write_audit(db, "SERVER_DELETE", "server_config", server_name, user_id=admin.id, server_name=server_name)
     return {"message": f"Server '{server_name}' geloescht"}
 
 
@@ -591,6 +603,8 @@ async def update_smtp_settings(
     
     save_data["enabled"] = str(save_data["enabled"]).lower()
     await save_smtp_settings(db, save_data)
+    await write_audit(db, "SMTP_UPDATE", "settings", "smtp", user_id=admin.id,
+                      details={k: save_data.get(k) for k in ("host", "port", "encryption", "username", "from_email", "enabled")})
     
     return {"message": "SMTP-Einstellungen gespeichert"}
 
@@ -629,7 +643,7 @@ async def send_test_email(
     subject, body_html, body_text = test_email(lang)
 
     try:
-        send_email(smtp_settings, data.to_email, subject, body_html, body_text)
+        await run_in_threadpool(send_email, smtp_settings, data.to_email, subject, body_html, body_text)
         msg_de = f"Test-E-Mail an {data.to_email} gesendet!"
         msg_en = f"Test email sent to {data.to_email}!"
         return {"success": True, "message": msg_de if lang == "de" else msg_en}
@@ -828,7 +842,7 @@ async def send_welcome_test_email(
     )
 
     try:
-        send_email(smtp_settings, data.to_email, subject, body_html, body_text)
+        await run_in_threadpool(send_email, smtp_settings, data.to_email, subject, body_html, body_text)
         return {"success": True, "message": f"Test-Welcome-Mail an {data.to_email} gesendet"}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -850,8 +864,8 @@ def _serialize_acme_token(t) -> dict:
         "name": t.name,
         "token_prefix": t.token_prefix,
         "allowed_zones": t.allowed_zones or [],
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        "created_at": iso_utc(t.created_at),
+        "last_used_at": iso_utc(t.last_used_at),
         "last_used_ip": t.last_used_ip,
         "is_active": bool(t.is_active),
     }
@@ -888,6 +902,8 @@ async def create_acme_token(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    await write_audit(db, "ACME_TOKEN_CREATE", "acme_token", row.name, user_id=admin.id,
+                      details={"token_id": row.id, "allowed_zones": list(getattr(row, "allowed_zones", None) or data.allowed_zones or [])})
     await db.commit()
     return {
         "token": _serialize_acme_token(row),
@@ -907,6 +923,8 @@ async def delete_acme_token(
     ok = await acme_service.delete_token(db, token_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Token nicht gefunden")
+    await write_audit(db, "ACME_TOKEN_DELETE", "acme_token", str(token_id), user_id=admin.id,
+                      details={"token_id": token_id})
     await db.commit()
     return {"message": "Token geloescht"}
 

@@ -29,6 +29,9 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.audit import write_audit_detached
+from app.core.timeutil import iso_utc
+from app.core.client_ip import get_client_ip
 from app.core.database import get_db
 from app.models.models import AcmeToken, AuditLog
 from app.services import acme as acme_service
@@ -48,11 +51,8 @@ class AcmeChallengeRequest(BaseModel):
 
 
 def _client_ip(request: Request) -> Optional[str]:
-    """X-Forwarded-For respektieren (DNS-Manager laeuft typisch hinter Reverse-Proxy)."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else None
+    """Echte Client-IP (X-Forwarded-For nur, wenn TRUST_PROXY_HEADERS aktiv)."""
+    return get_client_ip(request)
 
 
 async def _require_token(
@@ -95,6 +95,15 @@ async def _audit(
     """ACME-Operationen ins Audit-Log eintragen, damit man im UI sieht, welcher
     Token wann was gemacht hat. Das ``user_id`` Feld wird mit dem Ersteller des
     Tokens befuellt (kann None sein wenn Ersteller geloescht wurde)."""
+    if status_value != "success":
+        # Abgelehnte Zugriffe muessen sichtbar bleiben, obwohl der Request mit HTTPException
+        # endet und get_db die Session zurueckrollt -> eigene Session.
+        await write_audit_detached(
+            f"ACME_{action}", "acme", domain, user_id=token.created_by_id,
+            details={"token_id": token.id, "token_name": token.name, **(details or {})},
+            status=status_value, error_message=error,
+        )
+        return
     db.add(AuditLog(
         action=f"ACME_{action}",
         resource_type="acme",
@@ -181,5 +190,5 @@ async def acme_whoami(
         "ok": True,
         "token_name": token.name,
         "allowed_zones": token.allowed_zones or [],
-        "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+        "last_used_at": iso_utc(token.last_used_at),
     }

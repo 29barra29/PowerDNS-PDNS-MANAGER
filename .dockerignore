@@ -1,0 +1,21 @@
+# Build-Context schlank und sauber halten: Secrets, VCS, lokale Builds und Caches
+# gehoeren nicht ins Image (und wuerden "npm ci" bzw. den Frontend-Build ueberschreiben).
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+**/node_modules
+frontend/dist
+frontend/.vite
+backend/app/static_new
+backend/app/static
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backup_*.sql
+*.env.backup-*
+local-scripts
+docs
+*.md
+!README.md

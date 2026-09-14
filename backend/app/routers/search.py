@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from app.core.timeutil import iso_utc
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_admin_user
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
@@ -144,7 +145,7 @@ async def get_audit_log(
         "entries": [
             {
                 "id": log.id,
-                "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                "timestamp": iso_utc(log.timestamp),
                 "action": log.action,
                 "resource_type": log.resource_type,
                 "resource_name": log.resource_name,
@@ -202,7 +203,7 @@ async def export_audit_log_csv(
         w.writerow(
             [
                 log.id,
-                log.timestamp.isoformat() if log.timestamp else "",
+                (iso_utc(log.timestamp) or ""),
                 log.action,
                 log.resource_type,
                 (log.resource_name or "") if log.resource_name is not None else "",

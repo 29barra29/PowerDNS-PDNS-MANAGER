@@ -1,15 +1,16 @@
 """First-run setup endpoints (bewusst klein gehalten)."""
 import logging
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr, Field
 
+from app.core.timeutil import iso_utc
 from app.core.database import get_db
 from app.core.auth import hash_password, create_access_token, MIN_PASSWORD_LENGTH
-from app.models.models import User
+from app.models.models import User, SystemSetting
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ async def get_setup_status(db: AsyncSession = Depends(get_db)):
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_first_user(
     user_data: RegisterFirstUser,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Register the first user as admin (only works if no users exist).
@@ -105,7 +107,24 @@ async def register_first_user(
     await db.commit()
     await db.refresh(new_user)
 
-    access_token = create_access_token(data={"sub": str(new_user.id), "role": new_user.role})
+    # Oeffentliche Basis-URL fuer E-Mail-Links einmalig aus dem Setup-Aufruf uebernehmen
+    # (der Admin ruft das Setup selbst ueber seine echte Adresse auf). Danach nur noch
+    # ueber Einstellungen -> Allgemein aenderbar; Reset-Links werden NIE aus dem
+    # Host-Header beliebiger Anfragen gebaut.
+    try:
+        existing = await db.scalar(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
+        if not (existing or "").strip():
+            origin = (request.headers.get("origin") or "").strip().rstrip("/")
+            if not origin:
+                origin = str(request.base_url).rstrip("/")
+            if origin.startswith(("http://", "https://")):
+                db.add(SystemSetting(key="app_base_url", value=origin))
+                await db.commit()
+                logger.info("app_base_url beim Setup gesetzt: %s", origin)
+    except Exception as exc:  # noqa: BLE001 - Setup darf daran nicht scheitern
+        logger.warning("app_base_url konnte beim Setup nicht gesetzt werden: %s", exc)
+
+    access_token = create_access_token(data={"sub": str(new_user.id), "role": new_user.role}, user=new_user)
     user_dict = {
         "id": new_user.id,
         "username": new_user.username,
@@ -113,7 +132,7 @@ async def register_first_user(
         "display_name": new_user.display_name,
         "role": new_user.role,
         "zones": [],
-        "created_at": new_user.created_at.isoformat() if new_user.created_at else None,
+        "created_at": iso_utc(new_user.created_at),
         "last_login": None,
     }
 

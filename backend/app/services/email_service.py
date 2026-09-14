@@ -2,6 +2,7 @@
 import logging
 import json
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from sqlalchemy import select
@@ -84,6 +85,12 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
     if not smtp_settings.get("host"):
         raise RuntimeError("Kein SMTP-Server konfiguriert.")
     
+    # Genau EINE Adresse: smtplib wuerde sonst alle kommagetrennten Empfaenger aus
+    # dem To-Header bedienen (Mail-Relay ueber fremde Adressen).
+    to_email = (to_email or "").strip()
+    if not to_email or to_email.count("@") != 1 or any(ch in to_email for ch in ",;<>\"' \t\r\n"):
+        raise RuntimeError("Ungueltige Empfaengeradresse.")
+
     msg = MIMEMultipart("alternative")
     msg["From"] = f"{smtp_settings.get('from_name', 'PDNS Manager')} <{smtp_settings['from_email']}>"
     msg["To"] = to_email
@@ -99,18 +106,18 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
     
     try:
         if encryption == "ssl":
-            server = smtplib.SMTP_SSL(host, port, timeout=10)
+            server = smtplib.SMTP_SSL(host, port, timeout=10, context=ssl.create_default_context())
         else:
             server = smtplib.SMTP(host, port, timeout=10)
             if encryption == "starttls":
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
         
         username = smtp_settings.get("username", "")
         password = smtp_settings.get("password", "")
         if username and password:
             server.login(username, password)
         
-        server.send_message(msg)
+        server.send_message(msg, to_addrs=[to_email])
         server.quit()
         
         logger.info(f"Email sent to {to_email}: {subject}")
@@ -171,7 +178,7 @@ async def save_welcome_email_settings(
     await db.commit()
 
 
-async def test_smtp_connection(smtp_settings: dict) -> dict:
+def _test_smtp_connection_sync(smtp_settings: dict):
     """Test SMTP connection without sending an email."""
     host = smtp_settings.get("host", "")
     port = int(smtp_settings.get("port", 587))
@@ -182,11 +189,11 @@ async def test_smtp_connection(smtp_settings: dict) -> dict:
     
     try:
         if encryption == "ssl":
-            server = smtplib.SMTP_SSL(host, port, timeout=10)
+            server = smtplib.SMTP_SSL(host, port, timeout=10, context=ssl.create_default_context())
         else:
             server = smtplib.SMTP(host, port, timeout=10)
             if encryption == "starttls":
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
         
         username = smtp_settings.get("username", "")
         password = smtp_settings.get("password", "")
@@ -199,3 +206,10 @@ async def test_smtp_connection(smtp_settings: dict) -> dict:
         return {"success": False, "error": "Anmeldung fehlgeschlagen – Benutzername oder Passwort falsch."}
     except Exception as e:
         return {"success": False, "error": f"Verbindung fehlgeschlagen: {str(e)}"}
+
+
+async def test_smtp_connection(smtp_settings: dict):
+    """Async-Wrapper: der blockierende SMTP-Verbindungstest laeuft im Threadpool,
+    damit er den Event-Loop (und damit alle anderen Requests) nicht anhaelt."""
+    import asyncio
+    return await asyncio.to_thread(_test_smtp_connection_sync, smtp_settings)

@@ -6,6 +6,7 @@ hinzufuegen: einfach unten einen weiteren Zweig ergaenzen und in
 ``SUPPORTED_LANGS`` aufnehmen.
 """
 
+import html
 from typing import Optional, Tuple
 
 SUPPORTED_LANGS = {"de", "en"}
@@ -30,7 +31,8 @@ def pick_language(preferred: Optional[str], app_default: Optional[str]) -> str:
 
 def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, str, str]:
     """Liefert ``(subject, body_html, body_text)`` fuer die Passwort-Reset-Mail."""
-    name = display_name or ""
+    name = html.escape(display_name or "")
+    safe_url = html.escape(reset_url, quote=True)
     if lang == "de":
         subject = "Passwort zuruecksetzen - PDNS Manager"
         body_html = (
@@ -38,7 +40,7 @@ def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, s
             f"<p>du hast eine Zuruecksetzung deines Passworts angefordert.</p>"
             f"<p>Klicke auf den folgenden Link, um ein neues Passwort zu setzen "
             f"(der Link ist 1 Stunde gueltig):</p>"
-            f'<p><a href="{reset_url}">{reset_url}</a></p>'
+            f'<p><a href="{safe_url}">{safe_url}</a></p>'
             f"<p>Falls du das nicht warst, kannst du diese E-Mail einfach ignorieren.</p>"
         )
         body_text = f"Passwort zuruecksetzen: {reset_url}"
@@ -51,7 +53,7 @@ def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, s
         f"<p>You requested a password reset.</p>"
         f"<p>Click the following link to set a new password "
         f"(the link is valid for 1 hour):</p>"
-        f'<p><a href="{reset_url}">{reset_url}</a></p>'
+        f'<p><a href="{safe_url}">{safe_url}</a></p>'
         f"<p>If this wasn't you, you can simply ignore this email.</p>"
     )
     body_text = f"Reset your password: {reset_url}"
@@ -209,17 +211,22 @@ def render_welcome_email(
     subject = subject_t.format_map(safe_values)
     body_text = body_t.format_map(safe_values)
 
+    # Fuer die HTML-Variante alle Platzhalter escapen: username/display_name/email
+    # sind vom Nutzer frei waehlbar und duerfen kein eigenes HTML in die Mail bringen.
+    html_values = _Safe({k: html.escape(str(v), quote=True) for k, v in values.items()})
+    body_html_src = body_t.format_map(html_values)
+
     # Plain-Text-Body in einen einfachen HTML-Block wickeln, falls der Admin
     # keinen <html>-Tag selbst geschrieben hat. So sehen Mails in Gmail/Outlook
     # ordentlich aus, ohne dass der Admin HTML lernen muss.
-    stripped = body_text.lstrip()
+    stripped = body_html_src.lstrip()
     if stripped.startswith("<") and ">" in stripped[:80]:
-        body_html = body_text
+        body_html = body_html_src
     else:
         # Zeilenumbrueche -> <br>; doppelte -> Absatz-Trenner
-        paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+        paragraphs = [p.strip() for p in body_html_src.split("\n\n") if p.strip()]
         body_html = "".join(
             "<p>" + p.replace("\n", "<br>") + "</p>" for p in paragraphs
-        ) or f"<p>{body_text}</p>"
+        ) or f"<p>{body_html_src}</p>"
 
     return subject, body_html, body_text

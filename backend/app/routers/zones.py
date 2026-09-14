@@ -3,6 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete as sql_delete
+from app.services.audit import write_audit_detached
 from app.core.database import get_db
 from app.core.auth import get_current_user, get_admin_user, assert_zone_access
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
@@ -24,6 +26,14 @@ async def _log_action(
     user_id: int = None,
 ):
     """Helper to create audit log entries (mit user_id)."""
+    if status != "success":
+        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
+        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
+        await write_audit_detached(
+            action, "zone", resource_name, user_id=user_id, details=details,
+            status=status, error_message=error_message, server_name=server_name,
+        )
+        return
     log = AuditLog(
         action=action,
         resource_type="zone",
@@ -207,8 +217,14 @@ async def update_zone(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update zone metadata (Auth + Zone-ACL)."""
+    """Update zone metadata (Auth + Zone-ACL; kind/masters/account nur Admin)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
+    # Replikationsart, Master-Liste und Account veraendern, wer die Zone kontrolliert
+    # (AXFR von fremden Mastern, Umgehung des Panel-Audits) – das bleibt Admins vorbehalten.
+    if current_user.role != "admin" and any(
+        getattr(zone_data, f) is not None for f in ("kind", "masters", "account")
+    ):
+        raise HTTPException(status_code=403, detail="kind, masters und account darf nur ein Admin aendern")
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
@@ -248,7 +264,40 @@ async def delete_zone(
     try:
         await client.delete_zone(zone_id)
 
-        await _log_action(db, "DELETE", zone_id, server_name, user_id=admin.id)
+        # Zonenrechte mit entfernen: sonst haette ein frueherer Nutzer bei einer spaeter neu
+        # angelegten Zone gleichen Namens sofort wieder Zugriff (Zombie-ACL).
+        zname = zone_id.strip().lower()
+        if not zname.endswith("."):
+            zname += "."
+        # Nur aufraeumen, wenn kein anderer aktiver Server die Zone noch fuehrt
+        # (Mixed-Setups: nicht jeder Server hostet jede Zone).
+        still_exists = False
+        for other in pdns_manager.list_servers():
+            if other == server_name:
+                continue
+            try:
+                await pdns_manager.get_client(other).get_zone(zone_id)
+                still_exists = True
+                break
+            except PowerDNSAPIError as exc:
+                # Nur ein echtes "nicht vorhanden" zaehlt; 5xx/Timeouts (Peer nicht erreichbar)
+                # -> Rechte lieber behalten.
+                if exc.status_code == 404 or "could not find domain" in (exc.detail or "").lower():
+                    continue
+                still_exists = True
+                break
+            except Exception:  # noqa: BLE001 - nicht erreichbar: lieber Rechte behalten
+                still_exists = True
+                break
+        removed = None
+        if not still_exists:
+            removed = await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.zone_name == zname))
+        await _log_action(
+            db, "DELETE", zone_id, server_name,
+            {"removed_zone_access_rows": int(getattr(removed, "rowcount", 0) or 0) if removed is not None else 0,
+             "zone_still_on_other_server": still_exists},
+            user_id=admin.id,
+        )
 
         return MessageResponse(
             message=f"Zone '{zone_id}' deleted successfully from '{server_name}'"
@@ -360,38 +409,40 @@ async def import_zone(
         )
 
     results = {}
-    created = False
+    payload = {
+        "name": import_data.name,
+        "kind": import_data.kind,
+        "nameservers": import_data.nameservers,
+        "zone": import_data.content,
+        "soa_edit_api": "DEFAULT",
+    }
 
+    # Auf JEDEM schreibbaren Server anlegen (wie create_zone): Server mit getrennten
+    # Datenbanken bekommen die Zone so wirklich; bei gemeinsamer Datenbank antwortet der
+    # zweite Server mit 409 (existiert bereits) -> "synced".
     for server_name in target_servers:
         try:
             client = pdns_manager.get_client(server_name)
-
-            if not created:
-                payload = {
-                    "name": import_data.name,
-                    "kind": import_data.kind,
-                    "nameservers": import_data.nameservers,
-                    "zone": import_data.content,
-                    "soa_edit_api": "DEFAULT",
-                }
-
+            try:
                 await client.create_zone(payload)
-                created = True
                 results[server_name] = "imported"
-
                 await _log_action(db, "IMPORT", import_data.name, server_name, {
                     "kind": import_data.kind,
                     "content_length": len(import_data.content),
                 }, user_id=admin.id)
-            else:
-                try:
-                    await client.rectify_zone(import_data.name)
-                except Exception:
-                    pass
-                results[server_name] = "synced"
-                await _log_action(db, "IMPORT", import_data.name, server_name, {
-                    "action": "synced (gemeinsame Datenbank)",
-                }, user_id=admin.id)
+            except PowerDNSAPIError as e:
+                if e.status_code == 409 or "already exists" in (e.detail or "").lower():
+                    results[server_name] = "synced"
+                    await _log_action(db, "IMPORT", import_data.name, server_name, {
+                        "action": "synced (Zone existiert bereits, z. B. gemeinsame Datenbank)",
+                    }, user_id=admin.id)
+                else:
+                    raise
+            try:
+                await client.rectify_zone(import_data.name)
+            except Exception as rexc:  # noqa: BLE001
+                logger.warning("rectify nach Import auf %s fehlgeschlagen: %s", server_name, rexc)
+                results[server_name] += " (rectify fehlgeschlagen)"
 
         except PowerDNSAPIError as e:
             results[server_name] = f"error: {e.detail}"
