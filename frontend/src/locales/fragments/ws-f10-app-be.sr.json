@@ -1,0 +1,9 @@
+{
+  "set": {
+    "audit.actions.SSO_SETTINGS_UPDATE": "SSO podešavanja izmenjena",
+    "audit.actions.SSO_SETTINGS_TEST": "SSO veza testirana",
+    "audit.actions.USER_SSO_LINK": "Nalog povezan sa SSO/LDAP",
+    "audit.actions.USER_CONVERT_LOCAL": "Pretvoreno u lokalni nalog"
+  },
+  "remove": []
+}
