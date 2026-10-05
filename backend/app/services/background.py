@@ -5,8 +5,11 @@ Ein Schalter fuer alles: ``settings.BACKGROUND_WORKERS_ENABLED`` (Default an; di
 und ``await stop_all()`` beim Herunterfahren.
 
 Aufgaben:
-- ``webhook_worker``: Startup-Reset unterbrochener Zustellungen, dann ``webhook_worker.start_worker()``
-  (der Worker verwaltet seine eigene Schleife; Status ueber ``webhook_worker.worker_state()``).
+- ``webhook_worker``: Startup-Reset unterbrochener Zustellungen (``in_progress`` -> ``failed``/``dead``), dann
+  ``webhook_worker.start_worker()``. Der Worker verwaltet seine eigene Schleife (Claim, Versand mit Backoff,
+  Stale-Reset, Housekeeping nach 30 Tagen); Status ueber ``webhook_worker.worker_state()``. Der Start-Task
+  endet direkt nach dem Start – ``state()`` meldet fuer ``webhook_worker`` deshalb den Zustand des Workers selbst
+  (``running``, ``last_run_at`` = letzter Schleifendurchlauf, ``last_error_at``).
 - ``audit_purge``: erster Lauf 5 min nach dem Start, danach stuendlich
   ``services.audit.purge_expired_audit_logs()`` (Aufbewahrungsfrist aus den Einstellungen; 0 = aus).
 
@@ -135,6 +138,7 @@ def state() -> dict:
 
             ws = webhook_worker.worker_state()
             tasks["webhook_worker"]["running"] = bool(ws.get("running"))
+            tasks["webhook_worker"]["last_run_at"] = ws.get("last_loop_at") or tasks["webhook_worker"]["last_run_at"]
             tasks["webhook_worker"]["last_error_at"] = ws.get("last_error_at") or tasks["webhook_worker"]["last_error_at"]
         except Exception:  # noqa: BLE001
             pass

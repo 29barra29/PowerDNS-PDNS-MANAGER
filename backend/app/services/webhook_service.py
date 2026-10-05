@@ -20,7 +20,7 @@ import socket
 from typing import List, Optional
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -169,7 +169,8 @@ def pin_webhook_targets(url: str) -> list[tuple[str, dict, dict]]:
     return out
 
 
-# Kurz-API fuer die Webhook-Routen (nur Verwaltung; F6-BE baut sie in Welle 1 aus)
+# Verwaltungs-Helfer der Webhook-Routen (routers/webhooks.py). Sie pruefen KEINE URL: der Router validiert sie
+# vorher mit ``await asyncio.to_thread(validate_webhook_url, url)`` (DNS-Aufloesung nie im Event-Loop, F6 5.6).
 async def list_webhooks(db: AsyncSession, user_id: int) -> List[Webhook]:
     r = await db.execute(
         select(Webhook)
@@ -179,56 +180,51 @@ async def list_webhooks(db: AsyncSession, user_id: int) -> List[Webhook]:
     return list(r.scalars().all())
 
 
+async def get_webhook(db: AsyncSession, user_id: int, wh_id: int) -> Optional[Webhook]:
+    """Webhook des Benutzers oder ``None`` (fremde IDs verhalten sich wie nicht vorhandene)."""
+    r = await db.execute(select(Webhook).where(Webhook.id == wh_id, Webhook.user_id == user_id))
+    return r.scalar_one_or_none()
+
+
+async def count_webhooks(db: AsyncSession, user_id: int) -> int:
+    r = await db.execute(select(func.count()).select_from(Webhook).where(Webhook.user_id == user_id))
+    return int(r.scalar() or 0)
+
+
 async def create_webhook(
-    db: AsyncSession, user_id: int, name: str, url: str, events: List[str]
+    db: AsyncSession,
+    user_id: int,
+    name: str,
+    url: str,
+    events: List[str],
+    *,
+    scope: str = "own",
+    is_active: bool = True,
 ) -> Webhook:
-    safe_url = validate_webhook_url(url)
+    """Legt den Webhook mit neuem Secret an. ``url`` muss bereits geprueft sein (``validate_webhook_url``)."""
     wh = Webhook(
         user_id=user_id,
         name=name[:100],
-        url=safe_url[:1024],
+        url=url[:1024],
         secret=generate_webhook_secret(),
-        events=events or ["*"],
+        events=list(events or ["*"]),
+        is_active=bool(is_active),
+        scope=scope or "own",
+        consecutive_failures=0,
     )
     db.add(wh)
     await db.flush()
     return wh
 
 
-async def update_webhook(
-    db: AsyncSession,
-    user_id: int,
-    wh_id: int,
-    *,
-    name: Optional[str] = None,
-    url: Optional[str] = None,
-    events: Optional[List[str]] = None,
-    is_active: Optional[bool] = None,
-    new_secret: bool = False,
-) -> Optional[Webhook]:
-    r = await db.execute(select(Webhook).where(Webhook.id == wh_id, Webhook.user_id == user_id))
-    wh = r.scalar_one_or_none()
-    if not wh:
-        return None
-    if name is not None:
-        wh.name = name[:100]
-    if url is not None:
-        wh.url = validate_webhook_url(url)[:1024]
-    if events is not None:
-        wh.events = events
-    if is_active is not None:
-        wh.is_active = is_active
-    if new_secret:
-        wh.secret = generate_webhook_secret()
-    await db.flush()
-    return wh
+async def delete_webhook(db: AsyncSession, user_id: int, wh_id: int) -> tuple[bool, int]:
+    """Loescht den Webhook samt seinen Zustellungen. Rueckgabe ``(gefunden, geloeschte_zustellungen)``."""
+    from app.services.webhook_outbox import delete_for_webhook
 
-
-async def delete_webhook(db: AsyncSession, user_id: int, wh_id: int) -> bool:
-    r = await db.execute(select(Webhook).where(Webhook.id == wh_id, Webhook.user_id == user_id))
-    wh = r.scalar_one_or_none()
+    wh = await get_webhook(db, user_id, wh_id)
     if not wh:
-        return False
+        return False, 0
+    n = await delete_for_webhook(db, wh.id)
     await db.delete(wh)
     await db.flush()
-    return True
+    return True, n

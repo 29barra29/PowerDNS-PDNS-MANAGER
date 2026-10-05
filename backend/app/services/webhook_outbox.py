@@ -15,8 +15,14 @@ Aufrufmuster in Routern (immer mit ``await``, nach dem Erfolgs-Audit, vor ``retu
 Fehler beim Einreihen brechen den Request nie: das Einreihen laeuft in einem SAVEPOINT, ein Fehler
 verwirft nur die Outbox-Zeilen (geloggt), Audit und fachliche Aenderung bleiben.
 
-Weitere Funktionen der Outbox (Test-Zustellung, Retry, Neu-Signieren, Abbrechen, Zaehler) ergaenzt
-WS-F6-BE in Welle 1.
+Verwaltung der Zustellungen (Router ``routers/webhooks.py``, F6 3.4–3.8): ``create_test_delivery``,
+``retry_delivery`` (``RetryNotAllowed`` -> 409), ``resign_pending`` (Secret-Rotation), ``cancel_pending``
+(Deaktivierung), ``delete_for_webhook``/``delete_for_user``, ``stats_for_user`` und ``queue_depth`` (F13).
+Alle Funktionen arbeiten in der Session des Aufrufers und committen nicht selbst.
+
+Statusmodell einer Zustellung: ``queued`` (wartet) -> ``in_progress`` (vom Worker geclaimt) -> ``succeeded`` |
+``failed`` (erneut eingeplant) | ``dead`` (endgueltig). ``cancelled`` setzt nur ``services.access_revocation``
+(Widerruf aller Zugaenge, [S9]) per direktem UPDATE fuer ``queued``-Zeilen; der Worker behandelt es als endgueltig.
 """
 from __future__ import annotations
 
@@ -25,7 +31,7 @@ from datetime import timezone
 from typing import Callable, Optional
 from uuid import uuid4
 
-from sqlalchemy import event as sa_event, or_, select
+from sqlalchemy import delete as sql_delete, event as sa_event, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.names import normalize_zone_name
@@ -39,6 +45,10 @@ from app.services.webhook_service import sign
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 6
+DELIVERY_STATUSES = ("queued", "in_progress", "succeeded", "failed", "dead", "cancelled")
+RETRYABLE_STATUSES = ("failed", "dead", "succeeded", "cancelled")
+TEST_EVENT = "webhook.test"
+TEST_MESSAGE = "Test-Zustellung aus PDNS Manager"
 _WAKEUP_KEY = "webhook_wakeup"
 _LISTENER_KEY = "webhook_wakeup_listener"
 
@@ -226,3 +236,143 @@ async def enqueue_event(
         _register_wakeup_after_commit(db)
         _notify_enqueue_observers(event, count)
     return count
+
+
+# --------------------------------------------------------------------------- Verwaltung (F6 3.4–3.8)
+class RetryNotAllowed(Exception):
+    """Manueller Retry nicht moeglich (Router -> 409 mit diesem Text)."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def secret_readable(wh: Webhook) -> bool:
+    """Secret vorhanden und entschluesselbar (F5: unlesbar = ``UnreadableSecret("")``)."""
+    return bool(wh.secret) and not is_unreadable(wh.secret)
+
+
+def url_readable(wh: Webhook) -> bool:
+    """Ziel-URL vorhanden und entschluesselbar [S10]."""
+    return bool(wh.url) and not is_unreadable(wh.url)
+
+
+async def create_test_delivery(db: AsyncSession, wh: Webhook, *, actor: Optional[User]) -> WebhookDelivery:
+    """Zeile fuer die synchrone Test-Zustellung (Ereignis ``webhook.test``, nur dieser Webhook).
+
+    Status ``in_progress`` mit ``attempts=1``/``max_attempts=1`` – der Worker holt sie nie ab; der Router sendet
+    selbst und wendet ``webhook_worker.apply_result`` an (Ergebnis ``succeeded`` oder ``dead``). Ist Secret oder
+    URL unlesbar, ist die Zeile sofort ``dead`` (``secret_unreadable``/``url_unreadable``) und es wird nichts
+    gesendet. Ignoriert Ereignisfilter, Ausloeser und ``is_active``. Nur ``flush``, kein Commit.
+    """
+    now = utcnow()
+    event_id, delivery_id = str(uuid4()), str(uuid4())
+    actor_id = getattr(actor, "id", None) if actor is not None else None
+    raw = build_payload(
+        event=TEST_EVENT, event_id=event_id, delivery_id=delivery_id, occurred_at=now.replace(tzinfo=timezone.utc),
+        actor_user_id=actor_id, actor_username=getattr(actor, "username", None) if actor is not None else None,
+        actor_via=get_auth_via(), zone=None, server=None, audit_log_id=None,
+        data={"webhook_id": wh.id, "webhook_name": wh.name, "message": TEST_MESSAGE},
+    )
+    row = _delivery_row(wh, event=TEST_EVENT, event_id=event_id, delivery_id=delivery_id, zone=None,
+                        audit_log_id=None, raw=raw, now=now)
+    row.max_attempts = 1
+    if row.status == "queued":
+        row.status, row.attempts, row.last_attempt_at = "in_progress", 1, now
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def retry_delivery(db: AsyncSession, wh: Webhook, d: WebhookDelivery, *,
+                         now=None) -> WebhookDelivery:
+    """Zustellung erneut einplanen (F6 3.8); wirft ``RetryNotAllowed`` mit deutschem Text.
+
+    - ``failed``: sofort faellig, Budget unveraendert.
+    - ``dead``/``succeeded``/``cancelled``: wieder ``queued`` mit genau einem weiteren Versuch
+      (``max_attempts = attempts + 1``), neu signiert mit dem aktuellen Secret – Body und Delivery-ID bleiben.
+    Der Worker wird nach dem Commit geweckt.
+    """
+    now = now or utcnow()
+    if not wh.is_active:
+        raise RetryNotAllowed("Webhook ist deaktiviert – bitte zuerst aktivieren")
+    if d.status in ("queued", "in_progress"):
+        raise RetryNotAllowed("Diese Zustellung ist bereits eingeplant oder wird gerade gesendet")
+    if d.status not in RETRYABLE_STATUSES:
+        raise RetryNotAllowed(f"Zustellung mit Status {d.status} kann nicht erneut gesendet werden")
+    if d.status == "failed":
+        d.next_attempt_at = now
+    else:
+        if not secret_readable(wh):
+            raise RetryNotAllowed("Webhook-Secret nicht lesbar – bitte zuerst „Secret erneuern“")
+        if not url_readable(wh):
+            raise RetryNotAllowed("Webhook-Ziel-URL nicht lesbar – bitte zuerst die URL neu eintragen")
+        d.status = "queued"
+        d.max_attempts = int(d.attempts or 0) + 1
+        d.next_attempt_at = now
+        d.delivered_at = None
+        d.signature = sign(wh.secret, (d.body or "").encode("ascii"))
+    await db.flush()
+    _register_wakeup_after_commit(db)
+    return d
+
+
+async def resign_pending(db: AsyncSession, wh: Webhook) -> int:
+    """Offene Zustellungen (``queued``/``failed``) mit dem aktuellen Secret neu signieren (Rotation)."""
+    if not secret_readable(wh):
+        return 0
+    rows = (await db.execute(
+        select(WebhookDelivery.id, WebhookDelivery.body)
+        .where(WebhookDelivery.webhook_id == wh.id, WebhookDelivery.status.in_(("queued", "failed")))
+    )).all()
+    for pk, body in rows:
+        await db.execute(
+            update(WebhookDelivery).where(WebhookDelivery.id == pk)
+            .values(signature=sign(wh.secret, (body or "").encode("ascii")))
+            .execution_options(synchronize_session=False)
+        )
+    return len(rows)
+
+
+async def cancel_pending(db: AsyncSession, webhook_id: int) -> int:
+    """Bei Deaktivierung: offene Zustellungen (``queued``/``failed``) verwerfen -> ``dead``/``webhook_inactive``."""
+    res = await db.execute(
+        update(WebhookDelivery)
+        .where(WebhookDelivery.webhook_id == webhook_id, WebhookDelivery.status.in_(("queued", "failed")))
+        .values(status="dead", last_error_code="webhook_inactive", last_error="Webhook deaktiviert")
+        .execution_options(synchronize_session=False)
+    )
+    return int(res.rowcount or 0)
+
+
+async def delete_for_webhook(db: AsyncSession, webhook_id: int) -> int:
+    res = await db.execute(sql_delete(WebhookDelivery).where(WebhookDelivery.webhook_id == webhook_id)
+                           .execution_options(synchronize_session=False))
+    return int(res.rowcount or 0)
+
+
+async def delete_for_user(db: AsyncSession, user_id: int) -> int:
+    res = await db.execute(sql_delete(WebhookDelivery).where(WebhookDelivery.user_id == user_id)
+                           .execution_options(synchronize_session=False))
+    return int(res.rowcount or 0)
+
+
+async def queue_depth(db: AsyncSession) -> dict[str, int]:
+    """Anzahl Zustellungen je Status (fuer Monitoring/F13)."""
+    rows = (await db.execute(
+        select(WebhookDelivery.status, func.count()).group_by(WebhookDelivery.status)
+    )).all()
+    return {str(st): int(n) for st, n in rows}
+
+
+async def stats_for_user(db: AsyncSession, user_id: int) -> dict[int, dict[str, int]]:
+    """``{webhook_id: {status: anzahl}}`` fuer alle Zustellungen eines Benutzers (eine Abfrage)."""
+    rows = (await db.execute(
+        select(WebhookDelivery.webhook_id, WebhookDelivery.status, func.count())
+        .where(WebhookDelivery.user_id == user_id)
+        .group_by(WebhookDelivery.webhook_id, WebhookDelivery.status)
+    )).all()
+    out: dict[int, dict[str, int]] = {}
+    for wid, st, n in rows:
+        out.setdefault(int(wid), {})[str(st)] = int(n)
+    return out
