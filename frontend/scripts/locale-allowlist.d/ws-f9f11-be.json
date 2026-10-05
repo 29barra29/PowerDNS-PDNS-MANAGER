@@ -1,0 +1,17 @@
+{
+  "reason": "WS-F9F11-BE: 'DynDNS' ist ein Fachbegriff (in allen Sprachen gleich); 'token' ist in bs/hr/sr als Lehnwort ueblich (wie audit.resourceTypes.acme_token)",
+  "global": [
+    "audit.resourceTypes.dyndns"
+  ],
+  "perLanguage": {
+    "bs": [
+      "audit.resourceTypes.dyndns_token"
+    ],
+    "hr": [
+      "audit.resourceTypes.dyndns_token"
+    ],
+    "sr": [
+      "audit.resourceTypes.dyndns_token"
+    ]
+  }
+}

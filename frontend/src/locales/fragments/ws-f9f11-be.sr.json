@@ -1,0 +1,16 @@
+{
+  "set": {
+    "audit.actions.DYNDNS_AUTH_FAILED": "Neuspela DynDNS prijava",
+    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS token kreiran",
+    "audit.actions.DYNDNS_TOKEN_UPDATE": "DynDNS token izmenjen",
+    "audit.actions.DYNDNS_TOKEN_ROTATE": "DynDNS tajna obnovljena",
+    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS token obrisan",
+    "audit.actions.DYNDNS_TOKEN_REVOKED": "DynDNS token blokiran (poslat u URL-u)",
+    "audit.actions.DYNDNS_SETTINGS_UPDATE": "DynDNS podešavanja izmenjena",
+    "audit.actions.PTR_SYNC": "Održavanje PTR zapisa",
+    "audit.actions.PTR_SETTINGS_UPDATE": "PTR podešavanja izmenjena",
+    "audit.resourceTypes.dyndns": "DynDNS",
+    "audit.resourceTypes.dyndns_token": "DynDNS token"
+  },
+  "remove": []
+}
