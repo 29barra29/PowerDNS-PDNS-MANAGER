@@ -1,8 +1,9 @@
 ### Geteilte Backend-Bausteine (W0-SHARED-BE, Grundlage)
 
-- **Mehrere PowerDNS-Server: keine verlorenen Peer-Werte mehr.** Aenderungen an einzelnen Records werden je
-  Server auf dessen eigenem Stand berechnet. Ein zusaetzlicher Wert, der nur auf einem zweiten Server mit
-  getrennter Datenbank existiert, bleibt beim Anlegen, Aendern oder Loeschen erhalten.
+- **Mehrere PowerDNS-Server:** Schreibvorgaenge laufen zuerst auf dem gewaehlten Server und erst nach dessen
+  Erfolg auf den weiteren schreibbaren Servern. Aenderungen an einzelnen Records werden dabei je Server auf
+  dessen eigenem Stand berechnet – ein Wert, der nur auf einem weiteren Server mit getrennter Datenbank
+  existiert, bleibt beim Anlegen, Aendern oder Loeschen erhalten.
 - **Zeitueberschreitung am Hauptserver:** Bricht die Verbindung zu PowerDNS nach dem Speichern ab, prueft das
   Panel den tatsaechlichen Stand nach. War die Aenderung angekommen, werden die weiteren Server normal
   geschrieben; ist der Stand unklar, meldet das Panel "unklar – bitte Zone neu laden" statt still einen Fehler.
