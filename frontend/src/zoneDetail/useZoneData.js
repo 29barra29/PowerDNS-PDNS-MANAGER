@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import api from '../api'
 import { normalizeRecordName } from '../lib/dnsName.js'
 import { fanoutSummary, formatFanoutErrors, formatFanoutWarnings } from '../lib/fanout.js'
+import { effectiveManagePtr, isPtrType, loadPtrConfig } from '../lib/ptrPreference.js'
+import { applyPtrMessages } from '../lib/ptrResults.js'
 import { rrsetValueCount, truncateValue } from '../lib/recordContent.js'
 
 // Daten und Handler der Zonenansicht (Plan B.14). Verhalten wie 2.4.1 (ZoneDetailPage), mit diesen Aenderungen:
@@ -13,6 +15,9 @@ import { rrsetValueCount, truncateValue } from '../lib/recordContent.js'
 //  - Peer-Fehler erscheinen rot als zoneDetail.fanoutPartialError, nicht geladene Server
 //    ('skipped (not loaded: ...)') als gelbe Warnung [D4].
 //  - resolveName normalisiert wie der Record-Dialog (lib/dnsName.js, F8-F05).
+//  - PTR-Pflege (F11 §2.5 Schritt 5, WS-F9F11-FE): handleDelete sendet bei A/AAAA immer manage_ptr (Auswahl aus
+//    lib/ptrPreference.js, sonst Admin-Default; ein manage_ptr in `extra` gewinnt), ergaenzt die Rueckfrage um
+//    ptr.deleteNote und wertet details.ptr aus (lib/ptrResults.js). GET /ptr/config laedt der Hook beim Oeffnen.
 // TTL (F01) und disabled (F07) setzt der Record-Dialog (RecordFormModal) aus dem Record der Anfrage.
 // Die Schnittstelle ist in zoneDetailContext.js beschrieben.
 export default function useZoneData(server, zoneId) {
@@ -45,6 +50,10 @@ export default function useZoneData(server, zoneId) {
     }, [])
     useEffect(() => {
         api.getServers().then((d) => setAllServers(d.servers || [])).catch(() => {})
+    }, [])
+    // Admin-Default der PTR-Pflege (Cache in lib/ptrPreference.js; Fehler bleiben still, Default "aus")
+    useEffect(() => {
+        loadPtrConfig(() => api.getPtrConfig())
     }, [])
 
     useEffect(() => {
@@ -174,29 +183,39 @@ export default function useZoneData(server, zoneId) {
 
     /**
      * Einen Wert loeschen (Papierkorb). extra: zusaetzliche Body-Felder (z. B. { manage_ptr }); name/type/content
-     * gewinnen immer. Liefert die Antwort oder null (abgebrochen/Fehler).
+     * gewinnen immer. Bei A/AAAA wird manage_ptr immer gesendet (extra.manage_ptr, sonst gemerkte Auswahl bzw.
+     * Admin-Default) und details.ptr ausgewertet. Liefert die Antwort oder null (abgebrochen/Fehler).
      */
     const handleDelete = useCallback(async (record, extra = null) => {
         const { name, type, content } = record
+        const body = { ...(extra || {}) }
+        if (isPtrType(type)) {
+            if (typeof body.manage_ptr !== 'boolean') body.manage_ptr = effectiveManagePtr(zoneKey)
+        } else {
+            delete body.manage_ptr
+        }
         // Letzter Wert des RRsets -> der ganze Eintrag verschwindet; die Rueckfrage sagt das ausdruecklich (F8-F09)
         const isLast = rrsetValueCount(records, name, type) <= 1
-        const question = t(isLast ? 'zoneDetail.deleteLastValueConfirm' : 'zoneDetail.deleteValueConfirm', {
+        let question = t(isLast ? 'zoneDetail.deleteLastValueConfirm' : 'zoneDetail.deleteValueConfirm', {
             value: truncateValue(content, 80),
             name: String(name || '').replace(/\.$/, ''),
             type,
         })
+        if (body.manage_ptr === true) question = `${question}\n\n${t('ptr.deleteNote')}`
         if (!window.confirm(question)) return null
         try {
-            const res = await api.deleteRecord(server, zoneId, { ...(extra || {}), name, type, content })
+            const res = await api.deleteRecord(server, zoneId, { ...body, name, type, content })
             reportFanout(res?.details)
             setSuccess(t('zoneDetail.recordDeleted', { type, name: name.replace(/\.$/, '') }))
+            // PTR-Ergebnis: entfernte PTRs an die Erfolgsmeldung, Probleme ins gelbe Banner (F11 §2.5 Schritt 4)
+            applyPtrMessages(t, res?.details, { setSuccess, setWarning })
             loadZone()
             return res
         } catch (err) {
             setError(err.message)
             return null
         }
-    }, [t, server, zoneId, records, reportFanout, loadZone])
+    }, [t, server, zoneId, zoneKey, records, reportFanout, loadZone])
 
     return {
         server, zoneId, zoneName, zoneKey,
