@@ -79,7 +79,12 @@ def test_idn_host_is_idna_encoded(monkeypatch):
 def test_admin_user_management_requires_browser_session():
     want = {("/auth/users", "POST"), ("/auth/users/{user_id}", "PUT"),
             ("/auth/users/{user_id}", "DELETE"), ("/auth/users/{user_id}/reset-password", "PUT"),
-            ("/auth/users/{user_id}/zones", "PUT")}
+            ("/auth/users/{user_id}/zones", "PUT"),
+            # F3 9.1 Nr. 21: Admin-Recovery-Aktionen nur per Browser-Session (nie per Panel-Token)
+            ("/auth/users/{user_id}/reset-2fa", "POST"),
+            ("/auth/users/{user_id}/webauthn-credentials", "DELETE"),
+            ("/auth/users/{user_id}/send-reset-link", "POST"),
+            ("/auth/users/{user_id}/revoke-access", "POST")}
 
     def _walk(routes):
         # FastAPI >= 0.14x haengt eingebundene Router als _IncludedRouter ein; die APIRoutes

@@ -4,16 +4,25 @@ Seit 3.0 liegen die Panel-Token-Verwaltung in ``routers/panel_tokens.py`` und di
 ``routers/webhooks.py`` (Pfade unveraendert). Der Login-Abschluss (Cookie, Audit ``LOGIN``, Metrik,
 Fehlzaehler) laeuft ueber ``services.login_session`` (Aliase ``_user_to_dict``, ``_set_session_cookie``,
 ``_complete_login``). Schreibende Handler nutzen ``DbWrite`` (Commit vor der Antwort, Bauplan B.7).
+
+Benutzerverwaltung (F2/F3): Zufallspasswort mit Einmalanzeige, erzwungener Passwortwechsel
+(``users.must_change_password``), Reset-Link per Mail (``services/password_reset_mail.py``), 2FA-/Passkey-Reset,
+Zugangs-Widerruf (``services/access_revocation.py``) und Schutzregeln (``services/user_guard.py``: E-Mail-Duplikat
+409, letzter aktiver Admin, externe Konten). Alle Admin-Mutationen verlangen eine Browser-Session
+(``get_admin_session_user``); ein Admin kann diese Aktionen nicht auf sein eigenes Konto anwenden (F3 E11).
 """
 import json
 import logging
+import time
 from datetime import date, datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Request, status, Form, BackgroundTasks
+from typing import Literal
+from fastapi import APIRouter, Body, HTTPException, Depends, Request, status, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator, EmailStr, BeforeValidator, AfterValidator
 from typing import Optional, Annotated
 from sqlalchemy import select, func, delete as sql_delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import metrics as prom
@@ -24,8 +33,13 @@ from app.core.client_ip import get_client_ip
 from app.core.login_rate_limit import is_login_rate_limited, record_failed_login
 import pyotp
 from starlette.concurrency import run_in_threadpool
-from app.services import login_session
+from app.core.secrets import is_unreadable
+from app.services import access_revocation, login_session, user_guard
+from app.services import panel_token as ptk
 from app.services.audit import write_audit
+from app.services.password_reset_mail import (
+    ADMIN_VALID_MINUTES, SELF_SERVICE_VALID_MINUTES, ResetMailError, reset_mail_available, send_password_reset_mail,
+)
 from app.core.auth import (
     get_session_user, get_admin_session_user, totp_verify_once, decode_password_reset_payload, password_version,
     hash_password, verify_password, create_access_token,
@@ -36,7 +50,9 @@ from app.core.auth import (
     generate_random_password, MIN_PASSWORD_LENGTH,
     TOKEN_TYPE_WEBAUTHN_REG, TOKEN_TYPE_WEBAUTHN_AUTH,
 )
-from app.models.models import User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook, WebhookDelivery
+from app.models.models import (
+    DynDnsToken, User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook, WebhookDelivery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +65,72 @@ RATE_LIMIT_DETAIL = "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später ern
 _user_to_dict = login_session.user_to_dict
 _set_session_cookie = login_session.set_session_cookie
 _complete_login = login_session.complete_login
+
+# Hook fuer F10 (F3 5.3): Passwort-Aktionen nur fuer lokale Konten (auth_source == "local")
+_ensure_local_account = user_guard.ensure_local_account
+
+# --- F5 5.13: 2FA-Geheimnis nicht entschluesselbar -------------------------------------------------------
+TOTP_UNREADABLE_LOGIN = (
+    "2FA-Geheimnis kann nicht entschlüsselt werden – bitte mit Passkey anmelden oder einen Admin bitten, "
+    "2FA zurückzusetzen."
+)
+TOTP_UNREADABLE_DISABLE = (
+    "2FA-Geheimnis kann nicht entschlüsselt werden – Deaktivierung nur über einen Admin (2FA zurücksetzen)."
+)
+
+
+def _totp_secret_state(user) -> Literal["ok", "missing", "unreadable"]:
+    """Zustand des aktiven TOTP-Geheimnisses: ``unreadable`` (Chiffretext nicht entschluesselbar), ``missing``, ``ok``.
+
+    Auf dem Rohattribut pruefen: ``UnreadableSecret`` verhaelt sich wie "" und waere nach ``strip()`` nicht
+    mehr erkennbar (F5 5.13, Plan [S4]).
+    """
+    raw = getattr(user, "totp_secret", None)
+    if is_unreadable(raw):
+        return "unreadable"
+    if not (raw or "").strip():
+        return "missing"
+    return "ok"
+
+
+# --- Texte der Benutzerverwaltung (F3) ------------------------------------------------------------------
+USER_NOT_FOUND = "Benutzer nicht gefunden"
+OWN_PASSWORD_DETAIL = "Das eigene Passwort bitte unter Einstellungen ändern"
+OWN_FORCE_CHANGE_DETAIL = "Für das eigene Konto kann kein Passwortwechsel erzwungen werden"
+OWN_DEACTIVATE_DETAIL = "Du kannst dich nicht selbst deaktivieren"
+OWN_DEMOTE_DETAIL = "Du kannst dir die Admin-Rolle nicht selbst entziehen"
+OWN_2FA_DETAIL = "Die eigene 2FA bitte unter Einstellungen → API & Sicherheit verwalten"
+OWN_PASSKEYS_DETAIL = "Die eigenen Passkeys bitte unter Einstellungen → API & Sicherheit verwalten"
+OWN_ACCESS_DETAIL = "Die eigenen Zugänge bitte unter Einstellungen → API & Sicherheit verwalten"
+CURRENT_PASSWORD_WRONG = "Aktuelles Passwort ist falsch"
+NEW_PASSWORD_SAME = "Das neue Passwort muss sich vom aktuellen unterscheiden"
+FORGOT_PASSWORD_REPLY = {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
+RESET_LINK_ERRORS = {
+    "smtp_disabled": (400, "E-Mail-Versand ist nicht eingerichtet (Einstellungen → SMTP)"),
+    "no_base_url": (400, "Keine öffentliche Basis-URL konfiguriert (Einstellungen → Profil → Öffentliche Basis-URL)"),
+    "no_email": (400, "Für diesen Benutzer ist keine E-Mail-Adresse hinterlegt"),
+    "send_failed": (502, "E-Mail konnte nicht gesendet werden – Details im Server-Log"),
+}
+
+# Reset-Link-Sperre je Ziel-Benutzer (In-Memory, Single-Worker – Rahmenentscheidung; F3 5.3)
+_RESET_LINK_LAST: dict[int, float] = {}
+_RESET_LINK_MIN_INTERVAL = 60.0
+
+
+def _reset_link_rate_limited(user_id: int) -> bool:
+    """True, wenn fuer diesen Benutzer innerhalb der letzten 60 s schon ein Link ging; sonst Zeitstempel setzen."""
+    now = time.monotonic()
+    for k in [k for k, t in _RESET_LINK_LAST.items() if now - t > _RESET_LINK_MIN_INTERVAL]:
+        _RESET_LINK_LAST.pop(k, None)
+    if user_id in _RESET_LINK_LAST:
+        return True
+    _RESET_LINK_LAST[user_id] = now
+    return False
+
+
+def _coded_error(status_code: int, detail: str, code: str) -> JSONResponse:
+    """Fehlerantwort ``{"detail": <Text>, "code": <Maschinencode>}`` (``detail`` bleibt ein String)."""
+    return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
 def _blank_to_none(v):
@@ -97,6 +179,8 @@ class UserCreate(BaseModel):
     email: OptionalEmail = None
     display_name: Optional[str] = Field(None, max_length=255)
     role: str = Field(default="user", pattern="^(admin|user)$")
+    # F3: Passwortwechsel beim ersten Login erzwingen (das UI setzt es standardmaessig)
+    must_change_password: bool = False
 
 
 class UserUpdate(BaseModel):
@@ -105,6 +189,29 @@ class UserUpdate(BaseModel):
     role: Optional[str] = Field(None, pattern="^(admin|user)$")
     is_active: Optional[bool] = None
     password: Optional[str] = Field(None, min_length=MIN_PASSWORD_LENGTH, max_length=128)
+    # F3: None = unveraendert (auch beim Setzen eines Passworts, API-Rueckwaertskompatibilitaet)
+    must_change_password: Optional[bool] = None
+    # [S9]: Panel-Tokens, DynDNS-Tokens und Webhooks des Benutzers widerrufen (access_revocation.revoke_all)
+    revoke_all_access: bool = False
+
+
+class AdminPasswordResetBody(BaseModel):
+    """Optionaler Body von ``PUT /auth/users/{id}/reset-password`` (fehlt er, gelten die Defaults, F3 E6)."""
+    must_change_password: bool = True
+    revoke_all_access: bool = False
+
+
+class RevokeAccessBody(BaseModel):
+    """``POST /auth/users/{id}/revoke-access``: was widerrufen bzw. zurueckgesetzt wird ([S9])."""
+    panel_tokens: bool = True
+    dyndns_tokens: bool = True
+    webhooks: bool = True
+    reset_2fa: bool = False
+    remove_passkeys: bool = False
+
+
+# Sprachen des Frontends (F8 3.3); leer = Default der Instanz
+PROFILE_LANGUAGES = frozenset({"de", "en", "sr", "hr", "bs", "hu"})
 
 
 class ProfileUpdate(BaseModel):
@@ -120,21 +227,36 @@ class ProfileUpdate(BaseModel):
     date_of_birth: Optional[str] = None  # ISO date string
     preferred_language: Optional[str] = Field(None, max_length=10)  # de, en
 
+    # F8 5.2: Leere Eingaben bleiben "" (nicht None), damit "mitgeschickt und leer" (= Feld loeschen) von
+    # "nicht mitgeschickt" (= unveraendert) unterscheidbar bleibt; update_profile wertet model_fields_set aus.
     @field_validator("phone")
     @classmethod
     def phone_at_least_one_digit(cls, v: Optional[str]) -> Optional[str]:
-        if not v or not v.strip():
-            return v or None
-        if not any(c.isdigit() for c in v):
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            return ""
+        if not any(c.isdigit() for c in s):
             raise ValueError("Telefon muss mindestens eine Ziffer enthalten")
-        return v.strip()
+        return s
 
     @field_validator("postal_code", "city", "country")
     @classmethod
     def strip_optional(cls, v: Optional[str]) -> Optional[str]:
-        if not v or not v.strip():
+        if v is None:
             return None
         return v.strip()
+
+    @field_validator("preferred_language")
+    @classmethod
+    def supported_language(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip().lower()
+        if s and s not in PROFILE_LANGUAGES:
+            raise ValueError("Nicht unterstützte Sprache")
+        return s
 
 
 class PasswordChange(BaseModel):
@@ -256,6 +378,14 @@ async def login(
     # --- 2FA (TOTP) ------------------------------------------------------------
     method = "password"
     if getattr(user, "totp_enabled", False):
+        if _totp_secret_state(user) == "unreadable":
+            # Passwort war korrekt -> kein Fehlzaehler; Recovery: Passkey oder Admin setzt 2FA zurueck (F5 5.13)
+            prom.record_login("password", "denied")
+            await write_audit(
+                db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+                details={"ip": client_ip, "reason": "totp_unreadable"},
+            )
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=TOTP_UNREADABLE_LOGIN)
         sec = (user.totp_secret or "").strip()
         if not sec:
             raise HTTPException(
@@ -313,6 +443,13 @@ async def login_two_factor(
     # Benutzer-Zaehler: dieselbe Sperre wie beim Passwort-Login (kein TOTP-Raten ueber /login/2fa)
     if is_login_rate_limited(client_ip, user.username):
         raise _rate_limited("totp")
+    if _totp_secret_state(user) == "unreadable":
+        prom.record_login("totp", "denied")
+        await write_audit(
+            db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+            details={"ip": client_ip, "reason": "totp_unreadable"},
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=TOTP_UNREADABLE_LOGIN)
     sec = (user.totp_secret or "").strip()
     if not sec or not totp_verify_once(user.id, sec, data.totp_code):
         record_failed_login(client_ip, user.username)
@@ -467,57 +604,25 @@ async def forgot_password(
         result = await db.execute(select(User).where(User.username == data.username))
         user = result.scalar_one_or_none()
 
-    # Immer gleiche Antwort (keine Hinweise ob Konto existiert)
-    if not user or not user.email:
-        return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
-
-    token = create_password_reset_token(user.id, user.hashed_password)
-    from app.models.models import SystemSetting
-    result = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
-    base_url_val = result.scalar_one_or_none()
-    base_url = (base_url_val or "").strip() if base_url_val else ""
-    if not base_url:
-        # Fallback NUR auf konfigurierte Werte, nie auf den Host-Header der Anfrage:
-        # sonst koennte ein Angreifer dem Opfer per "Passwort vergessen" einen Reset-Link
-        # auf seine eigene Domain zustellen lassen (Link-Poisoning -> Account-Uebernahme).
-        first_origin = (app_settings.WEBAUTHN_ORIGIN or "").split(",")[0].strip()
-        base_url = first_origin.rstrip("/") if first_origin else ""
-    if not base_url:
-        logger.error(
-            "Passwort-Reset nicht versendet: keine App-Basis-URL konfiguriert. "
-            "Bitte unter Einstellungen -> Profil -> Oeffentliche Basis-URL eintragen "
-            "(oder WEBAUTHN_ORIGIN in der .env setzen)."
-        )
-        return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
-    reset_url = f"{base_url.rstrip('/')}/reset-password?token={token}"
-
-    from app.services.email_service import get_smtp_settings, send_email
-    from app.services.email_templates import pick_language, password_reset
-    smtp = await get_smtp_settings(db)
-    if not smtp.get("enabled") or not smtp.get("host"):
-        logger.warning("SMTP not configured - cannot send password reset email")
-        return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
-
-    # Sprache: erst Nutzer-Preferenz, sonst App-Default (DEFAULT_LANGUAGE), sonst en.
-    lang = pick_language(user.preferred_language, app_settings.DEFAULT_LANGUAGE)
-    subject, body_html, body_text = password_reset(
-        lang,
-        user.display_name or user.username,
-        reset_url,
-    )
+    # Immer gleiche Antwort (keine Hinweise ob Konto existiert). Externe Konten (SSO/LDAP) und deaktivierte
+    # Konten bekommen keinen Link: ihr Passwort verwaltet der Identitaetsanbieter bzw. der Link waere wertlos.
+    if not user or not user.email or not user.is_active or not user_guard.is_local_account(user):
+        return dict(FORGOT_PASSWORD_REPLY)
     try:
-        await run_in_threadpool(send_email, smtp, user.email, subject, body_html, body_text)
-    except Exception as e:
-        logger.exception("Failed to send password reset email: %s", e)
-    return {"message": "Falls ein Konto mit dieser Angabe existiert, wurde eine E-Mail versendet."}
+        await send_password_reset_mail(db, user, valid_minutes=SELF_SERVICE_VALID_MINUTES, admin_initiated=False)
+    except ResetMailError as exc:
+        # Details stehen bereits im Log des Service; der Client erfaehrt nichts (keine Konto-Enumeration)
+        logger.warning("Passwort-Reset-Mail nicht versendet (user_id=%s): %s", user.id, exc.code)
+    return dict(FORGOT_PASSWORD_REPLY)
 
 
 @router.post("/reset-password")
 async def reset_password(
     db: DbWrite,
     data: ResetPasswordRequest,
+    request: Request,
 ):
-    """Set new password using the token from the email."""
+    """Set new password using the token from the email (Self-Service- und Admin-Reset-Link)."""
     payload = decode_password_reset_payload(data.token)
     if not payload:
         raise HTTPException(status_code=400, detail="Ungültiger oder abgelaufener Link. Bitte fordere einen neuen an.")
@@ -528,7 +633,7 @@ async def reset_password(
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or not user.is_active:
+    if not user or not user.is_active or not user_guard.is_local_account(user):
         raise HTTPException(status_code=400, detail="Ungültiger oder abgelaufener Link.")
     # Einmal-Nutzung: Link passt nur zum Passwort-Hash, der beim Anfordern galt.
     if payload.get("pwv") != password_version(user.hashed_password):
@@ -538,6 +643,8 @@ async def reset_password(
     user.must_change_password = False  # F3 3.2.9: der Nutzer hat selbst ein neues Passwort gesetzt
     await db.flush()
     logger.info(f"Password reset for user id={user_id}")
+    await write_audit(db, "PASSWORD_RESET", "user", user.username, user_id=user.id,
+                      details={"ip": get_client_ip(request) or "unknown", "via": "link"})
     return {"message": "Passwort wurde geändert. Du kannst dich jetzt anmelden."}
 
 
@@ -598,13 +705,15 @@ async def update_profile(
                 raise HTTPException(status_code=400, detail="E-Mail ist bereits vergeben")
         current_user.email = data.email or None
     
-    if data.display_name is not None:
-        current_user.display_name = data.display_name or None
+    # F8 5.2: mitgeschickt (model_fields_set) -> setzen, leer/Whitespace -> NULL; nicht mitgeschickt -> unveraendert
+    fs = data.model_fields_set
+    if "display_name" in fs:
+        current_user.display_name = (data.display_name or "").strip() or None
 
     for attr in ("phone", "company", "street", "postal_code", "city", "country"):
-        if getattr(data, attr, None) is not None:
-            setattr(current_user, attr, getattr(data, attr) or None)
-    if data.date_of_birth is not None:
+        if attr in fs:
+            setattr(current_user, attr, (getattr(data, attr) or "").strip() or None)
+    if "date_of_birth" in fs:
         if data.date_of_birth:
             try:
                 current_user.date_of_birth = date.fromisoformat(data.date_of_birth)
@@ -612,7 +721,7 @@ async def update_profile(
                 current_user.date_of_birth = None
         else:
             current_user.date_of_birth = None
-    if data.preferred_language is not None:
+    if "preferred_language" in fs:
         current_user.preferred_language = (data.preferred_language or "").strip() or None
     
     await db.flush()
@@ -629,15 +738,24 @@ async def change_password(
     data: PasswordChange,
     current_user: User = Depends(get_session_user),
 ):
-    """Change own password."""
-    if not verify_password(data.current_password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Aktuelles Passwort ist falsch")
+    """Eigenes Passwort aendern (auch der Ausweg aus dem erzwungenen Passwortwechsel, F3 3.2.8).
 
+    Fehler tragen zusaetzlich ``code`` (``current_password_wrong`` / ``password_unchanged``), damit das Frontend
+    sie ohne Textvergleich erkennt.
+    """
+    _ensure_local_account(current_user)
+    if not verify_password(data.current_password, current_user.hashed_password):
+        return _coded_error(400, CURRENT_PASSWORD_WRONG, "current_password_wrong")
+    if verify_password(data.new_password, current_user.hashed_password):
+        return _coded_error(400, NEW_PASSWORD_SAME, "password_unchanged")
+
+    forced = bool(getattr(current_user, "must_change_password", False))
     current_user.hashed_password = hash_password(data.new_password)
     # Erzwungener Passwortwechsel ist damit erledigt (Gate in core.auth, F3 3.2.8)
     current_user.must_change_password = False
     await db.flush()
-    await write_audit(db, "PASSWORD_CHANGE", "user", current_user.username, user_id=current_user.id)
+    await write_audit(db, "PASSWORD_CHANGE", "user", current_user.username, user_id=current_user.id,
+                      details={"forced": forced})
     # Alle anderen Sessions sind durch die pwv-Bindung jetzt ungueltig; die eigene bekommt
     # ein frisches Cookie, damit der Nutzer nicht mitten im Panel ausgeloggt wird.
     token = create_access_token(data={"sub": str(current_user.id), "role": current_user.role}, user=current_user)
@@ -652,10 +770,40 @@ async def list_users(
     db: DbRead,
     admin: User = Depends(get_admin_user),
 ):
-    """List all users with their zone assignments. Admin only."""
+    """Alle Benutzer mit Zonenrechten, Passkey- und Token-Zaehlern. Admin only.
+
+    ``password_reset_mail_available``: SMTP und oeffentliche Basis-URL sind eingerichtet (Reset-Link-Button).
+    """
     result = await db.execute(select(User).order_by(User.created_at))
     users = result.scalars().all()
-    return {"users": [await _user_to_dict(u, db) for u in users]}
+    passkeys = await db.execute(
+        select(WebAuthnCredential.user_id, func.count(WebAuthnCredential.id)).group_by(WebAuthnCredential.user_id)
+    )
+    passkey_counts = {int(uid): int(n) for uid, n in passkeys.all()}
+    token_counts = await ptk.count_active_by_user(db)
+    out = []
+    for u in users:
+        d = await _user_to_dict(u, db)
+        d["passkey_count"] = passkey_counts.get(u.id, 0)
+        d["panel_token_count"] = token_counts.get(u.id, 0)
+        out.append(d)
+    return {"users": out, "password_reset_mail_available": await reset_mail_available(db)}
+
+
+async def _get_user_or_404(db: AsyncSession, user_id: int) -> User:
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
+    return user
+
+
+async def _flush_or_409(db: AsyncSession, detail: str) -> None:
+    """Flush; ein Unique-Verstoss (paralleles Anlegen/Aendern) wird zu 409 statt 500."""
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=detail)
 
 
 @router.post("/users", status_code=201)
@@ -664,10 +812,12 @@ async def create_user(
     data: UserCreate,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Create a new user. Admin only."""
+    """Create a new user. Admin only. E-Mail-Duplikat -> 409, Benutzername-Duplikat -> 400 (F3 3.2.2)."""
     result = await db.execute(select(User).where(User.username == data.username))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Benutzername existiert bereits")
+    if await user_guard.email_taken(db, data.email):
+        raise HTTPException(status_code=409, detail=user_guard.EMAIL_TAKEN_DETAIL)
 
     user = User(
         username=data.username,
@@ -676,13 +826,15 @@ async def create_user(
         display_name=data.display_name or data.username,
         role=data.role,
         is_active=True,
+        must_change_password=bool(data.must_change_password),
     )
     db.add(user)
-    await db.flush()
+    await _flush_or_409(db, user_guard.USERNAME_OR_EMAIL_TAKEN_DETAIL)
 
     logger.info(f"User '{data.username}' created by admin '{admin.username}'")
     await write_audit(db, "USER_CREATE", "user", user.username, user_id=admin.id,
-                      details={"target_user_id": user.id, "role": user.role, "email": user.email})
+                      details={"target_user_id": user.id, "role": user.role, "email": user.email,
+                               "must_change_password": bool(user.must_change_password)})
     return await _user_to_dict(user, db)
 
 
@@ -693,38 +845,64 @@ async def update_user(
     data: UserUpdate,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Update a user. Admin only."""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+    """Update a user. Admin only.
 
-    before = {"email": user.email, "display_name": user.display_name, "role": user.role, "is_active": user.is_active}
+    Alle Pruefungen laufen vor jeder Aenderung (F3 3.2.3): Selbstschutz (eigenes Passwort, erzwungener Wechsel,
+    Deaktivierung, Herabstufung, Zugangs-Widerruf), letzter aktiver Admin, E-Mail-Duplikat (409), lokales Konto.
+    """
+    user = await _get_user_or_404(db, user_id)
+    self_edit = user.id == admin.id
+    if self_edit and data.password is not None:
+        raise HTTPException(status_code=400, detail=OWN_PASSWORD_DETAIL)
+    if self_edit and data.must_change_password:
+        raise HTTPException(status_code=400, detail=OWN_FORCE_CHANGE_DETAIL)
+    if self_edit and data.is_active is False:
+        raise HTTPException(status_code=400, detail=OWN_DEACTIVATE_DETAIL)
+    if self_edit and data.role == "user" and user.role == "admin":  # static-ok: role-admin (Ziel-Konto)
+        raise HTTPException(status_code=400, detail=OWN_DEMOTE_DETAIL)
+    if self_edit and data.revoke_all_access:
+        raise HTTPException(status_code=400, detail=OWN_ACCESS_DETAIL)
+    await user_guard.assert_keeps_active_admin(
+        db, user,
+        new_role=data.role or user.role,
+        new_active=user.is_active if data.is_active is None else data.is_active,
+    )
+    email_change = "email" in data.model_fields_set and data.email and data.email != user.email
+    if email_change and await user_guard.email_taken(db, data.email, exclude_user_id=user.id):
+        raise HTTPException(status_code=409, detail=user_guard.EMAIL_TAKEN_DETAIL)
+    if data.password is not None or data.must_change_password is not None:
+        _ensure_local_account(user)
+
+    before = {"email": user.email, "display_name": user.display_name, "role": user.role,
+              "is_active": user.is_active, "must_change_password": bool(user.must_change_password)}
     if "email" in data.model_fields_set:
         user.email = data.email  # None = Adresse entfernen
     if data.display_name is not None:
         user.display_name = data.display_name
     if data.role is not None:
-        # Rolle des ZIEL-Benutzers (letzter Admin), keine Rechtepruefung des Aufrufers
-        if user.role == "admin" and data.role != "admin":  # static-ok: role-admin
-            admin_count = await db.execute(
-                select(func.count()).select_from(User).where(User.role == "admin")
-            )
-            if admin_count.scalar() <= 1:
-                raise HTTPException(status_code=400, detail="Letzter Admin kann nicht herabgestuft werden")
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
     if data.password is not None:
         user.hashed_password = hash_password(data.password)
+    if data.must_change_password is not None:
+        user.must_change_password = bool(data.must_change_password)
+    await _flush_or_409(db, user_guard.EMAIL_TAKEN_DETAIL)
+    revoked = None
+    if data.revoke_all_access:
+        revoked = await access_revocation.revoke_all(db, user.id, reason="admin_user_update")
 
-    await db.flush()
     changed = {k: {"from": before[k], "to": getattr(user, k)} for k in before if before[k] != getattr(user, k)}
     if data.password is not None:
         changed["password"] = "set_by_admin"
-    await write_audit(db, "USER_UPDATE", "user", user.username, user_id=admin.id,
-                      details={"target_user_id": user.id, "changed": changed})
-    return await _user_to_dict(user, db)
+    details = {"target_user_id": user.id, "changed": changed}
+    if revoked is not None:
+        details["revoked"] = revoked
+    await write_audit(db, "USER_UPDATE", "user", user.username, user_id=admin.id, details=details)
+    out = await _user_to_dict(user, db)
+    if revoked is not None:
+        out["revoked"] = revoked
+    return out
 
 
 @router.delete("/users/{user_id}")
@@ -740,19 +918,21 @@ async def delete_user(
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+        raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
 
     # Alle benutzergebundenen Daten entfernen (keine FK-Constraints im Schema -> manuell).
     # Zustellungen (Outbox) VOR den Webhooks loeschen (F6 3.9).
     await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.user_id == user_id))
     await db.execute(sql_delete(WebAuthnCredential).where(WebAuthnCredential.user_id == user_id))
     await db.execute(sql_delete(PanelToken).where(PanelToken.user_id == user_id))
+    res_dyndns = await db.execute(sql_delete(DynDnsToken).where(DynDnsToken.user_id == user_id))
     res_deliveries = await db.execute(sql_delete(WebhookDelivery).where(WebhookDelivery.user_id == user_id))
     res_webhooks = await db.execute(sql_delete(Webhook).where(Webhook.user_id == user_id))
     await write_audit(db, "USER_DELETE", "user", user.username, user_id=admin.id,
                       details={"target_user_id": user.id, "role": user.role,
                                "deleted_webhooks": int(res_webhooks.rowcount or 0),
-                               "deleted_webhook_deliveries": int(res_deliveries.rowcount or 0)})
+                               "deleted_webhook_deliveries": int(res_deliveries.rowcount or 0),
+                               "deleted_dyndns_tokens": int(res_dyndns.rowcount or 0)})
     await db.delete(user)
     await db.flush()
     return {"message": f"Benutzer '{user.username}' geloescht"}
@@ -762,30 +942,190 @@ async def delete_user(
 async def reset_user_password(
     db: DbWrite,
     user_id: int,
+    data: Optional[AdminPasswordResetBody] = Body(default=None),
     admin: User = Depends(get_admin_session_user),
 ):
-    """Reset a user's password to a fresh random value. Admin only.
+    """Setzt ein neues Zufallspasswort (16 Zeichen) und gibt es genau einmal zurueck. Admin only.
 
-    Das neue Passwort wird genau einmal an den Admin zurückgegeben (für die Weitergabe an den
-    Nutzer). Es wird nicht mehr auf den Benutzernamen gesetzt – das war bei öffentlich bekannten
-    Benutzernamen ein Übernahmerisiko.
+    Ohne Body wird der Passwortwechsel beim naechsten Login erzwungen (F3 E6); ``revoke_all_access`` widerruft
+    zusaetzlich alle Zugaenge ([S9]). Bestehende Sitzungen des Nutzers enden ueber die pwv-Bindung.
     """
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+    opts = data or AdminPasswordResetBody()
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail=OWN_PASSWORD_DETAIL)
+    _ensure_local_account(user)
 
     new_password = generate_random_password(16)
     user.hashed_password = hash_password(new_password)
+    user.must_change_password = bool(opts.must_change_password)
     await db.flush()
+    revoked = None
+    if opts.revoke_all_access:
+        revoked = await access_revocation.revoke_all(db, user.id, reason="admin_password_reset")
     logger.info(f"Admin '{admin.username}' reset password for user '{user.username}' (id={user.id})")
-    await write_audit(db, "USER_PASSWORD_RESET", "user", user.username, user_id=admin.id,
-                      details={"target_user_id": user.id})
+    details = {"target_user_id": user.id, "must_change_password": bool(user.must_change_password)}
+    if revoked is not None:
+        details["revoked"] = revoked
+    await write_audit(db, "USER_PASSWORD_RESET", "user", user.username, user_id=admin.id, details=details)
     return {
         "message": f"Passwort für '{user.username}' wurde zurückgesetzt.",
         "username": user.username,
         "new_password": new_password,  # nur dieses eine Mal
         "hint": "Bitte unverzüglich an den Nutzer weitergeben – das Passwort wird nicht erneut angezeigt.",
+        "must_change_password": bool(user.must_change_password),
+        "revoked": revoked,
+    }
+
+
+@router.post("/users/{user_id}/send-reset-link")
+async def send_user_reset_link(
+    db: DbWrite,
+    user_id: int,
+    admin: User = Depends(get_admin_session_user),
+):
+    """Schickt dem Nutzer einen Reset-Link (24 h gueltig, einmal verwendbar) an seine gespeicherte Adresse.
+
+    Das Passwort bleibt bis dahin unveraendert, Sitzungen bleiben gueltig. Unabhaengig von
+    ``forgot_password_enabled``. 60-s-Sperre je Ziel-Benutzer (F3 3.2.5).
+    """
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail=OWN_PASSWORD_DETAIL)
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Benutzer ist deaktiviert")
+    _ensure_local_account(user)
+    if not user.email:
+        raise HTTPException(status_code=400, detail=RESET_LINK_ERRORS["no_email"][1])
+    if _reset_link_rate_limited(user.id):
+        raise HTTPException(
+            status_code=429,
+            detail="Für diesen Benutzer wurde gerade erst ein Link gesendet – bitte eine Minute warten",
+        )
+    valid_hours = ADMIN_VALID_MINUTES // 60
+    try:
+        await send_password_reset_mail(db, user, valid_minutes=ADMIN_VALID_MINUTES, admin_initiated=True)
+    except ResetMailError as exc:
+        status_code, detail = RESET_LINK_ERRORS.get(exc.code, RESET_LINK_ERRORS["send_failed"])
+        if exc.code == "send_failed":
+            await write_audit(db, "USER_PASSWORD_RESET_LINK", "user", user.username, user_id=admin.id,
+                              status="error", error_message="send_failed",
+                              details={"target_user_id": user.id, "email": user.email, "valid_hours": valid_hours})
+        else:
+            # Konfigurationsfehler sollen nicht zum Warten zwingen
+            _RESET_LINK_LAST.pop(user.id, None)
+        raise HTTPException(status_code=status_code, detail=detail)
+    await write_audit(db, "USER_PASSWORD_RESET_LINK", "user", user.username, user_id=admin.id,
+                      details={"target_user_id": user.id, "email": user.email, "valid_hours": valid_hours})
+    return {"message": f"Reset-Link an {user.email} gesendet", "email": user.email, "valid_hours": valid_hours}
+
+
+async def _reset_totp(db: AsyncSession, admin: User, user: User) -> bool:
+    """2FA (TOTP) des Nutzers abschalten; True, wenn sich etwas geaendert hat (dann Audit ``USER_2FA_RESET``)."""
+    had_totp = bool(user.totp_enabled)
+    had_pending = bool(is_unreadable(user.totp_pending_secret) or (user.totp_pending_secret or "").strip())
+    if not had_totp and not had_pending:
+        return False
+    user.totp_enabled = False
+    user.totp_secret = None
+    user.totp_pending_secret = None
+    await db.flush()
+    await write_audit(db, "USER_2FA_RESET", "user", user.username, user_id=admin.id,
+                      details={"target_user_id": user.id, "had_totp": had_totp, "had_pending": had_pending})
+    return True
+
+
+async def _remove_passkeys(db: AsyncSession, admin: User, user: User) -> int:
+    """Alle Passkeys des Nutzers loeschen (``webauthn_user_handle`` bleibt, F3 E10); Audit ``USER_PASSKEYS_RESET``."""
+    creds = await _list_user_credentials(db, user.id)
+    if not creds:
+        return 0
+    names = [(c.name or "")[:100] for c in creds][:20]
+    await db.execute(sql_delete(WebAuthnCredential).where(WebAuthnCredential.user_id == user.id))
+    await db.flush()
+    await write_audit(db, "USER_PASSKEYS_RESET", "user", user.username, user_id=admin.id,
+                      details={"target_user_id": user.id, "deleted": len(creds), "names": names})
+    return len(creds)
+
+
+@router.post("/users/{user_id}/reset-2fa")
+async def reset_user_2fa(
+    db: DbWrite,
+    user_id: int,
+    admin: User = Depends(get_admin_session_user),
+):
+    """2FA eines Nutzers zuruecksetzen (Lockout-Recovery, auch bei unlesbarem TOTP-Geheimnis). Admin only."""
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail=OWN_2FA_DETAIL)
+    if not await _reset_totp(db, admin, user):
+        return {"message": "2FA war nicht aktiv", "changed": False, "user": await _user_to_dict(user, db)}
+    return {"message": f"2FA für '{user.username}' zurückgesetzt", "changed": True,
+            "user": await _user_to_dict(user, db)}
+
+
+@router.delete("/users/{user_id}/webauthn-credentials")
+async def delete_user_passkeys(
+    db: DbWrite,
+    user_id: int,
+    admin: User = Depends(get_admin_session_user),
+):
+    """Alle Passkeys eines Nutzers entfernen (Lockout-Recovery). Admin only."""
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail=OWN_PASSKEYS_DETAIL)
+    n = await _remove_passkeys(db, admin, user)
+    return {"message": f"{n} Passkey(s) von '{user.username}' entfernt", "deleted": n}
+
+
+@router.get("/users/{user_id}/access-summary")
+async def get_user_access_summary(
+    db: DbRead,
+    user_id: int,
+    admin: User = Depends(get_admin_user),
+):
+    """Zaehler der Zugaenge eines Nutzers (Panel-Tokens, DynDNS-Tokens, Webhooks, ausstehende Zustellungen) [S9]."""
+    user = await _get_user_or_404(db, user_id)
+    summary = await access_revocation.access_summary(db, user.id)
+    summary["passkeys"] = len(await _list_user_credentials(db, user.id))
+    summary["totp_enabled"] = bool(user.totp_enabled)
+    return {"user_id": user.id, **summary}
+
+
+@router.post("/users/{user_id}/revoke-access")
+async def revoke_user_access(
+    db: DbWrite,
+    user_id: int,
+    data: Optional[RevokeAccessBody] = Body(default=None),
+    admin: User = Depends(get_admin_session_user),
+):
+    """"Alle Zugaenge widerrufen" (Kontouebernahme, [S9]): Panel-Tokens (endgueltig), DynDNS-Tokens, Webhooks
+    (+ ausstehende Zustellungen verworfen); optional 2FA und Passkeys zuruecksetzen. Das Passwort bleibt
+    unveraendert (dafuer Zufallspasswort/Reset-Link). Audit ``USER_ACCESS_REVOKE``.
+    """
+    opts = data or RevokeAccessBody()
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail=OWN_ACCESS_DETAIL)
+    if not any((opts.panel_tokens, opts.dyndns_tokens, opts.webhooks, opts.reset_2fa, opts.remove_passkeys)):
+        raise HTTPException(status_code=400, detail="Nichts zum Widerrufen ausgewählt")
+    revoked = await access_revocation.revoke_all(
+        db, user.id, reason="admin_revoke_access",
+        panel_tokens=opts.panel_tokens, dyndns_tokens=opts.dyndns_tokens, webhooks=opts.webhooks,
+    )
+    totp_reset = await _reset_totp(db, admin, user) if opts.reset_2fa else False
+    passkeys_removed = await _remove_passkeys(db, admin, user) if opts.remove_passkeys else 0
+    await write_audit(db, "USER_ACCESS_REVOKE", "user", user.username, user_id=admin.id,
+                      details={"target_user_id": user.id, "revoked": revoked,
+                               "totp_reset": totp_reset, "passkeys_removed": passkeys_removed})
+    summary = await access_revocation.access_summary(db, user.id)
+    return {
+        "message": f"Zugänge von '{user.username}' widerrufen",
+        "revoked": revoked,
+        "totp_reset": totp_reset,
+        "passkeys_removed": passkeys_removed,
+        "summary": summary,
+        "user": await _user_to_dict(user, db),
     }
 
 
@@ -872,9 +1212,11 @@ async def totp_status(current_user: User = Depends(get_session_user)):
         (getattr(current_user, "totp_pending_secret", None) or "").strip()
         and not (getattr(current_user, "totp_enabled", False))
     )
+    enabled = bool(getattr(current_user, "totp_enabled", False))
     return {
-        "totp_enabled": bool(getattr(current_user, "totp_enabled", False)),
+        "totp_enabled": enabled,
         "totp_pending": pending,
+        "totp_unreadable": enabled and _totp_secret_state(current_user) == "unreadable",
     }
 
 
@@ -934,6 +1276,8 @@ async def totp_disable(
         raise HTTPException(status_code=400, detail="Passwort ist falsch")
     if not getattr(current_user, "totp_enabled", False):
         return {"message": "2FA war nicht aktiv", "user": await _user_to_dict(current_user, db)}
+    if _totp_secret_state(current_user) == "unreadable":
+        raise HTTPException(status_code=409, detail=TOTP_UNREADABLE_DISABLE)
     sec = (getattr(current_user, "totp_secret", None) or "").strip()
     if not sec or not totp_verify_once(current_user.id, sec, data.code):
         raise HTTPException(status_code=400, detail="Falscher TOTP-Code")
