@@ -13,7 +13,8 @@
 - **Erneut senden:** fehlgeschlagene Zustellungen sofort erneut versuchen, endgueltig fehlgeschlagene (oder auch
   erfolgreiche) mit einem zusaetzlichen Versuch neu einplanen.
 - **Test senden:** schickt sofort ein `webhook.test`-Ereignis an genau diesen Webhook (auch wenn er deaktiviert ist)
-  und zeigt das Ergebnis an; hoechstens alle 10 Sekunden.
+  und zeigt das Ergebnis an; hoechstens alle 10 Sekunden je Webhook und ein Test gleichzeitig je Benutzer
+  (bei vielen gleichzeitigen Tests antwortet das Panel kurz mit „bitte erneut versuchen“).
 - **Verwaltung:** Webhooks lassen sich bearbeiten (Name, Ziel, Ereignisse, Ausloeser „nur eigene Aenderungen“ oder „alle
   Aenderungen in meinen Zonen“), aktivieren/deaktivieren und mit neuem Secret versehen. Deaktivieren verwirft offene
   Zustellungen; nach einer Secret-Erneuerung werden offene Zustellungen mit dem neuen Secret signiert.

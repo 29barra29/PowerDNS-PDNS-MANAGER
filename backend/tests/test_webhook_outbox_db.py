@@ -48,10 +48,12 @@ def _db(fresh_db, monkeypatch):
     secret_store.configure_for_tests(os.environ["SECRET_ENCRYPTION_KEY"])
     monkeypatch.setattr(settings, "WEBHOOK_ALLOW_PRIVATE_URLS", True)  # keine DNS-Aufloesung im Test
     webhooks_router._last_test.clear()
+    webhooks_router._tests_running.clear()
     webhook_worker.reset_for_tests()
     _run(_clear())
     yield fresh_db
     webhooks_router._last_test.clear()
+    webhooks_router._tests_running.clear()
 
 
 async def _clear():
@@ -775,6 +777,43 @@ def test_test_endpoint_sync_and_cooldown(transport):
     from app.services.webhook_worker import WebhookWorker
 
     assert _run(WebhookWorker().run_once()) == 0
+
+
+def test_test_endpoint_releases_db_connection_during_send(monkeypatch):
+    """Regression (Pool-Erschoepfung): waehrend des HTTP-Versands ist die Testzeile committet und die
+    Request-Session haelt keine Verbindung. Gezaehlt ueber die Prozessliste (Tests: NullPool -> jede
+    gehaltene Session ist eine offene Verbindung zur Testdatenbank)."""
+    from app.core.database import async_session, engine
+    from sqlalchemy.pool import NullPool
+
+    assert isinstance(engine.pool, NullPool)
+    uid = _run(_user("tpool"))
+    hid = _run(_hook(uid))
+    seen = {}
+
+    async def handler(req):
+        async with async_session() as s:
+            seen["rows"] = [tuple(r) for r in (await s.execute(text(
+                "SELECT status, attempts FROM webhook_deliveries WHERE webhook_id = :h"), {"h": hid})).all()]
+            seen["connections"] = int((await s.execute(text(
+                "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB = DATABASE()"))).scalar())
+        return httpx.Response(200, text="ok")
+
+    from app.services import webhook_sender
+
+    mock = httpx.MockTransport(handler)
+    monkeypatch.setattr(webhook_sender, "_client_factory",
+                        lambda: httpx.AsyncClient(transport=mock, follow_redirects=False, trust_env=False))
+    r = _client(uid).post(f"/api/v1/auth/me/webhooks/{hid}/test", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+    assert seen["rows"] == [("in_progress", 1)]  # vor dem Versand committet (fuer andere Sessions sichtbar)
+    assert seen["connections"] == 1  # nur die Pruef-Session selbst – die Request-Session haelt nichts
+    (row,) = _run(_rows(webhook_id=hid))
+    assert row.status == "succeeded" and row.last_status_code == 200
+    from app.models.models import Webhook
+
+    assert _run(_get(Webhook, hid)).last_success_at is not None
 
 
 def test_limit_20_webhooks():

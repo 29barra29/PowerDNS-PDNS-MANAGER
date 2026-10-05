@@ -38,9 +38,11 @@ URL = "https://hooks.example.com/p/SECRET"
 def _clean_worker_state():
     worker.reset_for_tests()
     webhooks_router._last_test.clear()
+    webhooks_router._tests_running.clear()
     yield
     worker.reset_for_tests()
     webhooks_router._last_test.clear()
+    webhooks_router._tests_running.clear()
 
 
 @pytest.fixture
@@ -438,6 +440,130 @@ def test_test_endpoint_failure_and_unreadable_secret(transport, metrics_seen):
     assert body["success"] is False and body["delivery"]["last_error_code"] == "secret_unreadable"
     assert "Secret erneuern" in body["message"]
     assert len(transport["requests"]) == 1  # unlesbares Secret: nichts gesendet
+
+
+class TxSession(FakeSession):
+    """FakeSession mit Transaktionszustand wie AsyncSession: Lesen/Schreiben oeffnet (Autobegin, Verbindung
+    aus dem Pool), ``commit``/``rollback`` gibt frei. ``on_refresh`` simuliert Aenderungen waehrend des Versands."""
+
+    def __init__(self, *a, on_refresh=None, **kw):
+        super().__init__(*a, **kw)
+        self.open = False
+        self.on_refresh = on_refresh
+        self.refreshed = []
+
+    async def execute(self, stmt, *args, **kwargs):
+        self.open = True
+        return await super().execute(stmt, *args, **kwargs)
+
+    async def flush(self):
+        self.open = True
+        await super().flush()
+
+    async def commit(self):
+        self.open = False
+        await super().commit()
+
+    async def rollback(self):
+        self.open = False
+        await super().rollback()
+
+    async def refresh(self, obj):
+        self.open = True
+        self.refreshed.append(type(obj).__name__)
+        if self.on_refresh is not None:
+            self.on_refresh(obj)
+
+
+def test_test_endpoint_holds_no_transaction_during_send(transport, metrics_seen):
+    """Regression: waehrend des HTTP-Versands (bis 30 s) darf die Request-Session keine Transaktion und damit
+    keine Pool-Verbindung halten; die Testzeile ist vorher committet, das Ergebnis wird danach neu geladen."""
+    user = make_user(role="user")
+    session = TxSession(user_row=user, extra={Webhook: [_hook()]})
+    seen = {}
+
+    def handler(req):
+        rows = [o for o in session.added if isinstance(o, WebhookDelivery)]
+        seen.update(open=session.open, commits=session.commits, status=[r.status for r in rows],
+                    running=set(webhooks_router._tests_running))
+        return httpx.Response(200, text="ok")
+
+    transport["handler"] = handler
+    r = _session_client(session, user).post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 200, r.text
+    assert seen["open"] is False and seen["commits"] >= 1 and seen["status"] == ["in_progress"]
+    assert seen["running"] == {user.id}  # waehrend des Versands als laufend markiert
+    assert session.refreshed == ["WebhookDelivery", "Webhook"]
+    assert r.json()["delivery"]["status"] == "succeeded" and metrics_seen == ["succeeded"]
+    assert webhooks_router._tests_running == set()
+
+
+def test_test_endpoint_limits_concurrent_tests(transport):
+    user = make_user(role="user")
+    session = FakeSession(user_row=user, extra={Webhook: [_hook()]})
+    c = _session_client(session, user)
+    # je Benutzer hoechstens ein laufender Test
+    webhooks_router._tests_running.add(user.id)
+    r = c.post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 429 and r.json()["detail"] == webhooks_router.TEST_BUSY_USER
+    # global hoechstens TEST_MAX_CONCURRENT
+    webhooks_router._tests_running.clear()
+    webhooks_router._tests_running.update(range(10_000, 10_000 + webhooks_router.TEST_MAX_CONCURRENT))
+    r = c.post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 429 and r.json()["detail"] == webhooks_router.TEST_BUSY_GLOBAL
+    assert transport["requests"] == [] and webhooks_router._last_test == {}  # abgelehnt: kein Cooldown verbraucht
+    assert not [o for o in session.added if isinstance(o, WebhookDelivery)]
+    # ein Platz frei -> Test laeuft, danach ist der Benutzer wieder ausgetragen
+    webhooks_router._tests_running.discard(10_000)
+    r = c.post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 200, r.text
+    assert user.id not in webhooks_router._tests_running and len(transport["requests"]) == 1
+
+
+def test_test_endpoint_releases_slot_on_error(transport, monkeypatch):
+    user = make_user(role="user")
+
+    async def boom(**kw):
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(sender, "send_delivery", boom)
+    r = _session_client(FakeSession(user_row=user, extra={Webhook: [_hook()]}), user).post(
+        "/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 500
+    assert webhooks_router._tests_running == set()
+
+
+def test_test_endpoint_webhook_deleted_during_send(transport, metrics_seen):
+    from sqlalchemy.exc import InvalidRequestError
+
+    def gone(obj):
+        raise InvalidRequestError("Could not refresh instance")
+
+    user = make_user(role="user")
+    session = TxSession(user_row=user, extra={Webhook: [_hook()]}, on_refresh=gone)
+    r = _session_client(session, user).post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 404 and r.json()["detail"] == "Webhook nicht gefunden"
+    assert len(transport["requests"]) == 1 and metrics_seen == []
+    assert webhooks_router._tests_running == set()
+
+
+def test_test_endpoint_cancelled_during_send_keeps_status(transport, metrics_seen):
+    hook = _hook()
+
+    def revoke(obj):
+        if isinstance(obj, WebhookDelivery):
+            obj.status, obj.last_error_code, obj.last_error = "cancelled", "access_revoked", "Zugang widerrufen"
+        else:
+            obj.is_active = False
+
+    user = make_user(role="user")
+    session = TxSession(user_row=user, extra={Webhook: [hook]}, on_refresh=revoke)
+    r = _session_client(session, user).post("/api/v1/auth/me/webhooks/5/test")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is False and body["delivery"]["status"] == "cancelled"
+    assert body["delivery"]["last_status_code"] == 200 and body["delivery"]["can_retry"] is False
+    assert hook.last_success_at is None and metrics_seen == ["cancelled"]
 
 
 def test_test_endpoint_unknown_webhook_is_404():

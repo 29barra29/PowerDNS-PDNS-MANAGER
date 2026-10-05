@@ -53,11 +53,18 @@ CREATED_WARNING = (
 NOT_FOUND = "Webhook nicht gefunden"
 DELIVERY_NOT_FOUND = "Zustellung nicht gefunden"
 TEST_COOLDOWN_SECONDS = 10.0
+# Gleichzeitige synchrone Tests (ein Versand dauert bis zu webhook_sender.TOTAL_TIMEOUT): je Benutzer einer,
+# im Prozess insgesamt TEST_MAX_CONCURRENT – sonst sofort 429 (kein Warten, keine Warteschlange).
+TEST_MAX_CONCURRENT = 4
+TEST_BUSY_USER = "Es läuft bereits ein Webhook-Test – bitte warten, bis er abgeschlossen ist"
+TEST_BUSY_GLOBAL = "Zu viele gleichzeitige Webhook-Tests – bitte in einigen Sekunden erneut versuchen"
 STATS_KEYS = ("queued", "in_progress", "failed", "succeeded", "dead", "cancelled")
 SCOPES = ("own", "zones")
 
 # Cooldown der Test-Zustellung je Webhook (monotonic); ein Prozess, daher im Speicher ausreichend.
 _last_test: dict[int, float] = {}
+# Benutzer-IDs mit laufendem Test (Anzahl = global laufende Tests).
+_tests_running: set[int] = set()
 
 
 def _is_session(request: Request) -> bool:
@@ -331,7 +338,14 @@ async def test_my_webhook(
     """Synchrone Test-Zustellung (Ereignis ``webhook.test``) – auch fuer inaktive Webhooks, ohne Ereignisfilter.
 
     Ergebnis steht im Zustellprotokoll (eine Zeile, ``max_attempts = 1``). Antwort immer 200 mit ``success``.
+
+    Wie im Worker haelt der Versand KEINE DB-Verbindung: die Testzeile wird vor dem HTTP-Aufruf committet (die
+    Request-Session gibt ihre Verbindung damit an den Pool zurueck), das Ergebnis danach in einer neuen
+    Transaktion gespeichert. Sonst koennte ein Benutzer mit langsamen Zielen (bis 30 s je Versuch) den Pool
+    leerlaufen lassen. Zusaetzlich: je Benutzer ein laufender Test, im Prozess hoechstens ``TEST_MAX_CONCURRENT``.
     """
+    from sqlalchemy.exc import InvalidRequestError
+
     from app.services import webhook_sender, webhook_worker
     from app.services.webhook_outbox import create_test_delivery
 
@@ -340,25 +354,50 @@ async def test_my_webhook(
     wait = _cooldown_left(wh.id, now_mono)
     if wait:
         raise HTTPException(status_code=429, detail=f"Bitte {wait} Sekunden warten, bevor du erneut einen Test sendest")
+    if current_user.id in _tests_running:
+        raise HTTPException(status_code=429, detail=TEST_BUSY_USER)
+    if len(_tests_running) >= TEST_MAX_CONCURRENT:
+        raise HTTPException(status_code=429, detail=TEST_BUSY_GLOBAL)
     _last_test[wh.id] = now_mono
-
-    d = await create_test_delivery(db, wh, actor=current_user)
-    if d.status == "in_progress":
-        result = await webhook_sender.send_delivery(
-            url=str(wh.url).strip(),
-            body=(d.body or "").encode("ascii"),
-            headers=webhook_sender.build_request_headers(event=d.event, delivery_id=d.delivery_id, attempt=1,
-                                                         signature=d.signature),
-        )
-        status = webhook_worker.apply_result(d, wh, result, utcnow())
-        webhook_worker.record_attempt(status, result.duration_ms / 1000, result.status_code)
-    await db.flush()
+    _tests_running.add(current_user.id)
+    try:
+        d = await create_test_delivery(db, wh, actor=current_user)
+        if d.status == "in_progress":
+            # Schritt 1: Werte lesen, Testzeile committen -> keine offene Transaktion/Verbindung waehrend HTTP
+            url = str(wh.url).strip()
+            body = (d.body or "").encode("ascii")
+            headers = webhook_sender.build_request_headers(event=d.event, delivery_id=d.delivery_id, attempt=1,
+                                                           signature=d.signature)
+            await db.commit()
+            # Schritt 2: senden (bis webhook_sender.TOTAL_TIMEOUT)
+            result = await webhook_sender.send_delivery(url=url, body=body, headers=headers)
+            # Schritt 3: Zeile und Webhook neu laden (koennen sich waehrend des Versands geaendert haben)
+            try:
+                await db.refresh(d)
+            except InvalidRequestError:
+                # Webhook (samt Protokoll) waehrend des Versands geloescht
+                raise HTTPException(status_code=404, detail=NOT_FOUND) from None
+            try:
+                await db.refresh(wh)
+            except InvalidRequestError:
+                wh = None
+            if d.status != "in_progress":
+                # Extern beendet (z. B. cancelled durch Widerruf aller Zugaenge): Status bleibt, nur Diagnose
+                d.last_status_code, d.last_duration_ms = result.status_code, result.duration_ms
+                webhook_worker.record_attempt("cancelled", result.duration_ms / 1000, result.status_code)
+            else:
+                status = webhook_worker.apply_result(d, wh, result, utcnow())
+                webhook_worker.record_attempt(status, result.duration_ms / 1000, result.status_code)
+            await db.flush()
+    finally:
+        _tests_running.discard(current_user.id)
     success = d.status == "succeeded"
     if success:
         message = f"Test erfolgreich (HTTP {d.last_status_code}, {d.last_duration_ms} ms)"
     else:
         message = f"Test fehlgeschlagen: {d.last_error or d.last_error_code or 'unbekannter Fehler'}"
-    return {"success": success, "message": message, "delivery": delivery_out(d, webhook_active=bool(wh.is_active))}
+    active = bool(wh.is_active) if wh is not None else False
+    return {"success": success, "message": message, "delivery": delivery_out(d, webhook_active=active)}
 
 
 # --------------------------------------------------------------------------- 3.6 Zustellprotokoll
