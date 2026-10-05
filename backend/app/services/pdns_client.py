@@ -540,7 +540,7 @@ class PowerDNSManager:
         stehen danach in ``self.unloaded`` (Name -> Grund). Die DB ist fuehrend, auch
         gegenueber einem PDNS_SERVERS-Env-Client gleichen Namens.
         """
-        from app.core.secrets import is_unreadable  # lazy: core.secrets importiert Models
+        from app.core.secrets import is_unreadable  # lazy (Plan B.11), F5-Kern aus W0-SECRETS
 
         db_count = 0
         skipped: list[str] = []

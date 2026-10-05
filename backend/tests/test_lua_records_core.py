@@ -120,22 +120,24 @@ def test_policy_without_admin_check(policy, expected):
     assert lr.lua_denied_message("admin") == lr.MSG_DENIED_ADMIN
 
 
-@pytest.mark.wave_integration
-def test_policy_admin_uses_is_effective_admin():
-    """Braucht core.auth.is_effective_admin (W0-INT-BE2a, Welle 0b) – laeuft erst im Integrationsstand."""
-    from app.core.request_context import TokenScope, current_token_scope, auth_via_ctx
+def test_policy_admin_delegates_to_is_effective_admin(monkeypatch):
+    """Policy "admin" fragt core.auth.is_effective_admin (kommt mit W0-INT-BE2a; hier gepatcht,
+    raising=False, damit der Test auch vor Welle 0b laeuft)."""
+    import app.core.auth as core_auth
 
+    seen = []
+
+    def fake_is_effective_admin(user):
+        seen.append(user)
+        return getattr(user, "role", None) == "admin" and not getattr(user, "token_without_admin", False)
+
+    monkeypatch.setattr(core_auth, "is_effective_admin", fake_is_effective_admin, raising=False)
     admin = SimpleNamespace(role="admin")
-    user = SimpleNamespace(role="user")
     assert lr.lua_policy_allows("admin", admin) is True
-    assert lr.lua_policy_allows("admin", user) is False
-    tok_v = auth_via_ctx.set("panel_token")
-    tok_s = current_token_scope.set(TokenScope(1, "t", "dnsmgr_usr_ab", None, "manage", False))
-    try:
-        assert lr.lua_policy_allows("admin", admin) is False
-    finally:
-        current_token_scope.reset(tok_s)
-        auth_via_ctx.reset(tok_v)
+    assert lr.lua_policy_allows("admin", SimpleNamespace(role="user")) is False
+    assert lr.lua_policy_allows("admin", SimpleNamespace(role="admin", token_without_admin=True)) is False
+    assert lr.lua_policy_allows("manage", SimpleNamespace(role="user")) is True
+    assert len(seen) == 3  # manage/disabled fragen nicht
 
 
 @pytest.mark.wave_integration

@@ -39,7 +39,7 @@ async def user_to_dict(user: User, db: AsyncSession) -> dict:
     Gegenueber 2.4.1 zusaetzlich: ``must_change_password`` (F3), ``auth_source`` (F10,
     Default ``"local"``), ``totp_unreadable`` (F5: 2FA aktiv, Geheimnis nicht entschluesselbar).
     """
-    from app.core.secrets import is_unreadable  # lazy: core.secrets importiert Models
+    from app.core.secrets import is_unreadable  # lazy, F5-Kern aus W0-SECRETS
 
     result = await db.execute(
         select(UserZoneAccess.zone_name, UserZoneAccess.permission).where(
