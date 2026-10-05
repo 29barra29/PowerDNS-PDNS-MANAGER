@@ -1,15 +1,18 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Globe, LayoutDashboard, Search, ScrollText, Users, LogOut, Shield, Settings, Menu, X } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import api from '../api'
+import { applyLanguage } from '../i18n'
 import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
 import LanguageDropdown from './LanguageDropdown'
+import PageSpinner from './PageSpinner'
+import Banners from './banners/Banners'
 
 const SESSION_PING_MS = 30 * 60 * 1000 // Sitzung alle 30 Min. prüfen (Token/Cookie)
 
 export default function Layout() {
-    const { t, i18n } = useTranslation()
+    const { t } = useTranslation()
     const navigate = useNavigate()
     const location = useLocation()
     const [user, setUser] = useState(() => api.getUser())
@@ -22,11 +25,32 @@ export default function Layout() {
         const u = api.getUser()
         if (u) {
             setUser(u)
-            if (u.preferred_language && u.preferred_language !== i18n.language) i18n.changeLanguage(u.preferred_language)
+            // Profilsprache hat Vorrang und wird im Browser gemerkt (F8 §2.1 Stufe 1, A05)
+            if (u.preferred_language) {
+                applyLanguage(u.preferred_language, { remember: true })
+                    .catch((err) => console.warn('Profilsprache konnte nicht geladen werden:', err))
+            }
         }
         api.getAppInfo().then(setAppInfo).catch(console.error)
-    }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
+    }, [])
     /* eslint-enable react-hooks/set-state-in-effect */
+
+    // Sprachwahl der mobilen Kopfleiste wie in den Einstellungen in der DB speichern (N11).
+    // Fehler: still zurueck zur vorherigen Sprache (Layout hat keinen Fehlerbanner).
+    const handleLanguageChange = async (code, prev) => {
+        try {
+            const res = await api.updateProfile({ preferred_language: code })
+            const cached = api.getUser()
+            const next = res?.user || (cached ? { ...cached, preferred_language: code } : null)
+            if (next) {
+                api.setUser(next)
+                setUser(next)
+            }
+        } catch (err) {
+            console.warn('Sprache konnte nicht gespeichert werden:', err)
+            if (prev) applyLanguage(prev).catch(() => {})
+        }
+    }
 
     // Periodisch: Session gültig? (401 → api leitet zur Login-Seite)
     useEffect(() => {
@@ -177,10 +201,15 @@ export default function Layout() {
                         <Menu className="w-5 h-5" />
                     </button>
                     <span className="text-sm font-semibold text-text-primary truncate">{appInfo.app_name}</span>
-                    <LanguageDropdown />
+                    <LanguageDropdown onChange={handleLanguageChange} />
                 </header>
                 <main className="flex-1 overflow-auto p-4 md:p-6">
-                    <Outlet />
+                    {/* Banner-Slot: components/banners/*.banner.jsx (Plan B.14) */}
+                    <Banners user={user} />
+                    {/* Seiten-Chunks werden nachgeladen (F8-B02); Sidebar bleibt stehen */}
+                    <Suspense fallback={<PageSpinner />}>
+                        <Outlet />
+                    </Suspense>
                 </main>
             </div>
         </div>
