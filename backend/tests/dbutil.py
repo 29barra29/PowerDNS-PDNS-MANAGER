@@ -10,6 +10,10 @@
 
 Die Fixtures sind synchron und fuehren ihre DB-Schritte mit ``asyncio.run`` aus; Tests duerfen async sein
 (der Engine nutzt in Tests ``NullPool`` – keine Verbindung ueberlebt den Event-Loop).
+
+Beide Fixtures arbeiten auf DERSELBEN Testdatenbank: ein Testmodul nutzt nur eine von beiden (Mischen
+bricht mit klarer Meldung ab). Tests, die je Fall einen eigenen Ausgangszustand brauchen, rufen
+``prepare_fresh(engine)`` bzw. ``prepare_241(engine)`` selbst auf (siehe ``test_migrations_db.py``).
 """
 from __future__ import annotations
 
@@ -84,37 +88,49 @@ def _app_engine():
     return engine
 
 
-async def _fresh(engine) -> None:
+async def prepare_fresh(engine) -> None:
+    """Testdatenbank leeren und mit ``init_db()`` neu anlegen (Stand Neuinstallation)."""
     from app.core.database import init_db
 
     await reset_schema(engine)
     await init_db()
 
 
-async def _schema_241(engine) -> None:
+async def prepare_241(engine) -> None:
+    """Testdatenbank leeren und das 2.4.1-Schema anlegen (ohne Daten, ohne 3.0-Migration)."""
     await reset_schema(engine)
     await load_schema_241(engine)
+
+
+# Welche Modul-Fixture die gemeinsame Testdatenbank gerade vorbereitet hat (Schutz gegen Mischen).
+_ACTIVE: dict[str, str] = {}
+
+
+def _db_fixture(name: str, prepare):
+    if not db_tests_enabled():
+        pytest.skip("DB-Test: nur mit CI=true oder RUN_DB_TESTS=1 und DATABASE_URL")
+    other = _ACTIVE.get("fixture")
+    if other is not None and other != name:
+        pytest.fail(f"{name} und {other} im selben Testmodul: beide nutzen dieselbe Testdatenbank – "
+                    "pro Modul nur eine der Fixtures verwenden")
+    _ACTIVE["fixture"] = name
+    engine = _app_engine()
+    asyncio.run(prepare(engine))
+    asyncio.run(engine.dispose(close=False))
+    try:
+        yield engine
+    finally:
+        asyncio.run(engine.dispose(close=False))
+        _ACTIVE.pop("fixture", None)
 
 
 @pytest.fixture(scope="module")
 def fresh_db():
     """Leere Testdatenbank mit 3.0-Schema (reset + ``init_db()``), einmal je Testmodul."""
-    if not db_tests_enabled():
-        pytest.skip("DB-Test: nur mit CI=true oder RUN_DB_TESTS=1 und DATABASE_URL")
-    engine = _app_engine()
-    asyncio.run(_fresh(engine))
-    asyncio.run(engine.dispose(close=False))
-    yield engine
-    asyncio.run(engine.dispose(close=False))
+    yield from _db_fixture("fresh_db", prepare_fresh)
 
 
 @pytest.fixture(scope="module")
 def db_241():
     """Testdatenbank mit dem Schema von 2.4.1 (reset + DDL), einmal je Testmodul. Daten legt der Test an."""
-    if not db_tests_enabled():
-        pytest.skip("DB-Test: nur mit CI=true oder RUN_DB_TESTS=1 und DATABASE_URL")
-    engine = _app_engine()
-    asyncio.run(_schema_241(engine))
-    asyncio.run(engine.dispose(close=False))
-    yield engine
-    asyncio.run(engine.dispose(close=False))
+    yield from _db_fixture("db_241", prepare_241)
