@@ -1,0 +1,161 @@
+# E2E-Umgebung fuer PDNS Manager (isoliert von der Produktion).
+#
+# NUR ueber run-e2e.sh / upgrade-241-to-30.sh benutzen (die setzen Projektname, Variablen und Lock):
+#   docker compose -p pdnsmgr-e2e -f scripts/e2e/compose.e2e.yaml ...
+# NIE die compose.yaml im Repo-Wurzelverzeichnis verwenden: dort sind die Containernamen der
+# Produktion (dns-manager-api/-db) fest eingetragen.
+#
+# - Alle Container heissen pdnsmgr-e2e-*, Netz pdnsmgr-e2e-net, Volumes pdnsmgr-e2e_*.
+# - Kein fester Host-Port. Das Backend ist zusaetzlich auf einem ZUFAELLIGEN Port auf 127.0.0.1
+#   erreichbar (nur zur Fehlersuche: `docker compose -p pdnsmgr-e2e -f ... port backend 8000`).
+# - Zugangsdaten sind Testwerte (das Netz ist intern); JWT-Secret und Admin-Passwort erzeugt das
+#   aufrufende Skript je Lauf zufaellig.
+name: pdnsmgr-e2e
+
+x-limits: &limits
+  restart: "no"
+  networks:
+    - e2e
+
+services:
+  db:
+    <<: *limits
+    image: mariadb:11
+    container_name: pdnsmgr-e2e-db
+    environment:
+      MARIADB_ROOT_PASSWORD: e2e_root
+      MARIADB_DATABASE: dns_manager
+      MARIADB_USER: dns_admin
+      MARIADB_PASSWORD: e2e_db_pass
+    mem_limit: 768m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  pdns1:
+    <<: *limits
+    image: powerdns/pdns-auth-49:latest
+    container_name: pdnsmgr-e2e-pdns1
+    # Gemeinsame Einstellungen (API, Webserver, LUA, SOA-Default) stehen in pdns.conf.
+    command: ["--api-key=${E2E_PDNS1_KEY:-e2ekey}", "--loglevel=${E2E_PDNS_LOGLEVEL:-5}"]
+    volumes:
+      - ./pdns.conf:/etc/powerdns/pdns.d/e2e.conf:ro
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "pdns_control", "rping"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  pdns2:
+    <<: *limits
+    image: powerdns/pdns-auth-49:latest
+    container_name: pdnsmgr-e2e-pdns2
+    command: ["--api-key=${E2E_PDNS2_KEY:-e2ekey2}", "--loglevel=${E2E_PDNS_LOGLEVEL:-5}"]
+    volumes:
+      - ./pdns.conf:/etc/powerdns/pdns.d/e2e.conf:ro
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "pdns_control", "rping"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  receiver:
+    <<: *limits
+    image: python:3.12-slim
+    container_name: pdnsmgr-e2e-receiver
+    command: ["python", "-u", "/receiver/webhook-receiver.py"]
+    volumes:
+      - ./webhook-receiver.py:/receiver/webhook-receiver.py:ro
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    <<: *limits
+    image: ${E2E_IMAGE:-pdnsmgr-e2e:local}
+    container_name: pdnsmgr-e2e-api
+    ports:
+      - "127.0.0.1::8000"
+    environment:
+      DATABASE_URL: mysql+aiomysql://dns_admin:e2e_db_pass@db:3306/dns_manager
+      # Wird nur bei leerer server_configs-Tabelle importiert (Fresh-Install). Beim Upgrade-Test
+      # stammen die Server aus der geseedeten 2.4.1-Datenbank.
+      PDNS_SERVERS: "ns1|http://pdns1:8081|${E2E_PDNS1_KEY:-e2ekey},ns2|http://pdns2:8081|${E2E_PDNS2_KEY:-e2ekey2}"
+      JWT_SECRET_KEY: ${E2E_JWT_SECRET:?E2E_JWT_SECRET fehlt - run-e2e.sh benutzen}
+      INITIAL_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:?E2E_ADMIN_PASSWORD fehlt - run-e2e.sh benutzen}
+      APP_NAME: PDNS Manager E2E
+      LOG_LEVEL: ${E2E_LOG_LEVEL:-info}
+      DEFAULT_LANGUAGE: de
+      ENABLE_REGISTRATION: "false"
+      AUTH_COOKIE_SECURE: "false"
+      DOCS_ENABLED: "true"
+      # Webhook-Ziele im internen Netz (receiver) erlauben
+      WEBHOOK_ALLOW_PRIVATE_URLS: "true"
+      TRUST_PROXY_HEADERS: "false"
+    volumes:
+      - backend_uploads:/app/app/static_new/uploads
+      - backend_data:/app/data
+    mem_limit: 768m
+    cpus: 1.0
+    depends_on:
+      db:
+        condition: service_healthy
+      pdns1:
+        condition: service_healthy
+      pdns2:
+        condition: service_healthy
+      receiver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\""]
+      interval: 3s
+      timeout: 6s
+      retries: 60
+      start_period: 5s
+
+  # Werkzeug-Container (Seed, Check-Runner): gleiches Image wie das Backend (alle Python-Pakete
+  # vorhanden), wird nur per `docker compose run --rm tools ...` gestartet.
+  tools:
+    <<: *limits
+    image: ${E2E_IMAGE:-pdnsmgr-e2e:local}
+    profiles: ["tools"]
+    working_dir: /e2e
+    entrypoint: []
+    volumes:
+      - ./:/e2e:ro
+    environment:
+      PYTHONPATH: /e2e
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      E2E_BASE_URL: http://backend:8000
+      E2E_DB_HOST: db
+      E2E_DB_PORT: "3306"
+      E2E_DB_NAME: dns_manager
+      E2E_DB_USER: root
+      E2E_DB_PASSWORD: e2e_root
+      E2E_PDNS: "ns1=http://pdns1:8081|${E2E_PDNS1_KEY:-e2ekey},ns2=http://pdns2:8081|${E2E_PDNS2_KEY:-e2ekey2}"
+      E2E_RECEIVER_URL: http://receiver:8080
+      E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-}
+      E2E_JWT_SECRET: ${E2E_JWT_SECRET:-}
+    mem_limit: 512m
+    cpus: 0.5
+
+volumes:
+  backend_uploads:
+  backend_data:
+
+networks:
+  e2e:
+    name: pdnsmgr-e2e-net
+    driver: bridge
