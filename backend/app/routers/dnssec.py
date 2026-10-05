@@ -140,7 +140,8 @@ def _log(action: str, zone_norm: str, server_name: str, key_id, user: User) -> N
 
 async def _follow_up(db, client, zone_id: str, ctx: svc.ZoneDnssecContext, user: User, bump_serial, trigger: str):
     """Serial-Erhoehung + NOTIFY nach einer erfolgreichen Aenderung [D10] (wirft nie)."""
-    return await svc.after_key_change(db, client, zone_id, bump_serial=bump_serial, kind=ctx.kind, user=user,
+    # kind aus dem bereits geladenen Kontext ("" = unbekannt -> keine Serial-Erhoehung, kein zweiter Abruf)
+    return await svc.after_key_change(db, client, zone_id, bump_serial=bump_serial, kind=ctx.kind or "", user=user,
                                       trigger=trigger)
 
 

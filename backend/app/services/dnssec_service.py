@@ -92,7 +92,7 @@ def public_pdns_error(exc: PowerDNSAPIError) -> str:
     server = getattr(exc, "server", "unknown")
     if exc.status_code == 503:
         return f"PowerDNS ({server}): Verbindung zum Server fehlgeschlagen."
-    if exc.status_code == 504 and not str(exc.pdns_message).startswith("Verbindungsfehler"):
+    if exc.status_code == 504:
         return f"PowerDNS ({server}): Zeitüberschreitung – Ergebnis unklar, bitte neu laden."
     return pdns_error_text(exc)
 
