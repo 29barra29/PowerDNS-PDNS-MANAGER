@@ -16,7 +16,15 @@
     "serverUnavailable": "A szerver nem érhető el. Próbáld újra később.",
     "setupStatusFailed": "A telepítési állapot nem tölthető be. Ellenőrizd, hogy a backend és az adatbázis fut-e.",
     "reloadPage": "Oldal újratöltése",
-    "retry": "Újrapróbálkozás"
+    "retry": "Újrapróbálkozás",
+    "prev": "Előző",
+    "next": "Következő",
+    "pageRange": "{{from}}–{{to}} / {{total}}",
+    "pageSize": "Oldalanként",
+    "all": "Összes",
+    "noAccessTitle": "Nincs hozzáférés",
+    "noAccessAdminOnly": "Ez az oldal csak rendszergazdák számára érhető el.",
+    "noAccessBack": "Vissza az áttekintéshez"
   },
   "auth": {
     "captchaRequired": "Először oldd meg a captchát.",
@@ -827,5 +835,32 @@
     "recordLabelSSHFP": "SSHFP tartalom",
     "recordLabelContent": "Tartalom",
     "recordLabelRdata": "Tartalom (RDATA)"
+  },
+  "secretModal": {
+    "copy": "Másolás",
+    "copied": "Vágólapra másolva",
+    "copyFailed": "A másolás nem sikerült – jelöld ki az értéket, és másold ki kézzel.",
+    "done": "Biztonságosan elmentettem",
+    "warning": "Ez az érték csak most jelenik meg, később nem kérhető le újra. Tárold biztonságos helyen.",
+    "secretLabel": "Titkos érték"
+  },
+  "ttlInput": {
+    "presetPlaceholder": "Előbeállítás …",
+    "outOfRange": "A TTL értékének {{min}} és {{max}} másodperc közötti egész számnak kell lennie."
+  },
+  "pageSpinner": {
+    "loading": "Oldal betöltése …"
+  },
+  "ttl": {
+    "seconds_one": "{{count}} másodperc",
+    "seconds_other": "{{count}} másodperc",
+    "minutes_one": "{{count}} perc",
+    "minutes_other": "{{count}} perc",
+    "hours_one": "{{count}} óra",
+    "hours_other": "{{count}} óra",
+    "days_one": "{{count}} nap",
+    "days_other": "{{count}} nap",
+    "weeks_one": "{{count}} hét",
+    "weeks_other": "{{count}} hét"
   }
 }

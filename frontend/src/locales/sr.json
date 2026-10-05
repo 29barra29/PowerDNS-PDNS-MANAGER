@@ -16,7 +16,15 @@
     "serverUnavailable": "Server nije dostupan. Pokušaj ponovo kasnije.",
     "setupStatusFailed": "Status postavljanja nije moguće učitati. Proveri da li backend i baza rade.",
     "reloadPage": "Ponovo učitaj stranicu",
-    "retry": "Pokušaj ponovo"
+    "retry": "Pokušaj ponovo",
+    "prev": "Prethodna",
+    "next": "Sledeća",
+    "pageRange": "{{from}}–{{to}} od {{total}}",
+    "pageSize": "Po stranici",
+    "all": "Sve",
+    "noAccessTitle": "Nema pristupa",
+    "noAccessAdminOnly": "Ova stranica je dostupna samo administratorima.",
+    "noAccessBack": "Nazad na pregled"
   },
   "auth": {
     "captchaRequired": "Molimo prvo rešite captchu.",
@@ -827,5 +835,37 @@
     "recordLabelSSHFP": "SSHFP sadržaj",
     "recordLabelContent": "Sadržaj",
     "recordLabelRdata": "Sadržaj (RDATA)"
+  },
+  "secretModal": {
+    "copy": "Kopiraj",
+    "copied": "Kopirano u ostavu",
+    "copyFailed": "Kopiranje nije uspelo – označi vrednost i kopiraj je ručno.",
+    "done": "Bezbedno sam sačuvao/la",
+    "warning": "Ova vrednost se prikazuje samo sada i kasnije se ne može ponovo dobiti. Sačuvaj je na bezbednom mestu.",
+    "secretLabel": "Tajna vrednost"
+  },
+  "ttlInput": {
+    "presetPlaceholder": "Predložak …",
+    "outOfRange": "TTL mora biti ceo broj između {{min}} i {{max}} sekundi."
+  },
+  "pageSpinner": {
+    "loading": "Učitavanje stranice …"
+  },
+  "ttl": {
+    "seconds_one": "{{count}} sekunda",
+    "seconds_few": "{{count}} sekunde",
+    "seconds_other": "{{count}} sekundi",
+    "minutes_one": "{{count}} minut",
+    "minutes_few": "{{count}} minuta",
+    "minutes_other": "{{count}} minuta",
+    "hours_one": "{{count}} sat",
+    "hours_few": "{{count}} sata",
+    "hours_other": "{{count}} sati",
+    "days_one": "{{count}} dan",
+    "days_few": "{{count}} dana",
+    "days_other": "{{count}} dana",
+    "weeks_one": "{{count}} nedelja",
+    "weeks_few": "{{count}} nedelje",
+    "weeks_other": "{{count}} nedelja"
   }
 }

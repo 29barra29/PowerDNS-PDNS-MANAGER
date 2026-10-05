@@ -16,7 +16,15 @@
     "serverUnavailable": "Server is not reachable. Please try again later.",
     "setupStatusFailed": "Setup status could not be loaded. Please check that backend and database are running.",
     "reloadPage": "Reload page",
-    "retry": "Try again"
+    "retry": "Try again",
+    "prev": "Previous",
+    "next": "Next",
+    "pageRange": "{{from}}–{{to}} of {{total}}",
+    "pageSize": "Per page",
+    "all": "All",
+    "noAccessTitle": "No access",
+    "noAccessAdminOnly": "This page is only available to administrators.",
+    "noAccessBack": "Back to overview"
   },
   "auth": {
     "captchaRequired": "Please complete the captcha first.",
@@ -827,5 +835,32 @@
     "recordLabelSSHFP": "SSHFP content",
     "recordLabelContent": "Content",
     "recordLabelRdata": "Content (RDATA)"
+  },
+  "secretModal": {
+    "copy": "Copy",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed – please select the value and copy it manually.",
+    "done": "I have stored it safely",
+    "warning": "This value is shown only now and cannot be retrieved later. Store it in a safe place.",
+    "secretLabel": "Secret value"
+  },
+  "ttlInput": {
+    "presetPlaceholder": "Preset …",
+    "outOfRange": "The TTL must be a whole number between {{min}} and {{max}} seconds."
+  },
+  "pageSpinner": {
+    "loading": "Loading page …"
+  },
+  "ttl": {
+    "seconds_one": "{{count}} second",
+    "seconds_other": "{{count}} seconds",
+    "minutes_one": "{{count}} minute",
+    "minutes_other": "{{count}} minutes",
+    "hours_one": "{{count}} hour",
+    "hours_other": "{{count}} hours",
+    "days_one": "{{count}} day",
+    "days_other": "{{count}} days",
+    "weeks_one": "{{count}} week",
+    "weeks_other": "{{count}} weeks"
   }
 }
