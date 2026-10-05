@@ -1,0 +1,9 @@
+{
+  "reason": "WS-W1-NACHARBEIT: 'System' ist im Deutschen der uebliche Fachbegriff fuer automatische Vorgaenge (wie audit.groups.system aus f7-fe)",
+  "global": [],
+  "perLanguage": {
+    "de": [
+      "audit.resourceTypes.system"
+    ]
+  }
+}

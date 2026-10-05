@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Webhook, X } from 'lucide-react'
 import api from '../../api'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import ModalErrorBanner from '../ModalErrorBanner'
 import {
     NAME_MAX, URL_MAX,
@@ -27,24 +28,20 @@ export default function WebhookFormModal({ mode, hook, availableEvents, eventCat
     const [modalError, setModalError] = useState('')
     const urlUnreadable = isEdit && hook?.has_url === false
 
-    useEffect(() => {
-        nameRef.current?.focus()
-    }, [])
+    // Fokus aufs Namensfeld, Tab-Falle, ESC (nicht waehrend des Speicherns), Fokus-Rueckgabe (L11)
+    const dialogRef = useDialogFocus({ onClose, canClose: !saving, initialFocusRef: nameRef })
 
-    // ESC schliesst (nicht waehrend des Speicherns), Strg/Cmd+Enter sendet ab.
+    // Strg/Cmd+Enter sendet ab.
     useEffect(() => {
         function onKey(e) {
-            if (e.key === 'Escape' && !saving) {
-                e.preventDefault()
-                onClose()
-            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
                 e.preventDefault()
                 formRef.current?.requestSubmit()
             }
         }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
-    }, [saving, onClose])
+    }, [saving])
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))
@@ -86,6 +83,7 @@ export default function WebhookFormModal({ mode, hook, availableEvents, eventCat
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

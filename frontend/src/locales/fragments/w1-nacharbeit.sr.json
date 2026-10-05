@@ -1,0 +1,9 @@
+{
+  "set": {
+    "audit.actions.APP_INFO_UPDATE": "Podešavanja aplikacije izmenjena",
+    "audit.actions.APP_LOGO_UPLOAD": "Logo otpremljen",
+    "audit.resourceTypes.system": "Sistem",
+    "settings.monitoring.scrapePlaceholderHost": "<tvoj-host>"
+  },
+  "remove": []
+}
