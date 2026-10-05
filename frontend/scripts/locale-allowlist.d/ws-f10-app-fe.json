@@ -1,0 +1,25 @@
+{
+  "reason": "WS-F10-APP-FE: Produkt- und Protokollnamen (OpenID Connect, LDAP/Active Directory, Keycloak, Authentik, Microsoft Entra ID, OpenLDAP, FreeIPA, SSO) und der OAuth-Parameterwert client_secret_post sind in allen Sprachen gleich; 'Issuer URL' (OIDC-Fachbegriff, wie in den IdP-Oberflaechen) bleibt in bs/hr/hu/sr englisch, 'Scopes' im Deutschen ebenso",
+  "global": [
+    "settings.authSource.ldap",
+    "settings.authSource.oidc",
+    "settings.sso.ldapPresetAd",
+    "settings.sso.ldapPresetFreeipa",
+    "settings.sso.ldapPresetOpenldap",
+    "settings.sso.ldapTitle",
+    "settings.sso.oidcTitle",
+    "settings.sso.presetAuthentik",
+    "settings.sso.presetEntra",
+    "settings.sso.presetKeycloak",
+    "settings.sso.tokenAuthPost",
+    "users.authSourceLdap",
+    "users.authSourceOidc"
+  ],
+  "perLanguage": {
+    "de": ["settings.sso.scopes"],
+    "bs": ["settings.sso.issuer"],
+    "hr": ["settings.sso.issuer"],
+    "hu": ["settings.sso.issuer"],
+    "sr": ["settings.sso.issuer"]
+  }
+}
