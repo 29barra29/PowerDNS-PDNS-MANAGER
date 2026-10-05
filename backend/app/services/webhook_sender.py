@@ -154,6 +154,12 @@ def _clean_excerpt(raw: bytes) -> Optional[str]:
 
 async def _read_excerpt(response: httpx.Response) -> Optional[str]:
     """Hoechstens ``EXCERPT_BYTES`` Rohbytes lesen, danach abbrechen (das Kontextende schliesst die Verbindung)."""
+    try:
+        preloaded = response.content  # nur bei bereits gelesenen Antworten (z. B. Test-Transport)
+    except httpx.ResponseNotRead:
+        preloaded = None
+    if preloaded is not None:
+        return _clean_excerpt(preloaded[:EXCERPT_BYTES])
     buf = bytearray()
     async for chunk in response.aiter_raw():
         buf.extend(chunk)
