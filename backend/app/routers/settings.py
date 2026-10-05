@@ -18,7 +18,6 @@ from app.services.audit import write_audit
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import DbRead, DbWrite
 from app.core.auth import get_admin_session_user

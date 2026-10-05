@@ -12,7 +12,7 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_session_user
+from app.core.auth import get_session_user, is_effective_admin
 from app.core.database import DbRead, DbWrite
 from app.core.timeutil import iso_utc, utcnow
 from app.models.models import User
@@ -38,7 +38,8 @@ class PanelTokenCreate(BaseModel):
 async def _token_out_list(db, user: User, rows) -> list[dict]:
     from app.services import panel_token as ptk
 
-    owner_zones = None if user.role == "admin" else await ptk.owner_zone_set(db, user.id)
+    # Session-Pflicht: is_effective_admin entspricht hier der Rolle des Besitzers
+    owner_zones = None if is_effective_admin(user) else await ptk.owner_zone_set(db, user.id)
     now = utcnow()
     return [ptk.serialize_token(r, owner_role=user.role, owner_zones=owner_zones, now=now) for r in rows]
 
@@ -75,14 +76,15 @@ async def create_panel_token(
         zones = ptk.normalize_scope_zones(data.scope_zones)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if data.allow_admin and current_user.role != "admin":
+    is_admin = is_effective_admin(current_user)
+    if data.allow_admin and not is_admin:
         raise HTTPException(status_code=403, detail="Admin-Funktionen kann nur ein Administrator freigeben")
     if data.allow_admin and zones is not None:
         raise HTTPException(
             status_code=400,
             detail="Admin-Funktionen sind nur für Tokens ohne Zonen-Beschränkung möglich",
         )
-    if current_user.role != "admin" and zones is not None:
+    if not is_admin and zones is not None:
         owned = await ptk.owner_zone_set(db, current_user.id)
         for z in zones:
             if z not in owned:
