@@ -7,6 +7,9 @@
 - ``ensure_local_account``: Passwort-Aktionen nur fuer lokale Konten. Externe Konten (F10, ``auth_source`` oidc/ldap)
   verwalten ihr Passwort beim Identitaetsanbieter. ``routers/auth.py`` haengt den Hook als
   ``_ensure_local_account`` an allen Passwort-Stellen ein.
+- ``count_active_local_admins`` / ``assert_keeps_local_admin`` (F10 5.11): Notfallzugang – solange OIDC oder LDAP
+  aktiv ist, bleibt mindestens ein aktiver LOKALER Admin (nicht verknuepfen, deaktivieren, herabstufen, loeschen).
+  Aus ``services/sso_provisioning.py`` hierher verschoben (WS-F10-APP-BE); dort bleiben Aliase.
 
 Die Rollenpruefungen hier betreffen das ZIEL-Konto, nicht den Aufrufer (daher kein ``is_effective_admin``).
 """
@@ -24,6 +27,7 @@ EMAIL_TAKEN_DETAIL = "E-Mail wird bereits verwendet"
 USERNAME_OR_EMAIL_TAKEN_DETAIL = "Benutzername oder E-Mail wird bereits verwendet"
 LAST_ADMIN_DEMOTE_DETAIL = "Letzter aktiver Admin kann nicht herabgestuft werden"
 LAST_ADMIN_DEACTIVATE_DETAIL = "Der letzte aktive Admin kann nicht deaktiviert werden"
+LAST_LOCAL_ADMIN_DETAIL = "Mindestens ein aktiver lokaler Admin muss als Notfallzugang bestehen bleiben"
 EXTERNAL_ACCOUNT_DETAIL = (
     "Für extern angemeldete Konten (SSO/LDAP) wird das Passwort beim Identitätsanbieter verwaltet"
 )
@@ -76,3 +80,43 @@ def ensure_local_account(user) -> None:
     """400 fuer externe Konten (SSO/LDAP): deren Passwort verwaltet der Identitaetsanbieter."""
     if not is_local_account(user):
         raise HTTPException(status_code=400, detail=EXTERNAL_ACCOUNT_DETAIL)
+
+
+async def count_active_local_admins(db: AsyncSession, *, exclude_user_id: Optional[int] = None) -> int:
+    """Aktive lokale Admins (``role == admin``, ``is_active``, ``auth_source == local``), optional ohne ein Konto."""
+    q = select(func.count()).select_from(User).where(
+        User.role == "admin", User.is_active.is_(True), User.auth_source == "local",
+    )
+    if exclude_user_id is not None:
+        q = q.where(User.id != exclude_user_id)
+    return int((await db.execute(q)).scalar() or 0)
+
+
+async def assert_keeps_local_admin(
+    db: AsyncSession,
+    target: User,
+    *,
+    new_role: Optional[str] = None,
+    new_active: Optional[bool] = None,
+    removing: bool = False,
+) -> None:
+    """Notfallzugang (F10 5.11): Solange OIDC oder LDAP aktiv ist, muss ein aktiver lokaler Admin bleiben.
+
+    ``removing=True`` = Konto wird geloescht oder mit einem Anmeldedienst verknuepft. Keine Abfrage, wenn ``target``
+    kein aktiver lokaler Admin ist oder es nach der Aenderung bleibt. 400 mit ``LAST_LOCAL_ADMIN_DETAIL`` sonst.
+    """
+    if not is_local_account(target) or not _is_admin_role(getattr(target, "role", None)) \
+            or not bool(getattr(target, "is_active", False)):
+        return
+    effective_active = target.is_active if new_active is None else new_active
+    stays = (not removing) and _is_admin_role(new_role or target.role) and bool(effective_active)
+    if stays:
+        return
+    from app.services.sso_settings import load_sso_config  # lazy: sso_settings -> sso_provisioning -> user_guard
+
+    cfg = await load_sso_config(db)
+    if not (cfg.oidc.enabled or cfg.ldap.enabled):
+        return
+    if await count_active_local_admins(db, exclude_user_id=target.id) >= 1:
+        return
+    raise HTTPException(status_code=400, detail=LAST_LOCAL_ADMIN_DETAIL)

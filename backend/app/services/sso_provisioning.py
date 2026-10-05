@@ -16,9 +16,9 @@ Grundsaetze (Bauplan WS-F10-SVC, Kritik S1/S5):
 - Rollen aus Gruppen stufen den letzten aktiven Admin nie herab (Audit ``USER_ROLE_SYNC`` mit
   ``skipped: last_admin``).
 
-``count_active_local_admins``/``assert_keeps_local_admin`` stehen vorlaeufig hier; WS-F10-APP-BE verschiebt
-sie nach ``services/user_guard.py`` (Bauplan). ``_count_active_admins`` ist die lokale Entsprechung von
-``user_guard.count_active_admins`` (F3, parallel in Welle 1) und wird dabei ebenfalls ersetzt.
+Die Schutzregeln fuer Admin-Konten liegen in ``services/user_guard.py`` (WS-F10-APP-BE hat sie dorthin verschoben):
+``count_active_admins`` (letzter aktiver Admin beim Rollenabgleich), ``count_active_local_admins`` und
+``assert_keeps_local_admin`` (Notfallzugang). Die Namen bleiben hier als Aliase erhalten.
 """
 from __future__ import annotations
 
@@ -32,13 +32,15 @@ from typing import Iterable, Optional, Sequence
 
 from fastapi import HTTPException
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import hash_password
 from app.models.models import User, WebAuthnCredential
+from app.services import user_guard
 from app.services.audit import write_audit
+from app.services.user_guard import LAST_LOCAL_ADMIN_DETAIL, assert_keeps_local_admin, count_active_local_admins  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,6 @@ USERNAME_MAX = 64
 _USERNAME_RETRIES = 3
 
 PROVISIONING_ERROR_CODES = ("not_allowed", "no_account", "account_disabled", "link_conflict")
-LAST_LOCAL_ADMIN_DETAIL = "Mindestens ein aktiver lokaler Admin muss als Notfallzugang bestehen bleiben"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -334,51 +335,8 @@ async def _email_taken(db: AsyncSession, email: str, *, exclude_user_id: Optiona
     return (await db.execute(q)).first() is not None
 
 
-async def _count_active_admins(db: AsyncSession, *, exclude_user_id: Optional[int] = None) -> int:
-    """Aktive Admins (alle Quellen) – lokale Entsprechung von ``user_guard.count_active_admins`` (F3)."""
-    q = select(func.count()).select_from(User).where(User.role == "admin", User.is_active.is_(True))
-    if exclude_user_id is not None:
-        q = q.where(User.id != exclude_user_id)
-    return int((await db.execute(q)).scalar() or 0)
-
-
-async def count_active_local_admins(db: AsyncSession, *, exclude_user_id: Optional[int] = None) -> int:
-    """Aktive lokale Admins (Notfallzugang bei aktivem SSO, F10 5.11)."""
-    q = select(func.count()).select_from(User).where(
-        User.role == "admin", User.is_active.is_(True), User.auth_source == "local",
-    )
-    if exclude_user_id is not None:
-        q = q.where(User.id != exclude_user_id)
-    return int((await db.execute(q)).scalar() or 0)
-
-
-def _is_local(user: User) -> bool:
-    return (getattr(user, "auth_source", None) or "local") == "local"
-
-
-async def assert_keeps_local_admin(
-    db: AsyncSession,
-    target: User,
-    *,
-    new_role: Optional[str] = None,
-    new_active: Optional[bool] = None,
-    removing: bool = False,
-) -> None:
-    """Notfallzugang: Solange OIDC oder LDAP aktiv ist, muss ein aktiver lokaler Admin bleiben (400 sonst)."""
-    if not _is_local(target) or target.role != ROLE_ADMIN or not target.is_active:  # static-ok: role-admin (Datenlogik)
-        return
-    effective_active = target.is_active if new_active is None else new_active
-    stays = (not removing) and (new_role or target.role) == ROLE_ADMIN and bool(effective_active)
-    if stays:
-        return
-    from app.services.sso_settings import load_sso_config  # lazy: sso_settings importiert dieses Modul
-
-    cfg = await load_sso_config(db)
-    if not (cfg.oidc.enabled or cfg.ldap.enabled):
-        return
-    if await count_active_local_admins(db, exclude_user_id=target.id) >= 1:
-        return
-    raise HTTPException(status_code=400, detail=LAST_LOCAL_ADMIN_DETAIL)
+# Alias (Welle 1): aktive Admins aller Quellen = ``user_guard.count_active_admins`` (F3)
+_count_active_admins = user_guard.count_active_admins
 
 
 # ---------------------------------------------------------------------------------------------
@@ -400,7 +358,7 @@ async def apply_role(
     if not new_role or new_role == old:
         return None
     if old == ROLE_ADMIN and new_role != ROLE_ADMIN and user.is_active:
-        if await _count_active_admins(db, exclude_user_id=user.id) < 1:
+        if await user_guard.count_active_admins(db, exclude_user_id=user.id) < 1:
             logger.warning("SSO-Rollenabgleich: letzter aktiver Admin %s wird nicht herabgestuft", user.username)
             await write_audit(
                 db, "USER_ROLE_SYNC", "user", user.username, user_id=user.id,

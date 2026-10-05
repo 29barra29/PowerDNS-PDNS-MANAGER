@@ -11,6 +11,10 @@ Durchsetzung zentral: ``get_current_user`` (Token-Zustand, Methodenregel, Passwo
 ``assert_zone_access`` (Token-Scope vor dem Admin-Shortcut), ``get_admin_user`` (``allow_admin``),
 ``get_session_user``/``get_admin_session_user`` (nur Browser-Session). Inline-Pruefungen
 ``role == "admin"`` ausserhalb dieses Moduls sind verboten – stattdessen ``is_effective_admin``.
+
+F10 (Welle 2, additiv): Pending-2FA-Token mit Methode (``create_two_factor_pending_token(..., method=)``,
+``decode_two_factor_pending_payload``), Re-Exporte des OIDC-State-Cookies aus ``services/sso_oidc.py`` und
+``verify_step_up`` (erneute Bestaetigung vor kritischen Aktionen, B.3 [S8]).
 """
 import hashlib
 import time
@@ -24,6 +28,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
+from pydantic import BaseModel, Field
 from pwdlib.hashers.bcrypt import BcryptHasher
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -218,16 +223,31 @@ def create_password_reset_token(
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_two_factor_pending_token(user_id: int) -> str:
-    """Kurzlebiger JWT (5 min) – beweist erfolgreiche Passwort-Prüfung vor TOTP-Abschluss."""
-    to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_2FA_PENDING}
+# Erste Anmeldestufe vor dem TOTP-Schritt (Claim "m" im Pending-Token, F10 5.2). Unbekannte Werte gelten als
+# "password" (strengste Regel: lokale Anmeldung muss erlaubt sein).
+TWO_FACTOR_METHODS = ("password", "ldap", "oidc")
+
+
+def create_two_factor_pending_token(user_id: int, *, method: str = "password") -> str:
+    """Kurzlebiger JWT (5 min) – beweist die erste Anmeldestufe vor dem TOTP-Abschluss.
+
+    ``method`` (``password`` | ``ldap`` | ``oidc``) steht im Claim ``m``; ``POST /auth/login/2fa`` schreibt daraus
+    die Audit-Methode (``<method>+totp``) und prueft bei ``password`` die Abschaltung der lokalen Anmeldung.
+    """
+    m = method if method in TWO_FACTOR_METHODS else "password"
+    to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_2FA_PENDING, "m": m}
     expire = datetime.now(timezone.utc) + timedelta(minutes=5)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_two_factor_pending_token(token: str) -> Optional[int]:
-    """Liefert user_id aus einem pending-2FA-Token oder None."""
+def decode_two_factor_pending_payload(token: Optional[str]) -> Optional[dict]:
+    """Payload eines pending-2FA-Tokens (``sub`` als int, ``m`` normalisiert) oder None.
+
+    Tokens aus 2.4.x (ohne ``m``) gelten als ``password``.
+    """
+    if not token or not isinstance(token, str) or len(token) > 4096:
+        return None
     payload = decode_token(token)
     if not payload:
         return None
@@ -238,9 +258,47 @@ def decode_two_factor_pending_token(token: str) -> Optional[int]:
     if not sub:
         return None
     try:
-        return int(sub)
+        uid = int(sub)
     except (TypeError, ValueError):
         return None
+    m = payload.get("m")
+    return {**payload, "sub": uid, "m": m if m in TWO_FACTOR_METHODS else "password"}
+
+
+def decode_two_factor_pending_token(token: str) -> Optional[int]:
+    """Liefert user_id aus einem pending-2FA-Token oder None."""
+    payload = decode_two_factor_pending_payload(token)
+    return payload["sub"] if payload else None
+
+
+# --- OIDC-State-Cookie (F10 5.2) ---------------------------------------------------------------
+# Die Implementierung liegt in ``services/sso_oidc.py`` (WS-F10-SVC, dort von den Pflichttests genutzt). Hier nur
+# delegierende Re-Exporte mit spaetem Import: ``sso_oidc`` importiert dieses Modul, ein Import auf Modulebene
+# waere zirkulaer.
+TOKEN_TYPE_OIDC_STATE = "oidc_state"
+
+
+def create_oidc_state_token(*, state: str, nonce: str, code_verifier: str, issuer: str, intent: str,
+                            user_id: Optional[int] = None, pwv: Optional[str] = None) -> str:
+    """Signierter Kurzzeit-JWT (10 min) fuer das OIDC-State-Cookie (siehe ``sso_oidc.create_oidc_state_token``)."""
+    from app.services import sso_oidc
+
+    return sso_oidc.create_oidc_state_token(state=state, nonce=nonce, code_verifier=code_verifier, issuer=issuer,
+                                            intent=intent, user_id=user_id, pwv=pwv)
+
+
+def decode_oidc_state_token(token: Optional[str]) -> Optional[dict]:
+    """Payload des State-Cookies oder None (Signatur, Ablauf, Typ, Pflichtfelder) – ohne Verbrauch."""
+    from app.services import sso_oidc
+
+    return sso_oidc.decode_oidc_state_token(token)
+
+
+def _consume_oidc_state(state: str) -> bool:
+    """Einmal-Verbrauch des OIDC-States (False bei Wiederverwendung)."""
+    from app.services import sso_oidc
+
+    return sso_oidc.consume_oidc_state(state)
 
 
 def create_webauthn_challenge_token(
@@ -575,6 +633,107 @@ async def get_admin_session_user(
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin-Rechte erforderlich")
     return current_user
+
+
+# ---------------------------------------------------------------------------------------------
+# Step-up (erneute Bestaetigung vor kritischen Aktionen, Bauplan B.3 [S8])
+# ---------------------------------------------------------------------------------------------
+STEP_UP_MAX_AGE_SECONDS = 600          # externe Konten: Anmeldung hoechstens 10 min alt
+STEP_UP_HEADER = "X-Step-Up-Required"
+STEP_UP_REQUIRED_DETAIL = "Bitte zur Bestätigung das aktuelle Passwort eingeben"
+STEP_UP_TOTP_REQUIRED_DETAIL = "Bitte zur Bestätigung das aktuelle Passwort und den 2FA-Code eingeben"
+STEP_UP_FAILED_DETAIL = "Bestätigung fehlgeschlagen – Passwort oder 2FA-Code ist falsch"
+STEP_UP_TOTP_UNREADABLE_DETAIL = (
+    "Bestätigung nicht möglich: das 2FA-Geheimnis kann nicht entschlüsselt werden – bitte einen anderen Admin "
+    "bitten, die 2FA zurückzusetzen"
+)
+STEP_UP_REAUTH_DETAIL = (
+    "Bitte zur Bestätigung abmelden und erneut anmelden – die Anmeldung ist älter als 10 Minuten"
+)
+STEP_UP_RATE_LIMIT_DETAIL = "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen."
+
+
+class StepUpBody(BaseModel):
+    """Bestaetigungsfelder fuer kritische Aktionen (Bauplan B.3): lokale Konten Passwort (+ TOTP)."""
+
+    current_password: Optional[str] = Field(None, max_length=128)
+    totp_code: Optional[str] = Field(None, max_length=12)
+
+
+def _step_up_error(code: str, message: str) -> HTTPException:
+    """403 ``{"detail": {"message", "code"}}`` + Header ``X-Step-Up-Required`` (api.js: STEP_UP_CODES)."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"message": message, "code": code},
+        headers={STEP_UP_HEADER: code},
+    )
+
+
+def totp_secret_state(user) -> str:
+    """``ok`` | ``missing`` | ``unreadable`` des aktiven TOTP-Geheimnisses (F5 5.13, Plan [S4]).
+
+    Auf dem Rohattribut pruefen: ``UnreadableSecret`` verhaelt sich wie "" und waere nach ``strip()`` nicht mehr
+    erkennbar.
+    """
+    from app.core.secrets import is_unreadable
+
+    raw = getattr(user, "totp_secret", None)
+    if is_unreadable(raw):
+        return "unreadable"
+    return "ok" if (raw or "").strip() else "missing"
+
+
+async def verify_step_up(db: AsyncSession, user, request: Request, body=None) -> str:
+    """Erneute Bestaetigung vor kritischen Aktionen [S8]; Rueckgabe: angewandtes Verfahren fuer das Audit.
+
+    - Lokales Konto: ``current_password`` ist Pflicht, bei aktiver 2FA zusaetzlich ``totp_code``. Fehlt etwas ->
+      403 ``stepup_required``; falsch -> 403 ``stepup_failed``. Fehlversuche zaehlen in den Login-Zaehlern
+      (IP und Benutzername, ``core.login_rate_limit``); ist das Paar gesperrt -> 429 ohne Passwortvergleich.
+      Rueckgabe ``"password"``.
+    - Externes Konto (``auth_source != local``, kein lokales Passwort): die Anmeldung dieser Sitzung
+      (``request.state.auth_time`` = JWT-``iat``) darf hoechstens 10 Minuten alt sein, sonst 403
+      ``reauth_required`` (Oberflaeche: abmelden, neu anmelden, zurueck zum Tab). Rueckgabe ``"fresh_session"``.
+
+    ``body``: ``StepUpBody`` oder ein Objekt mit denselben Attributen (z. B. ``schemas.sso.SsoStepUpIn``).
+    Nur fuer Browser-Sessions; ohne Session-Kontext gilt die Bestaetigung als nicht erbracht.
+    """
+    from app.core.login_rate_limit import clear_login_fails, is_login_rate_limited, record_failed_login
+
+    if getattr(request.state, "auth_via", None) != "session":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SESSION_REQUIRED_DETAIL)
+    if (getattr(user, "auth_source", None) or "local") != "local":
+        auth_time = getattr(request.state, "auth_time", None)
+        if not isinstance(auth_time, (int, float)) or isinstance(auth_time, bool) \
+                or time.time() - float(auth_time) > STEP_UP_MAX_AGE_SECONDS:
+            raise _step_up_error("reauth_required", STEP_UP_REAUTH_DETAIL)
+        return "fresh_session"
+
+    client_ip = get_client_ip(request) or "unknown"
+    username = getattr(user, "username", None)
+    totp_on = bool(getattr(user, "totp_enabled", False))
+    password = getattr(body, "current_password", None) if body is not None else None
+    code = (getattr(body, "totp_code", None) or "") if body is not None else ""
+    code = code.strip().replace(" ", "")
+    if not password:
+        raise _step_up_error("stepup_required", STEP_UP_TOTP_REQUIRED_DETAIL if totp_on else STEP_UP_REQUIRED_DETAIL)
+    if is_login_rate_limited(client_ip, username):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=STEP_UP_RATE_LIMIT_DETAIL)
+    if not verify_password(password, getattr(user, "hashed_password", None) or ""):
+        record_failed_login(client_ip, username)
+        logger.info("Step-up fuer %s abgelehnt (Passwort)", username)
+        raise _step_up_error("stepup_failed", STEP_UP_FAILED_DETAIL)
+    if totp_on:
+        state = totp_secret_state(user)
+        if state != "ok":
+            raise _step_up_error("stepup_failed", STEP_UP_TOTP_UNREADABLE_DETAIL)
+        if not code:
+            raise _step_up_error("stepup_required", STEP_UP_TOTP_REQUIRED_DETAIL)
+        if not totp_verify_once(user.id, (user.totp_secret or "").strip(), code):
+            record_failed_login(client_ip, username)
+            logger.info("Step-up fuer %s abgelehnt (2FA-Code)", username)
+            raise _step_up_error("stepup_failed", STEP_UP_FAILED_DETAIL)
+    clear_login_fails(client_ip, username)
+    return "password"
 
 
 def assert_effective_admin(user) -> None:

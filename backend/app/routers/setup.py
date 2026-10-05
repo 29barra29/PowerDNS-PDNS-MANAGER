@@ -1,16 +1,19 @@
-"""First-run setup endpoints (bewusst klein gehalten)."""
+"""First-run setup endpoints (bewusst klein gehalten).
+
+Der Abschluss von ``POST /setup/register`` laeuft ueber ``services.login_session.complete_login`` (F10 3.4):
+gleiches Cookie, gleiches User-Objekt und Audit ``LOGIN`` (``method: "setup"``) wie bei jeder Anmeldung.
+"""
 import logging
 from fastapi import APIRouter, HTTPException, status, Request
-from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.timeutil import iso_utc
 from app.core.database import DbRead, DbWrite
-from app.core.auth import hash_password, create_access_token, MIN_PASSWORD_LENGTH
+from app.core.auth import hash_password, MIN_PASSWORD_LENGTH
 from app.models.models import User, SystemSetting
 from app.core.config import settings
+from app.services.login_session import complete_login
 
 logger = logging.getLogger(__name__)
 
@@ -123,34 +126,11 @@ async def register_first_user(
     except Exception as exc:  # noqa: BLE001 - Setup darf daran nicht scheitern
         logger.warning("app_base_url konnte beim Setup nicht gesetzt werden: %s", exc)
 
-    access_token = create_access_token(data={"sub": str(new_user.id), "role": new_user.role}, user=new_user)
-    user_dict = {
-        "id": new_user.id,
-        "username": new_user.username,
-        "email": new_user.email,
-        "display_name": new_user.display_name,
-        "role": new_user.role,
-        "zones": [],
-        "created_at": iso_utc(new_user.created_at),
-        "last_login": None,
-    }
-
     logger.info(f"First admin user created: {new_user.username}")
 
-    response = JSONResponse(
-        status_code=201,
-        content={
-            "message": "Administrator-Account erfolgreich erstellt!",
-            "user": user_dict,
-        },
+    # Login-Abschluss wie bei jeder Anmeldung (F10 3.4): last_login, Audit LOGIN (method "setup"), Session-Cookie,
+    # vollstaendiges User-Objekt (auth_source, must_change_password, ...). Antwortform bleibt {"message", "user"}.
+    return await complete_login(
+        db, new_user, request, method="setup", status_code=201,
+        body_extra={"message": "Administrator-Account erfolgreich erstellt!"},
     )
-    response.set_cookie(
-        key=settings.AUTH_COOKIE_NAME,
-        value=access_token,
-        max_age=settings.AUTH_COOKIE_MAX_AGE,
-        httponly=True,
-        secure=settings.AUTH_COOKIE_SECURE,
-        samesite=settings.AUTH_COOKIE_SAMESITE,
-        path="/",
-    )
-    return response
