@@ -1,0 +1,6 @@
+{
+  "set": {
+    "settings.dnsTab": "DNS-beállítások",
+    "settings.integrations.webhookSecretTitle": "Webhook titok – csak most jelenik meg"
+  }
+}
