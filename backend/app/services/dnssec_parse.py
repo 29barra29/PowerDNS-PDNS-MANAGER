@@ -1,8 +1,17 @@
-"""Hilfen zum Parsen von DS- und DNSKEY-Daten (PowerDNS API / Registrar-Formulare)."""
+"""Hilfen zum Parsen von DS- und DNSKEY-Daten (PowerDNS API / Registrar-Formulare).
+
+Reine Funktionen ohne I/O. Ab 3.0 zusaetzlich ``compute_key_tag`` (Key-Tag aus dem DNSKEY, RFC 4034
+Anhang B, ueber dnspython) und ``normalize_dnskey`` (Vergleich von Schluesselmengen zwischen Servern).
+"""
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
+
+import dns.dnssec
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 
 # IANA DNSSEC algorithm numbers (DNSKEY) — subset + „rest“
 _ALGORITHM_NAMES: dict[int, str] = {
@@ -107,3 +116,24 @@ def parse_dnskey_rdata(dnskey: Optional[str]) -> Optional[dict[str, Any]]:
         "public_key_base64": public_b64,
         "raw": s,
     }
+
+
+def compute_key_tag(dnskey: Optional[str]) -> Optional[int]:
+    """Key-Tag eines DNSKEY-RDATA-Strings („Flags Protokoll Algorithmus Base64“), sonst ``None``.
+
+    ``dns.dnssec.key_id`` rechnet nur ueber die Wire-Form – ohne Krypto-Backend. Leere oder
+    unlesbare Eingaben liefern ``None`` (nie eine Exception).
+    """
+    s = normalize_dnskey(dnskey)  # Zeilenumbrueche beendeten sonst den Text fuer den Tokenizer
+    if not s:
+        return None
+    try:
+        rdata = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DNSKEY, s)
+        return int(dns.dnssec.key_id(rdata))
+    except Exception:  # noqa: BLE001 - Muell aus der API darf den Status nicht brechen
+        return None
+
+
+def normalize_dnskey(dnskey: Optional[str]) -> str:
+    """Whitespace auf ein Leerzeichen reduzieren und trimmen (Peer-Vergleich von DNSKEY-Mengen)."""
+    return " ".join((dnskey or "").split())
