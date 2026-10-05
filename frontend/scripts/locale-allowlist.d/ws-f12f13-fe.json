@@ -1,0 +1,17 @@
+{
+  "reason": "WS-F12F13-FE: Einheit 'ms' und Produktname 'Grafana' sind in allen Sprachen gleich; im Deutschen lauten die Fachbegriffe 'Propagation', 'Monitoring', 'Serial', 'Status', 'Record' und 'Version {{version}}' wie im Englischen (Werte laut F12/F13 §6.9, vgl. zoneDetail.tabRecords/zones.serial)",
+  "global": [
+    "propagation.latencyMs",
+    "settings.monitoring.metricsGrafanaTitle"
+  ],
+  "perLanguage": {
+    "de": [
+      "zoneDetail.tabPropagation",
+      "propagation.colSerial",
+      "propagation.colStatus",
+      "propagation.colRecord",
+      "settings.monitoring.tab",
+      "settings.monitoring.statusVersion"
+    ]
+  }
+}
