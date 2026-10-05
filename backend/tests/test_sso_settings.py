@@ -540,6 +540,22 @@ def test_changed_sensitive_targets_and_local_login(db):
     assert upd(db, oidc={"display_name": "SSO"}).changed_sensitive is False       # unveraendert
 
 
+def test_dry_run_checks_but_writes_nothing(db, monkeypatch):
+    from app.services import sso_oidc
+
+    calls = []
+    monkeypatch.setattr(sso_oidc, "clear_caches", lambda: calls.append(1))
+    put(db, **BASE)
+    data = SsoSettingsUpdate.model_validate({"oidc": OIDC_OK})
+    preview = run(ss.update(db, data, dry_run=True))
+    assert preview.changed_sensitive is True and preview.changed["oidc_issuer"]["to"] == OIDC_OK["issuer"]
+    assert raw(db, "oidc_issuer") is None and raw(db, "oidc_client_secret") is None and calls == []
+    with pytest.raises(SsoSettingsError):
+        run(ss.update(db, SsoSettingsUpdate.model_validate({"oidc": {"jit_enabled": True}}), dry_run=True))
+    run(ss.update(db, data))
+    assert raw(db, "oidc_issuer") == OIDC_OK["issuer"] and calls == [1]
+
+
 def test_warnings_for_linked_accounts(db):
     put(db, **BASE)
     upd(db, oidc=OIDC_OK, ldap=LDAP_OK)

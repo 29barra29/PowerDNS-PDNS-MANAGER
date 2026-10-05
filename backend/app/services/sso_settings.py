@@ -622,12 +622,15 @@ def _storage_value(kind: str, value: Any) -> Any:
 # ---------------------------------------------------------------------------------------------
 # Speichern
 # ---------------------------------------------------------------------------------------------
-async def update(db: AsyncSession, data: SsoSettingsUpdate) -> SsoUpdateResult:
+async def update(db: AsyncSession, data: SsoSettingsUpdate, *, dry_run: bool = False) -> SsoUpdateResult:
     """Zusammenfuehren, pruefen und speichern (nur ``flush``; Commit macht ``DbWrite``).
 
     Reihenfolge: Retarget-Schutz [S3] -> Konsistenz (400) -> Sicherheitsbestaetigungen S5/S16 (422) -> Speichern.
     Wirft ``SecretReentryRequired`` bzw. ``SsoSettingsError``. Leert die OIDC-Caches, wenn sich Issuer,
     Client-ID oder ``enabled`` geaendert haben.
+
+    ``dry_run=True``: alle Pruefungen und das Ergebnis (inkl. ``changed_sensitive`` fuer den Step-up [S8]), aber
+    nichts schreiben und keine Caches leeren – der Router kann so vor dem Speichern ``verify_step_up`` aufrufen.
     """
     current = await load_sso_config(db)
 
@@ -671,7 +674,7 @@ async def update(db: AsyncSession, data: SsoSettingsUpdate) -> SsoUpdateResult:
             key = f"{prefix}_{name}"
             to_store[key] = _storage_value(kind, new)
             audit_changed[key] = _audit_value(name, kind, old, new)
-    if to_store:
+    if to_store and not dry_run:
         await set_settings(db, to_store)
 
     sections = [s for s, d in (("general", data.general), ("oidc", data.oidc), ("ldap", data.ldap)) if d is not None]
@@ -683,7 +686,7 @@ async def update(db: AsyncSession, data: SsoSettingsUpdate) -> SsoUpdateResult:
 
     warnings = await _warnings(db, current, new_cfg, ch_oidc, ch_ldap)
 
-    if {"issuer", "client_id", "enabled"} & set(ch_oidc):
+    if not dry_run and {"issuer", "client_id", "enabled"} & set(ch_oidc):
         from app.services import sso_oidc  # lazy: sso_oidc importiert dieses Modul
 
         sso_oidc.clear_caches()
