@@ -1,0 +1,6 @@
+{
+  "reason": "WS-F6-BE: 'Webhook' ist als Fachbegriff in allen Sprachen gleich (wie settings.integrations.webhooks in bs/hr/sr)",
+  "global": [
+    "audit.resourceTypes.webhook"
+  ]
+}

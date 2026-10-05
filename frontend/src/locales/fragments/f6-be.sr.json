@@ -1,0 +1,11 @@
+{
+  "set": {
+    "audit.actions.WEBHOOK_CREATE": "Webhook kreiran",
+    "audit.actions.WEBHOOK_UPDATE": "Webhook izmenjen",
+    "audit.actions.WEBHOOK_SECRET_ROTATE": "Tajna webhooka obnovljena",
+    "audit.actions.WEBHOOK_DELETE": "Webhook obrisan",
+    "audit.actions.WEBHOOK_DELIVERY_RETRY": "Isporuka webhooka ponovo poslata",
+    "audit.resourceTypes.webhook": "Webhook"
+  },
+  "remove": []
+}
