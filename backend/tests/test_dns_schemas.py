@@ -67,9 +67,11 @@ def test_manage_ptr_optional_everywhere():
     assert BulkRecordUpdate(manage_ptr=True).manage_ptr is True and BulkRecordUpdate().manage_ptr is None
 
 
-def test_zone_create_dnssec_options_placeholder_and_edited_serial():
+def test_zone_create_dnssec_options_typed_and_edited_serial():
+    from app.schemas.dnssec import DNSSECEnable
+
     z = ZoneCreate(name="example.com", enable_dnssec=True, dnssec_options={"algorithm": "ED25519"})
-    assert z.dnssec_options == {"algorithm": "ED25519"}
+    assert isinstance(z.dnssec_options, DNSSECEnable) and z.dnssec_options.algorithm == "ED25519"
     assert ZoneCreate(name="example.com").dnssec_options is None
     zr = ZoneResponse(id="a.", name="a.", kind="Native", serial=1, edited_serial=2)
     assert zr.edited_serial == 2 and ZoneResponse(id="a.", name="a.", kind="Native", serial=1).edited_serial is None

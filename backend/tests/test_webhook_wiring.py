@@ -159,9 +159,34 @@ class Recorder:
 
 
 class DnssecPDNS(FakePDNS):
+    """Schluessel mit Zustand (F4-A: enable ist idempotent, Schutzregeln pruefen den Ist-Zustand)."""
+
+    def __init__(self, name: str = "srv1"):
+        super().__init__(name)
+        self.keys: list[dict] = []
+
+    async def get_zone_meta(self, zone_id, **kw):
+        return {"name": zone_id, "kind": "Native"}
+
     async def get_cryptokeys(self, zone_id, timeout: float = 30.0):
-        return [{"id": 1, "keytype": "csk", "algorithm": "ECDSAP256SHA256", "active": True, "published": True,
-                 "ds": ["ds-line"], "privatekey": "GEHEIM"}]
+        return [dict(k, privatekey="GEHEIM") for k in self.keys]
+
+    async def add_cryptokey(self, zone_id, key_data):
+        self._count("add_cryptokey")
+        key = {"id": len(self.keys) + 1, "keytype": key_data["keytype"], "algorithm": key_data["algorithm"],
+               "active": key_data["active"], "published": True, "ds": ["ds-line"]}
+        self.keys.append(key)
+        return dict(key, privatekey="GEHEIM")
+
+    async def update_cryptokey(self, zone_id, key_id, data):
+        self._count("update_cryptokey")
+        for k in self.keys:
+            if k["id"] == key_id:
+                k.update(data)
+
+    async def delete_cryptokey(self, zone_id, key_id):
+        self._count("delete_cryptokey")
+        self.keys = [k for k in self.keys if k["id"] != key_id]
 
 
 @pytest.fixture
@@ -204,13 +229,23 @@ def _audits(session):
     return [o for o in session.added if isinstance(o, AuditLog)]
 
 
-def test_record_endpoints_enqueue_after_audit(pdns, recorder):
+def _with_www(pdns, monkeypatch, *values):
+    """Primary liest das RRset seit F7-BE gefiltert (``get_zone_rrset``, Fan-out Betriebsart B)."""
+    async def get_zone_rrset(zone_id, name, rtype, **kw):
+        return {"name": zone_id, "rrsets": [{"name": "www.allowed.example.", "type": "A", "ttl": 300,
+                                             "records": [{"content": v, "disabled": False} for v in values]}]}
+
+    monkeypatch.setattr(pdns, "get_zone_rrset", get_zone_rrset, raising=False)
+
+
+def test_record_endpoints_enqueue_after_audit(pdns, recorder, monkeypatch):
+    _with_www(pdns, monkeypatch, "192.0.2.1")
     c, s = _admin_client()
     z = "allowed.example."
     rec = {"name": f"www.{z}", "type": "A", "ttl": 300, "records": [{"content": "192.0.2.1"}]}
     assert c.post(f"{A}/records/srv1/{z}", json=rec).status_code == 200
     assert c.put(f"{A}/records/srv1/{z}", json={"name": f"www.{z}", "type": "A", "ttl": 300,
-                                                "old_content": "192.0.2.1", "new_content": "192.0.2.2"}).status_code == 404
+                                                "old_content": "192.0.2.9", "new_content": "192.0.2.2"}).status_code == 404
     assert c.request("DELETE", f"{A}/records/srv1/{z}/delete",
                      json={"name": f"www.{z}", "type": "A", "content": "192.0.2.1"}).status_code == 200
     assert c.post(f"{A}/records/srv1/{z}/bulk", json={"create": [rec], "delete": []}).status_code == 200
@@ -222,18 +257,19 @@ def test_record_endpoints_enqueue_after_audit(pdns, recorder):
         assert call["zone"] == z and call["server"] == "srv1" and call["actor"] == 1
         assert call["audit_log_id"] == audit.id and audit.id is not None
         assert audit.zone_name == z  # write_audit(zone_name=...) auch fuer Record-Namen
-    assert recorder.calls[0]["data"] == {"server": "srv1", "zone": z, "name": f"www.{z}", "type": "A"}
-    assert recorder.calls[1]["data"]["content"] == "192.0.2.1"
+        assert audit.details["version"] == 2  # Audit v2 (F7-BE)
+    v1 = ("server", "zone", "name", "type")
+    assert {k: recorder.calls[0]["data"][k] for k in v1} == {"server": "srv1", "zone": z, "name": f"www.{z}",
+                                                             "type": "A"}
+    # F6 5.3 (F7-BE [D8]): changes/fanout zusaetzlich zu den v1-Feldern
+    assert {"ttl", "added", "changes", "fanout"} <= set(recorder.calls[0]["data"])
+    assert recorder.calls[1]["data"]["content"] == "192.0.2.1" and "changes" in recorder.calls[1]["data"]
     assert recorder.calls[2]["data"] == {"server": "srv1", "zone": z, "created": 1, "deleted": 0}
     assert [a[0][0] for a in recorder.detached] == ["UPDATE"]  # Fehler-Audit detached
 
 
 def test_record_update_enqueues_updated(pdns, recorder, monkeypatch):
-    async def get_zone(zone_id, **kw):
-        return {"name": zone_id, "rrsets": [{"name": "www.allowed.example.", "type": "A", "ttl": 300,
-                                             "records": [{"content": "192.0.2.1", "disabled": False}]}]}
-
-    monkeypatch.setattr(pdns, "get_zone", get_zone, raising=False)
+    _with_www(pdns, monkeypatch, "192.0.2.1")
     c, s = _admin_client()
     r = c.put(f"{A}/records/srv1/allowed.example.", json={"name": "www.allowed.example.", "type": "A", "ttl": 300,
                                                          "old_content": "192.0.2.1", "new_content": "192.0.2.2"})
@@ -329,22 +365,26 @@ def test_zone_delete_keeps_acl_when_zone_on_other_server(pdns, recorder, monkeyp
 
 def test_dnssec_endpoints_enqueue(pdns, recorder):
     c, s = _admin_client()
-    base = f"{A}/dnssec/srv1/allowed.example."
-    assert c.post(f"{base}/enable", json={}).status_code == 200
-    assert c.post(f"{base}/disable").status_code == 200
-    assert c.post(f"{base}/keys/1/activate").status_code == 200
+    z = "allowed.example."
+    base = f"{A}/dnssec/srv1/{z}"
+    assert c.post(f"{base}/enable", json={}).status_code == 200                      # CSK 1 aktiv
+    assert c.post(f"{base}/enable", json={}).status_code == 200                      # idempotent: kein Ereignis
+    assert c.post(f"{base}/keys", json={"keytype": "csk"}).status_code == 200        # CSK 2 inaktiv
+    assert c.post(f"{base}/keys/2/activate").status_code == 200
     assert c.post(f"{base}/keys/1/deactivate").status_code == 200
+    assert c.post(f"{base}/keys/2/deactivate").status_code == 409                    # Schutzregel: kein Ereignis
     assert c.delete(f"{base}/keys/1").status_code == 200
-    assert recorder.events() == ["dnssec.enabled", "dnssec.disabled", "dnssec.key_activated",
-                                 "dnssec.key_deactivated", "dnssec.key_deleted"]
+    assert c.post(f"{base}/disable").status_code == 200
+    assert recorder.events() == ["dnssec.enabled", "dnssec.key_created", "dnssec.key_activated",
+                                 "dnssec.key_deactivated", "dnssec.key_deleted", "dnssec.disabled"]
     enabled = recorder.calls[0]["data"]
-    assert enabled["algorithm"] == "ECDSAP256SHA256" and enabled["nsec3param"] == "1 0 1 ab"
-    assert enabled["keys"] == [{"id": 1, "keytype": "csk", "algorithm": "ECDSAP256SHA256", "active": True,
-                                "published": True, "ds": ["ds-line"]}]
+    assert enabled["algorithm"] == "ECDSAP256SHA256" and enabled["nsec3param"] == "1 0 0 -"
+    assert enabled["keys"][0]["id"] == 1 and enabled["keys"][0]["ds"] == ["ds-line"]
     assert "GEHEIM" not in repr(recorder.calls)
-    assert recorder.calls[2]["data"] == {"zone": "allowed.example.", "server": "srv1", "key_id": 1}
+    assert recorder.calls[2]["data"]["key_id"] == 2 and recorder.calls[2]["data"]["zone"] == z
+    assert all(c_["zone"] == z and c_["server"] == "srv1" and c_["actor"] == 1 for c_ in recorder.calls)
     audits = _audits(s)
-    assert [a.action for a in audits] == ["DNSSEC_ENABLE", "DNSSEC_DISABLE", "KEY_ACTIVATE", "KEY_DEACTIVATE",
-                                         "KEY_DELETE"]
-    assert all(a.zone_name == "allowed.example." for a in audits)
+    assert [a.action for a in audits] == ["DNSSEC_ENABLE", "KEY_CREATE", "KEY_ACTIVATE", "KEY_DEACTIVATE",
+                                         "KEY_DELETE", "DNSSEC_DISABLE"]
+    assert all(a.zone_name == z for a in audits)
     assert [c_["audit_log_id"] for c_ in recorder.calls] == [a.id for a in audits]
