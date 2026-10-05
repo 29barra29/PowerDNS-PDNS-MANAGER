@@ -1,14 +1,22 @@
-"""API routes for DNSSEC management."""
+"""API routes for DNSSEC management.
+
+Erfolgs-Audits ueber ``write_audit`` (``zone_name`` = Zone, Commit vor der Antwort per ``DbWrite``),
+Webhook-Ereignisse ``dnssec.*`` ueber die Outbox (``await enqueue_event``). F4 baut die Endpunkte in
+Welle 1/2 aus (Schluesselverwaltung, NSEC3, Rollover).
+"""
 import logging
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.audit import write_audit_detached
-from app.core.database import get_db
+
 from app.core.auth import get_current_user, assert_zone_access
-from app.services.pdns_client import pdns_manager, PowerDNSAPIError
-from app.services.dnssec_parse import parse_ds_line, parse_dnskey_rdata
-from app.schemas.dns import DNSSECEnable, MessageResponse  # CryptoKeyResponse currently unused
+from app.core.database import DbRead, DbWrite
 from app.models.models import AuditLog, User
+from app.schemas.dns import DNSSECEnable, MessageResponse  # CryptoKeyResponse currently unused
+from app.services.audit import write_audit
+from app.services.dnssec_parse import parse_ds_line, parse_dnskey_rdata
+from app.services.pdns_client import pdns_manager, PowerDNSAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -33,36 +41,23 @@ async def _log_action(
     server_name: str = None, details: dict = None,
     status: str = "success", error_message: str = None,
     user_id: int = None,
-):
-    """Helper to create audit log entries (mit user_id)."""
-    if status != "success":
-        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
-        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
-        await write_audit_detached(
-            action, "dnssec_key", resource_name, user_id=user_id, details=details,
-            status=status, error_message=error_message, server_name=server_name,
-        )
-        return
-    log = AuditLog(
-        action=action,
-        resource_type="dnssec_key",
-        resource_name=resource_name,
-        server_name=server_name,
-        details=details,
-        status=status,
-        error_message=error_message,
-        user_id=user_id,
+) -> Optional[AuditLog]:
+    """Audit-Eintrag (resource_type ``dnssec_key``, ``zone_name`` = Zone) ueber ``write_audit``.
+
+    Erfolg: Eintrag in der Request-Session (Rueckgabe mit ``id``); Fehler: eigene Session, Rueckgabe ``None``.
+    """
+    return await write_audit(
+        db, action, "dnssec_key", resource_name, user_id=user_id, details=details, status=status,
+        error_message=error_message, server_name=server_name, zone_name=resource_name,
     )
-    db.add(log)
-    await db.flush()
 
 
 @router.get("/{server_name}/{zone_id:path}/keys")
 async def list_cryptokeys(
     server_name: str,
     zone_id: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """List all DNSSEC keys for a zone (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id)
@@ -88,8 +83,8 @@ async def get_cryptokey(
     server_name: str,
     zone_id: str,
     key_id: int,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Get a specific DNSSEC key (Auth + Zone-Schreibrecht). privatekey wird nie ausgeliefert."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -113,9 +108,9 @@ async def get_cryptokey(
 async def enable_dnssec(
     server_name: str,
     zone_id: str,
+    db: DbWrite,
     config: DNSSECEnable = DNSSECEnable(),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Enable DNSSEC for a zone (Auth + Zone-ACL).
 
@@ -140,11 +135,34 @@ async def enable_dnssec(
             if key.get("ds"):
                 ds_records.extend(key["ds"])
 
-        await _log_action(db, "DNSSEC_ENABLE", zone_id, server_name, {
+        audit = await _log_action(db, "DNSSEC_ENABLE", zone_id, server_name, {
             "algorithm": config.algorithm,
             "nsec3param": config.nsec3param,
             "key_id": result.get("id") if isinstance(result, dict) else None,
         }, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "dnssec.enabled", actor=current_user, zone=zone_id, server=server_name,
+            data={
+                "zone": zone_id,
+                "server": server_name,
+                "algorithm": config.algorithm,
+                "nsec3param": config.nsec3param or None,
+                # ohne privatekey (keys ist bereits durch _strip_private gelaufen)
+                "keys": [
+                    {
+                        "id": k.get("id"),
+                        "keytype": k.get("keytype"),
+                        "algorithm": k.get("algorithm"),
+                        "active": k.get("active"),
+                        "published": k.get("published"),
+                        "ds": list(k.get("ds") or []),
+                    }
+                    for k in keys if isinstance(k, dict)
+                ],
+            },
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"DNSSEC enabled for zone '{zone_id}' on '{server_name}'",
@@ -167,8 +185,8 @@ async def enable_dnssec(
 async def disable_dnssec(
     server_name: str,
     zone_id: str,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Disable DNSSEC for a zone (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -180,7 +198,13 @@ async def disable_dnssec(
     try:
         await client.disable_dnssec(zone_id)
 
-        await _log_action(db, "DNSSEC_DISABLE", zone_id, server_name, user_id=current_user.id)
+        audit = await _log_action(db, "DNSSEC_DISABLE", zone_id, server_name, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "dnssec.disabled", actor=current_user, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name},
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"DNSSEC disabled for zone '{zone_id}' on '{server_name}'",
@@ -202,8 +226,8 @@ async def activate_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Activate a DNSSEC key (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -211,7 +235,13 @@ async def activate_key(
         client = pdns_manager.get_client(server_name)
         await client.activate_cryptokey(zone_id, key_id)
 
-        await _log_action(db, "KEY_ACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        audit = await _log_action(db, "KEY_ACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "dnssec.key_activated", actor=current_user, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name, "key_id": key_id},
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"Key {key_id} activated for zone '{zone_id}'"
@@ -227,8 +257,8 @@ async def deactivate_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Deactivate a DNSSEC key (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -236,7 +266,13 @@ async def deactivate_key(
         client = pdns_manager.get_client(server_name)
         await client.deactivate_cryptokey(zone_id, key_id)
 
-        await _log_action(db, "KEY_DEACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        audit = await _log_action(db, "KEY_DEACTIVATE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "dnssec.key_deactivated", actor=current_user, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name, "key_id": key_id},
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"Key {key_id} deactivated for zone '{zone_id}'"
@@ -252,8 +288,8 @@ async def delete_key(
     server_name: str,
     zone_id: str,
     key_id: int,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Delete a DNSSEC key (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -261,7 +297,13 @@ async def delete_key(
         client = pdns_manager.get_client(server_name)
         await client.delete_cryptokey(zone_id, key_id)
 
-        await _log_action(db, "KEY_DELETE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        audit = await _log_action(db, "KEY_DELETE", zone_id, server_name, {"key_id": key_id}, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "dnssec.key_deleted", actor=current_user, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name, "key_id": key_id},
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"Key {key_id} deleted from zone '{zone_id}'"
@@ -276,8 +318,8 @@ async def delete_key(
 async def get_ds_records(
     server_name: str,
     zone_id: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Get DS records for a zone (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id)

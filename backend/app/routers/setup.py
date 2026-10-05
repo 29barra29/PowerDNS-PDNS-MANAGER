@@ -1,14 +1,13 @@
 """First-run setup endpoints (bewusst klein gehalten)."""
 import logging
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi import APIRouter, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.timeutil import iso_utc
-from app.core.database import get_db
+from app.core.database import DbRead, DbWrite
 from app.core.auth import hash_password, create_access_token, MIN_PASSWORD_LENGTH
 from app.models.models import User, SystemSetting
 from app.core.config import settings
@@ -34,7 +33,7 @@ class RegisterFirstUser(BaseModel):
 
 
 @router.get("/status", response_model=SetupStatus)
-async def get_setup_status(db: AsyncSession = Depends(get_db)):
+async def get_setup_status(db: DbRead):
     """Check if initial setup is complete."""
     user_count = await db.scalar(select(func.count(User.id)))
     has_users = user_count > 0
@@ -53,7 +52,7 @@ async def get_setup_status(db: AsyncSession = Depends(get_db)):
 async def register_first_user(
     user_data: RegisterFirstUser,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: DbWrite,
 ):
     """Register the first user as admin (only works if no users exist).
 
