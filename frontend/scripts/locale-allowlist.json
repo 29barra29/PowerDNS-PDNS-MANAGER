@@ -16,7 +16,7 @@
   ],
   "perLanguage": {
     "de": [
-      "audit.ok", "audit.server", "audit.status", "dashboard.version", "login.tagline", "search.name", "search.server", "search.zone",
+      "audit.ok", "audit.server", "audit.status", "dashboard.version", "login.tagline", "search.name", "search.server",
       "settings.acme.formName", "settings.administrator", "settings.brandingTitle", "settings.displayNamePlaceholder",
       "settings.encryptionSsl", "settings.integrations.passkeyNameLabel", "settings.integrations.webhookFieldName",
       "settings.integrations.webhooks", "settings.nameserverPlaceholder", "settings.updates", "settingsMore.apiKey",
