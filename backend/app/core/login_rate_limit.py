@@ -1,68 +1,95 @@
-"""Einfache IP-basierte Drosselung bei fehlgeschlagenen Logins (ohne extra Dependencies)."""
-import time
-from collections import deque
-from typing import Deque, Dict
+"""Drosselung fehlgeschlagener Anmeldungen: pro IP (IPv6 je /64) und pro Benutzername.
 
-# Gleitfenster: pro IP max. N Fehlversuche in WINDOW Sekunden
-_MAX_FAILS = 25
-_WINDOW_SEC = 900  # 15 Minuten
-_fails: Dict[str, Deque[float]] = {}
+- IP-Fenster: 25 Fehlversuche in 15 Minuten je ``rate_limit.ip_key`` (IPv6 /64).
+- Benutzer-Fenster: 5 Fehlversuche in 15 Minuten je normalisiertem Benutzernamen
+  (``strip().lower()[:100]``), unabhaengig von der IP. Damit laesst sich ein Passwort
+  nicht von wechselnden Adressen durchprobieren, und ein gesperrter Benutzername loest
+  weder Passwortvergleich noch LDAP-Bind aus (kein AD-Lockout ueber das Panel).
+- ``clear_login_fails`` loescht nach erfolgreicher Anmeldung nur den Benutzer-Zaehler;
+  der IP-Zaehler laeuft immer aus (ein erfolgreicher Login mit einem eigenen Konto darf
+  die Fehlversuche gegen fremde Konten derselben IP nicht vergessen machen).
 
-# Regelmäßiges Aufräumen, damit das Dict nicht unbegrenzt wächst (IPs, die einmal
-# fehlschlugen und nie wiederkommen, würden sonst für immer Speicher belegen).
-_CLEANUP_INTERVAL_SEC = 300  # alle 5 Minuten
-_last_cleanup = 0.0
+Dieselben Zaehler nutzen ``/auth/login``, ``/auth/login/2fa``, Passkey-Login, LDAP-Link
+und die Step-up-Pruefung. Antworten bei Benutzer- und IP-Sperre sind identisch (429).
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from app.core.rate_limit import SlidingWindowLimiter, ip_key
+
+logger = logging.getLogger(__name__)
+
+IP_MAX_FAILS = 25
+USER_MAX_FAILS = 5
+WINDOW_SEC = 900  # 15 Minuten
+USERNAME_MAX_LEN = 100
+_MAX_IP_LEN = 64
+
+_ip_limiter = SlidingWindowLimiter(IP_MAX_FAILS, WINDOW_SEC, max_keys=20_000)
+_user_limiter = SlidingWindowLimiter(USER_MAX_FAILS, WINDOW_SEC, max_keys=20_000)
+_deprecation_logged = False
 
 
-def _sweep(now: float) -> None:
-    """Entfernt abgelaufene Einträge aus ALLEN IPs (nicht nur der aktuellen)."""
-    global _last_cleanup
-    if now - _last_cleanup < _CLEANUP_INTERVAL_SEC:
-        return
-    _last_cleanup = now
-    for ip in list(_fails.keys()):
-        q = _fails[ip]
-        while q and now - q[0] > _WINDOW_SEC:
-            q.popleft()
-        if not q:
-            del _fails[ip]
+def normalize_username(username: Optional[str]) -> str:
+    """Schluessel des Benutzer-Zaehlers: getrimmt, klein, max. 100 Zeichen."""
+    return (username or "").strip().lower()[:USERNAME_MAX_LEN]
 
 
-def _prune(client_ip: str, create: bool = False):
-    """Liefert die (bereinigte) Fehlversuchs-Queue der IP.
+def _ip_counter_key(client_ip: Optional[str]) -> Optional[str]:
+    ip = (client_ip or "").strip()
+    if not ip or ip == "unknown" or len(ip) > _MAX_IP_LEN:
+        return None
+    return ip_key(ip)
 
-    Ohne ``create`` wird KEIN neuer Eintrag angelegt: reine Lese-Checks (jeder
-    Login-Aufruf) duerfen das Dict nicht wachsen lassen (Speicher-DoS ohne Login).
+
+def is_login_rate_limited(client_ip: Optional[str], username: Optional[str] = None) -> bool:
+    """True, wenn die IP (bzw. ihr /64) ODER der Benutzername gesperrt ist."""
+    key = _ip_counter_key(client_ip)
+    if key is not None and _ip_limiter.is_limited(key):
+        return True
+    user = normalize_username(username)
+    if user and _user_limiter.is_limited(user):
+        return True
+    return False
+
+
+def record_failed_login(client_ip: Optional[str], username: Optional[str] = None) -> None:
+    """Zaehlt einen Fehlversuch fuer die IP und – falls angegeben – fuer den Benutzernamen."""
+    key = _ip_counter_key(client_ip)
+    if key is not None:
+        _ip_limiter.hit(key)
+    user = normalize_username(username)
+    if user:
+        _user_limiter.hit(user)
+
+
+def clear_login_fails(client_ip: Optional[str], username: Optional[str] = None) -> None:
+    """Nach erfolgreicher Anmeldung: loescht NUR den Benutzer-Zaehler; der IP-Zaehler bleibt.
+
+    Aufruf ohne Benutzernamen (Altform aus 2.4.x) ist ein No-op mit Deprecation-Log,
+    bis alle Aufrufer umgestellt sind.
     """
-    now = time.time()
-    _sweep(now)
-    q = _fails.get(client_ip)
-    if q is None:
-        if not create:
-            return None
-        q = deque()
-        _fails[client_ip] = q
-    while q and now - q[0] > _WINDOW_SEC:
-        q.popleft()
-    if not q and not create:
-        _fails.pop(client_ip, None)
-    return q
-
-
-def is_login_rate_limited(client_ip: str) -> bool:
-    """True wenn zu viele Fehlversuche in letzter Zeit."""
-    if not client_ip or client_ip == "unknown":
-        return False
-    q = _prune(client_ip)
-    return bool(q) and len(q) >= _MAX_FAILS
-
-
-def record_failed_login(client_ip: str) -> None:
-    if not client_ip or client_ip == "unknown" or len(client_ip) > 64:
+    global _deprecation_logged
+    if username is None:
+        if not _deprecation_logged:
+            _deprecation_logged = True
+            logger.warning(
+                "clear_login_fails() ohne Benutzernamen ist veraltet und wirkungslos "
+                "(IP-Zaehler werden nicht mehr geloescht)."
+            )
+        else:
+            logger.debug("clear_login_fails() ohne Benutzernamen ignoriert")
         return
-    q = _prune(client_ip, create=True)
-    q.append(time.time())
+    user = normalize_username(username)
+    if user:
+        _user_limiter.reset(user)
 
 
-def clear_login_fails(client_ip: str) -> None:
-    _fails.pop(client_ip, None)
+def reset_for_tests() -> None:
+    """Alle Zaehler leeren (nur fuer Tests)."""
+    global _deprecation_logged
+    _ip_limiter.reset()
+    _user_limiter.reset()
+    _deprecation_logged = False
