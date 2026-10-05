@@ -1,0 +1,23 @@
+{
+  "reason": "WS-F7-FE: Protokollnamen DNSSEC/ACME als Gruppenbezeichnung im Audit-Log (wie audit.resourceTypes.dnssec_key/acme); TTL-Zeilen im Diff bestehen nur aus Fachbegriff und Zahlen; im Deutschen sind 'Records', 'Zone', 'System' und 'Status' die ueblichen Fachbegriffe (wie zoneDetail.tabRecords, audit.resourceTypes.zone, audit.status)",
+  "global": [
+    "audit.groups.acme",
+    "audit.groups.dnssec",
+    "history.ttl",
+    "history.ttlChanged"
+  ],
+  "perLanguage": {
+    "de": [
+      "audit.groups.records",
+      "audit.groups.system",
+      "audit.groups.zone",
+      "audit.zone",
+      "history.filterStatus"
+    ]
+  },
+  "dynamic": [
+    "history.outcome.*",
+    "history.outcomeShort.*",
+    "audit.groups.*"
+  ]
+}
