@@ -12,7 +12,7 @@ Regeln:
 - ``details["auth"]`` ist reserviert (F14) und wird vom ``AuditLog``-Konstruktor gesetzt.
 
 Ausserdem: ``csv_safe`` (Formel-Injection-Schutz fuer CSV-Exporte [S13]), ``public_details``
-(Allowlist fuer Nicht-Admins [S12], Grundgeruest – F7-BE baut darauf auf), Aufbewahrung
+(Allowlist fuer Nicht-Admins [S12], genutzt vom Zonenverlauf ueber ``record_history``), Aufbewahrung
 (``get_retention_days``, ``purge_expired_audit_logs``) und der einmalige Backfill von
 ``audit_logs.zone_name`` fuer Alteintraege (F7 4.4).
 """
@@ -218,6 +218,9 @@ PUBLIC_DETAIL_KEYS = frozenset({
     "version", "zone", "changes", "change_count", "fanout", "after_source", "primary_outcome",
     "revert_of", "forced", "conflicts", "skipped", "source", "mode", "ptr", "auto_ptr", "token_name",
     "type", "ttl", "records", "old", "new", "content",
+    # Zaehler/Kennzeichen ohne personenbezogene Daten: Legacy-Bulk (v1 created/deleted, im Zonenverlauf
+    # angezeigt, F7 2.1) und F1-Bulk (ops, changes_total, applied)
+    "created", "deleted", "ops", "changes_total", "applied",
     # F14: Token-Kontext ohne Prefix (siehe _public_auth)
     "auth",
     # Kennzeichen, die nur die Vollstaendigkeit beschreiben
