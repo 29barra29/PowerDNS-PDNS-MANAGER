@@ -1,0 +1,7 @@
+{
+  "reason": "WS-F2F3: '2FA' ist die etablierte Abkuerzung in allen Sprachen (Badge der Benutzerliste); im Deutschen sind 'Export' (Button der Zonenansicht, F3 6.8) und 'Passkeys: {{count}}' (Fachbegriff, wie audit.actions.PASSKEY_ADD) identisch mit en",
+  "global": ["users.badge2fa"],
+  "perLanguage": {
+    "de": ["zoneDetail.exportButton", "users.badgePasskeys"]
+  }
+}
