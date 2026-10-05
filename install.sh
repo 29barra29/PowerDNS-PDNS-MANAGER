@@ -99,6 +99,7 @@ if [ "$LANG_APP" = "en" ]; then
     M_SEC_1="Change all default passwords"
     M_SEC_2="Enable HTTPS (reverse proxy)"
     M_SEC_3="See INSTALL.md for details"
+    M_SEC_4="Back up the .env (it holds SECRET_ENCRYPTION_KEY) separately from database dumps"
     M_HELP="Need help?"
 else
     M_BANNER_TITLE="PDNS Manager - Automatische Installation"
@@ -156,6 +157,7 @@ else
     M_SEC_1="Ändere alle Standard-Passwörter"
     M_SEC_2="Aktiviere HTTPS mit Reverse Proxy"
     M_SEC_3="Siehe INSTALL.md für Details"
+    M_SEC_4="Die .env (enthält SECRET_ENCRYPTION_KEY) getrennt von DB-Dumps sichern"
     M_HELP="Bei Problemen:"
 fi
 
@@ -352,6 +354,8 @@ else
     set_env AUTH_COOKIE_SECURE   "false"
     set_env AUTH_COOKIE_SAMESITE "lax"
     set_env DOCS_ENABLED         "false"
+    # Schluessel fuer gespeicherte Geheimnisse (ab 3.0); einen vorhandenen nie ersetzen.
+    grep -qE '^SECRET_ENCRYPTION_KEY=.+' .env || set_env SECRET_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr '+/' '-_')"
 
     rm -f .env.bak 2>/dev/null || true
     chmod 600 .env 2>/dev/null || true
@@ -434,6 +438,7 @@ echo "🔒 $M_SECURITY"
 echo "   - $M_SEC_1"
 echo "   - $M_SEC_2"
 echo "   - $M_SEC_3"
+echo "   - $M_SEC_4"
 echo ""
 echo "💡 $M_HELP"
 echo "   https://github.com/29barra29/PowerDNS-PDNS-MANAGER/issues"
