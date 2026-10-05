@@ -350,3 +350,15 @@ def test_parse_actions_and_filter_validation():
     assert "example.com." in values and "www.example.com." in values and "MX" in values
     assert "%50\\%\\_x%" in values  # LIKE-Sonderzeichen escaped
     assert datetime(2026, 10, 5, 12, 0) in values  # aware -> naive UTC
+
+
+def test_public_details_keeps_harmless_counters_for_non_admin():
+    from app.services.audit import public_details
+
+    legacy_bulk = {"created": 2, "deleted": 1, "fanout": {"ns1": "saved"}, "client_ip": "198.51.100.7"}
+    assert public_details(legacy_bulk, admin=False) == {"created": 2, "deleted": 1, "fanout": {"ns1": "saved"}}
+    f1_error = {"version": 2, "zone": Z, "changes": [], "applied": False, "changes_total": 3,
+                "ops": {"create": 1, "delete": 2}, "peer_drift": {"ns2": 1}}
+    out = public_details(f1_error, admin=False)
+    assert out["applied"] is False and out["changes_total"] == 3 and out["ops"] == {"create": 1, "delete": 2}
+    assert "peer_drift" not in out
