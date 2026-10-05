@@ -352,6 +352,31 @@ def test_parse_actions_and_filter_validation():
     assert datetime(2026, 10, 5, 12, 0) in values  # aware -> naive UTC
 
 
+def test_public_only_q_never_searches_hidden_fields():
+    """Fix-Runde [S12]: Nicht-Admin-Suche nur ueber resource_name und DNS-Daten (kein Orakel ueber versteckte Felder)."""
+    from sqlalchemy.dialects import mysql
+
+    def sql(**kw):
+        conds = rh.build_audit_filters(zone=Z, q="203.0.113", **kw)
+        return " ".join(str(c.compile(dialect=mysql.dialect())) for c in conds)
+
+    admin_sql = sql()
+    assert "error_message" in admin_sql and "CAST(audit_logs.details AS CHAR)" in admin_sql
+    public = sql(public_only=True)
+    assert "error_message" not in public and "CAST(audit_logs.details AS CHAR)" not in public
+    assert "json_extract(audit_logs.details" in public and "resource_name" in public
+    # q_admin_columns wird bei public_only ignoriert
+    assert sql(public_only=True, q_admin_columns=True) == public
+    params = {}
+    for c in rh.build_audit_filters(zone=Z, q="x_y", public_only=True):
+        params.update(c.compile().params)
+    assert "%x\\_y%" in params.values()
+    assert set(rh.PUBLIC_SEARCH_PATHS) >= {"$.changes[*].name", "$.changes[*].after.records[*].content"}
+    # Keine Pfade, die ganze Details-Teilbaeume mit privaten Schluesseln liefern koennten
+    assert not any(p in rh.PUBLIC_SEARCH_PATHS for p in ("$", "$.changes", "$.auth", "$.ptr", "$.fanout"))
+    assert not any(k in p for p in rh.PUBLIC_SEARCH_PATHS for k in ("client_ip", "token_prefix", "ip_source"))
+
+
 def test_public_details_keeps_harmless_counters_for_non_admin():
     from app.services.audit import public_details
 
