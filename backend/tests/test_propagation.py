@@ -348,6 +348,72 @@ async def test_d9_record_match_decides_for_dns_rows(monkeypatch):
     assert ns_row.match is False and ns_row.record_match is True and ns_row.status == "ok"
 
 
+async def test_d9_master_plus_writable_slave_is_not_separate_and_lagging_ns_mismatch(monkeypatch):
+    """Fix-Runde 1: Master auf ns1 + AXFR-Secondary auf ns2 (beide schreibbar) sind keine getrennten Backends;
+    ein NS mit der veralteten Serial des Secondary bleibt ``mismatch`` mit ``secondary_lagging``."""
+    c = servers(monkeypatch, ns1=zone_json(kind="Master"),
+                ns2=zone_json(kind="Slave", serial=REF_EDITED - 1, edited=REF_EDITED - 1))
+    DnsFake(monkeypatch, per_ip={"192.0.2.53": REF_EDITED, "198.51.100.7": REF_EDITED - 1,
+                                 "1.1.1.1": REF_EDITED - 1})
+    res = await check(ON, writable={"ns1", "ns2"})
+    assert res.separate_backends is False
+    slave = by(res, "ns2")
+    assert slave.status == "mismatch" and "secondary_lagging" in slave.notes and "separate_backend" not in slave.notes
+    ext = by(res, "ns.extern.net.")
+    assert ext.status == "mismatch" and ext.match is False and ext.serial_relation == "behind"
+    assert "secondary_lagging" in ext.notes
+    res_row = by(res, "1.1.1.1")
+    assert res_row.status == "mismatch" and "resolver_cache" in res_row.notes
+    assert by(res, "ns1.example.com.").status == "ok"
+    assert res.summary.in_sync is False
+    # Secondary braucht keine volle Zone (kein Fingerprint-Vergleich)
+    assert [p for m, _ep, _j, p, _t in c["ns2"].calls if m == "GET"] == [{"rrsets": "false"}]
+
+
+async def test_d9_record_check_with_writable_slave_stays_strict(monkeypatch):
+    """Ohne getrennte Backends entscheidet bei Record-Checks nicht allein ``record_match``."""
+    servers(monkeypatch, ns1=zone_json(kind="Master"),
+            ns2=zone_json(kind="Slave", serial=REF_EDITED - 1, edited=REF_EDITED - 1))
+    DnsFake(monkeypatch, per_ip={"192.0.2.53": REF_EDITED, "198.51.100.7": REF_EDITED - 1},
+            records={("www.example.com.", "A"): ["192.0.2.10"]})
+    res = await check(ON, record="www.example.com.", rtype="A", writable={"ns1", "ns2"})
+    ext = by(res, "ns.extern.net.")
+    assert ext.record_match is True and ext.match is False and ext.status == "mismatch"
+
+
+async def test_d9_consumer_peer_treated_like_slave(monkeypatch):
+    """Katalog-Mitglieder (kind Consumer) sind Secondaries: strenger Vergleich, keine Panel-Serial fuer DNS-Zeilen."""
+    c = servers(monkeypatch, ns1=zone_json(), ns2=zone_json(serial=2026100700, edited=2026100701),
+                ns3=zone_json(kind="Consumer", serial=REF_EDITED - 1, edited=REF_EDITED - 1))
+    DnsFake(monkeypatch, per_ip={"192.0.2.53": 2026100701, "198.51.100.7": REF_EDITED - 1})
+    res = await check(ON, writable={"ns1", "ns2", "ns3"})
+    assert res.separate_backends is True  # ns1 + ns2 bleiben getrennte Primaries
+    consumer = by(res, "ns3")
+    assert consumer.status == "mismatch" and "secondary_lagging" in consumer.notes
+    assert "separate_backend" not in consumer.notes
+    assert [p for m, _ep, _j, p, _t in c["ns3"].calls if m == "GET"] == [{"rrsets": "false"}]
+    assert by(res, "ns1.example.com.").status == "ok"  # Serial von ns2 (Primary) zaehlt weiter
+    ext = by(res, "ns.extern.net.")
+    assert ext.status == "mismatch" and ext.match is False and "secondary_lagging" in ext.notes
+
+
+async def test_d9_consumer_peer_content_compare_no_separate_note(monkeypatch):
+    servers(monkeypatch, ns1=zone_json(), ns2=zone_json(serial=2026100700, edited=2026100701),
+            ns3=zone_json(kind="Consumer", serial=REF_EDITED - 1, edited=REF_EDITED - 1))
+    res = await check(content=True, writable={"ns1", "ns2", "ns3"})
+    assert "separate_backend" in by(res, "ns2").notes
+    assert "separate_backend" not in by(res, "ns3").notes
+
+
+async def test_d9_slave_reference_does_not_count_as_writable_backend(monkeypatch):
+    servers(monkeypatch, ns1=zone_json(kind="Slave", serial=REF_EDITED - 1, edited=REF_EDITED - 1),
+            ns2=zone_json(kind="Master"))
+    res = await check(writable={"ns1", "ns2"})
+    assert res.separate_backends is False
+    peer = by(res, "ns2")
+    assert peer.status == "mismatch" and "separate_backend" not in peer.notes
+
+
 # ------------------------------------------------------------------------------------------------ P8/P9
 async def test_p8_reference_missing_cancels_tasks(monkeypatch):
     c = servers(monkeypatch, ns1=None, ns2=zone_json())
