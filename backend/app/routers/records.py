@@ -1,164 +1,73 @@
-"""API routes for DNS record management."""
+"""API routes for DNS record management.
+
+Schreibende Endpunkte: Fan-out auf alle schreibbaren Server (``services/fanout.py``), Audit ueber
+``write_audit`` (Commit vor der Antwort per ``DbWrite``), Webhook-Ereignis per ``await enqueue_event``
+(Outbox, Bauplan B.8). Die Payload-Daten sind noch v1 (server/zone/name/type …); F7-BE ergaenzt
+``changes``/``fanout`` nach F6 5.3.
+"""
 import logging
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.audit import write_audit_detached
-from app.core.database import get_db
+
 from app.core.auth import get_current_user, assert_zone_access
-from app.services.pdns_client import pdns_manager, PowerDNSAPIError, PowerDNSClient, RecordNotFoundError
+from app.core.database import DbRead, DbWrite
+from app.models.models import AuditLog, User
 from app.schemas.dns import (
     RecordCreate, RecordDelete, BulkRecordUpdate, MessageResponse, RecordUpdate
 )
-from app.models.models import AuditLog, User, ServerConfig
+from app.services import fanout
+from app.services.audit import write_audit
+from app.services.pdns_client import pdns_manager, PowerDNSAPIError, RecordNotFoundError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/records", tags=["Records"])
 
-
-async def _writable_targets_for_zone(
-    db: AsyncSession, zone_id: str, primary: str
-) -> tuple[list[tuple[str, PowerDNSClient]], dict[str, str]]:
-    """Determine which servers should receive a write for ``zone_id``.
-
-    Semantics:
-    - The server in the URL (``primary``) is the one the user clicked. It MUST
-      have ``allow_writes=True``, otherwise the caller raises 403.
-    - All OTHER active servers with ``allow_writes=True`` are added as fan-out
-      targets so independent databases stay in sync (e.g. two PowerDNS
-      instances with separate MariaDB backends).
-    - If ``allow_writes`` column is missing in the DB (very old install),
-      we treat every server as writable for backward compatibility.
-
-    Returns ``(targets, info_messages)``. ``info_messages`` is a per-server
-    dict of human-readable warnings (e.g. "server X is read-only and was
-    skipped"). The caller stores these alongside per-server results.
-    """
-    info: dict[str, str] = {}
-
-    has_column = hasattr(ServerConfig, "allow_writes")
-    configs: list[ServerConfig] = []
-    try:
-        result = await db.execute(
-            select(ServerConfig).where(ServerConfig.is_active == True)  # noqa: E712
-        )
-        configs = list(result.scalars().all())
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not load server_configs for fan-out: %s", exc)
-        configs = []
-
-    by_name = {c.name: c for c in configs}
-
-    def _is_writable(name: str) -> bool:
-        cfg = by_name.get(name)
-        if cfg is None:
-            # Server only known via env -> treat as writable
-            return True
-        if not has_column:
-            return True
-        return bool(getattr(cfg, "allow_writes", True))
-
-    if not _is_writable(primary):
-        info[primary] = "read-only"
-        return ([], info)
-
-    # primary first, then the rest of writable peers
-    targets: list[tuple[str, PowerDNSClient]] = []
-    seen: set[str] = set()
-    try:
-        targets.append((primary, pdns_manager.get_client(primary)))
-        seen.add(primary)
-    except ValueError as exc:
-        info[primary] = str(exc)
-        return ([], info)
-
-    # All other active+writable servers known in the manager
-    for name in pdns_manager.list_servers():
-        if name in seen:
-            continue
-        if not _is_writable(name):
-            info[name] = "read-only"
-            continue
-        try:
-            targets.append((name, pdns_manager.get_client(name)))
-            seen.add(name)
-        except ValueError:
-            continue
-
-    return (targets, info)
+# Fan-out-Helfer liegen seit 3.0 in services/fanout.py (Bauplan B.5); die alten Namen bleiben als Aliase.
+_writable_targets_for_zone = fanout.writable_targets_for_zone
+_read_only_error = fanout.read_only_error
+_summarize_results = fanout.summarize_results
 
 
 def _zone_not_found_for(name: str, exc: PowerDNSAPIError) -> bool:
-    """PowerDNS returns 404/422 when the zone doesn't exist on that server.
-    We treat this as "skip silently" during fan-out, because in mixed setups
-    not every writable server hosts every zone.
-    """
-    detail = (exc.detail or "").lower()
-    if exc.status_code == 404:
-        return True
-    # 422 bedeutet bei PowerDNS "Input validation failed" (ungueltiger Content, Name
-    # ausserhalb der Zone, CNAME-Konflikt ...). Nur wenn der Text eindeutig eine fehlende
-    # Zone nennt, wird uebersprungen – sonst muss der Fehler beim Nutzer ankommen.
-    return "could not find domain" in detail or "no such zone" in detail or "not found" in detail
-
-
-def _read_only_error(server_name: str) -> HTTPException:
-    return HTTPException(
-        status_code=403,
-        detail=(
-            f"Server '{server_name}' ist auf 'Speichern: Nein' gesetzt. "
-            "Wechsle in der Zonenliste auf einen Server mit aktivem Speichern, "
-            "oder aktiviere 'Speichern' für diesen Server in den Einstellungen → DNS-Server."
-        ),
-    )
-
-
-def _summarize_results(results: dict[str, str], info: dict[str, str]) -> dict:
-    """Combine per-server outcomes into a UI-friendly structure."""
-    out = {}
-    out.update(results)
-    for k, v in info.items():
-        if k not in out:
-            out[k] = f"skipped ({v})"
-    return out
+    """Alias mit der alten Signatur (``name`` wird nicht mehr gebraucht)."""
+    return fanout.zone_not_found_for(exc)
 
 
 async def _log_action(
     db: AsyncSession, action: str, resource_name: str,
     server_name: str = None, details: dict = None,
     status: str = "success", error_message: str = None,
-    user_id: int = None,
-):
-    """Helper to create audit log entries (mit user_id)."""
-    if status != "success":
-        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
-        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
-        await write_audit_detached(
-            action, "record", resource_name, user_id=user_id, details=details,
-            status=status, error_message=error_message, server_name=server_name,
-        )
-        return
-    log = AuditLog(
-        action=action,
-        resource_type="record",
-        resource_name=resource_name,
-        server_name=server_name,
-        details=details,
-        status=status,
-        error_message=error_message,
-        user_id=user_id,
+    user_id: int = None, zone_name: Optional[str] = None,
+) -> Optional[AuditLog]:
+    """Audit-Eintrag (resource_type ``record``) ueber ``write_audit``.
+
+    Erfolg: Eintrag in der Request-Session (Rueckgabe mit ``id`` fuer ``audit_log_id``); Fehler: eigene
+    Session (``write_audit_detached``), weil die Request-Session bei der folgenden HTTPException
+    zurueckgerollt wird – Rueckgabe dann ``None``.
+    """
+    return await write_audit(
+        db, action, "record", resource_name, user_id=user_id, details=details, status=status,
+        error_message=error_message, server_name=server_name, zone_name=zone_name,
     )
-    db.add(log)
-    await db.flush()
+
+
+async def _assert_lua_allowed(db: AsyncSession, user: User, rtypes) -> None:
+    """LUA-Records nur laut Policy ``lua_records_policy`` (Default: nur Admins, F15 3.1)."""
+    if any((t or "").upper() == "LUA" for t in rtypes):
+        from app.services.lua_records import assert_lua_write_allowed
+
+        await assert_lua_write_allowed(db, user)
 
 
 @router.get("/{server_name}/{zone_id:path}")
 async def list_records(
     server_name: str,
     zone_id: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """List all records in a zone (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id)
@@ -200,11 +109,12 @@ async def bulk_update_records(
     server_name: str,
     zone_id: str,
     bulk: BulkRecordUpdate,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Bulk record operations. Fans out to all writable peers."""
     await assert_zone_access(db, current_user, zone_id, write=True)
+    await _assert_lua_allowed(db, current_user, [r.type for r in bulk.create])
 
     rrsets = []
     for record in bulk.create:
@@ -262,7 +172,7 @@ async def bulk_update_records(
             if srv_name == server_name:
                 primary_error = e
 
-    await _log_action(
+    audit = await _log_action(
         db, "BULK_UPDATE", zone_id, server_name,
         {
             "created": len(bulk.create),
@@ -272,6 +182,7 @@ async def bulk_update_records(
         status="success" if primary_success else "error",
         error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
         user_id=current_user.id,
+        zone_name=zone_id,
     )
 
     if not primary_success:
@@ -279,11 +190,11 @@ async def bulk_update_records(
             raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
         raise HTTPException(status_code=502, detail="No writable server accepted the change")
 
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        current_user.id,
-        "record.bulk",
-        {"server": server_name, "zone": zone_id, "created": len(bulk.create), "deleted": len(bulk.delete)},
+    from app.services.webhook_outbox import enqueue_event
+    await enqueue_event(
+        db, "record.bulk", actor=current_user, zone=zone_id, server=server_name,
+        data={"server": server_name, "zone": zone_id, "created": len(bulk.create), "deleted": len(bulk.delete)},
+        audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(
@@ -301,8 +212,8 @@ async def create_record(
     server_name: str,
     zone_id: str,
     record: RecordCreate,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Create or replace a record set in a zone.
 
@@ -312,6 +223,7 @@ async def create_record(
     refused before any write happens.
     """
     await assert_zone_access(db, current_user, zone_id, write=True)
+    await _assert_lua_allowed(db, current_user, [record.type])
     targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
     if not targets:
         raise _read_only_error(server_name)
@@ -365,7 +277,7 @@ async def create_record(
             if srv_name == server_name:
                 primary_error = e
 
-    await _log_action(
+    audit = await _log_action(
         db, "CREATE", record.name, server_name,
         {
             "zone": zone_id,
@@ -377,6 +289,7 @@ async def create_record(
         status="success" if primary_success else "error",
         error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
         user_id=current_user.id,
+        zone_name=zone_id,
     )
 
     if not primary_success:
@@ -384,11 +297,11 @@ async def create_record(
             raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
         raise HTTPException(status_code=502, detail="No writable server accepted the change")
 
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        current_user.id,
-        "record.created",
-        {"server": server_name, "zone": zone_id, "name": record.name, "type": record.type},
+    from app.services.webhook_outbox import enqueue_event
+    await enqueue_event(
+        db, "record.created", actor=current_user, zone=zone_id, server=server_name,
+        data={"server": server_name, "zone": zone_id, "name": record.name, "type": record.type},
+        audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(
@@ -402,8 +315,8 @@ async def delete_record(
     server_name: str,
     zone_id: str,
     record: RecordDelete,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Delete a record set (or a single value, if ``content`` is set). Fans out to all writable peers."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -436,12 +349,13 @@ async def delete_record(
             if srv_name == server_name:
                 primary_error = e
 
-    await _log_action(
+    audit = await _log_action(
         db, "DELETE", record.name, server_name,
         {"zone": zone_id, "type": record.type, "content": record.content, "fanout": _summarize_results(results, info)},
         status="success" if primary_success else "error",
         error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
         user_id=current_user.id,
+        zone_name=zone_id,
     )
 
     if not primary_success:
@@ -449,11 +363,12 @@ async def delete_record(
             raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
         raise HTTPException(status_code=502, detail="No writable server accepted the change")
 
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        current_user.id,
-        "record.deleted",
-        {"server": server_name, "zone": zone_id, "name": record.name, "type": record.type, "content": record.content},
+    from app.services.webhook_outbox import enqueue_event
+    await enqueue_event(
+        db, "record.deleted", actor=current_user, zone=zone_id, server=server_name,
+        data={"server": server_name, "zone": zone_id, "name": record.name, "type": record.type,
+              "content": record.content},
+        audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(
@@ -471,11 +386,12 @@ async def update_record(
     server_name: str,
     zone_id: str,
     update: RecordUpdate,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Update a specific record's content or TTL. Fans out to writable peers."""
     await assert_zone_access(db, current_user, zone_id, write=True)
+    await _assert_lua_allowed(db, current_user, [update.type])
     targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
     if not targets:
         raise _read_only_error(server_name)
@@ -543,7 +459,7 @@ async def update_record(
             if srv_name == server_name:
                 primary_error = e
 
-    await _log_action(
+    audit = await _log_action(
         db, "UPDATE", update.name, server_name,
         {
             "zone": zone_id,
@@ -555,6 +471,7 @@ async def update_record(
         status="success" if primary_success else "error",
         error_message=None if primary_success else (primary_error.detail if primary_error else "no writable target accepted the change"),
         user_id=current_user.id,
+        zone_name=zone_id,
     )
 
     if not primary_success:
@@ -564,11 +481,11 @@ async def update_record(
             raise HTTPException(status_code=primary_error.status_code, detail=primary_error.detail)
         raise HTTPException(status_code=502, detail="No writable server accepted the change")
 
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        current_user.id,
-        "record.updated",
-        {"server": server_name, "zone": zone_id, "name": update.name, "type": update.type},
+    from app.services.webhook_outbox import enqueue_event
+    await enqueue_event(
+        db, "record.updated", actor=current_user, zone=zone_id, server=server_name,
+        data={"server": server_name, "zone": zone_id, "name": update.name, "type": update.type},
+        audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(

@@ -1,54 +1,86 @@
-"""Outbound-Webhooks: POST JSON, HMAC-SHA256 in X-DNS-Manager-Signature."""
+"""Webhook-Verwaltung und Ziel-Pruefung (SSRF-Schutz, DNS-Pinning, Signatur).
+
+Seit 3.0 wird nicht mehr direkt aus dem Request gesendet: Ereignisse landen ueber
+``services.webhook_outbox.enqueue_event`` in der Tabelle ``webhook_deliveries`` und werden vom
+Hintergrund-Worker (``services.webhook_worker``) zugestellt (F6, Bauplan B.8). Dieses Modul liefert
+die Bausteine dafuer: URL-Pruefung, Pinning der geprueften IPs, HMAC-Signatur, Anzeige-Helfer und die
+Verwaltungs-Helfer der Webhook-Routen.
+
+``validate_webhook_url`` und ``pin_webhook_targets`` loesen DNS synchron auf – Aufrufer im Event-Loop
+nutzen ``asyncio.to_thread``.
+"""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import ipaddress
-import json
 import logging
 import secrets
 import socket
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from urllib.parse import urlparse
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import async_session
 from app.models.models import Webhook
 
 logger = logging.getLogger(__name__)
 
 SIG_HEADER = "X-DNS-Manager-Signature"
-EVENT_VERSION = 1
+MAX_WEBHOOKS_PER_USER = 20
 PRIVATE_WEBHOOK_ERROR = (
     "Webhook-Ziel darf nicht auf localhost, private IPs oder interne Netze zeigen "
     "(WEBHOOK_ALLOW_PRIVATE_URLS=true nur setzen, wenn du das bewusst brauchst)."
 )
 
 
-def _matches_subscription(subscribed: str, event: str) -> bool:
-    s = (subscribed or "").strip()
-    if not s or s == "*":
-        return True
-    if s.endswith("*") and s != "*":
-        p = s[:-1]
-        return event.startswith(p) or event == p
-    return event == s or event.startswith(f"{s}.")
+class WebhookTargetBlocked(ValueError):
+    """Ziel loest auf eine private/interne Adresse auf (SSRF-Schutz) – dauerhaft, kein Retry."""
 
 
-def _webhook_wants(wh: Webhook, event: str) -> bool:
-    evs = wh.events
-    if not evs or evs == ["*"]:
-        return True
-    for s in evs:
-        if _matches_subscription(str(s), event):
-            return True
-    return False
+class WebhookResolveError(ValueError):
+    """Ziel-Host ist (derzeit) nicht aufloesbar – beim Zustellen wiederholbar."""
+
+
+def sign(secret: str, raw: bytes) -> str:
+    """HMAC-SHA256 ueber die exakt gesendeten Bytes: ``"sha256=" + hex`` (Header X-DNS-Manager-Signature)."""
+    return "sha256=" + hmac.new((secret or "").encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
+
+def url_host(url: Optional[str]) -> str:
+    """Host[:Port] der URL ohne Userinfo, IDN als A-Label, IPv6 in Klammern; ungueltig -> ``""``."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = (parsed.hostname or "").strip("[]")
+        port = parsed.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    try:
+        ip = ipaddress.ip_address(host)
+        host = f"[{ip}]" if isinstance(ip, ipaddress.IPv6Address) else str(ip)
+    except ValueError:
+        try:
+            host = host.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            host = host.lower()
+    return f"{host}:{port}" if port else host
+
+
+def url_display(url: Optional[str]) -> str:
+    """Anzeigeform ohne Geheimnisse: ``https://host[:port]/…`` (Pfad/Query weggelassen; Slack-/Teams-URLs
+    tragen das Geheimnis im Pfad). Leere oder ungueltige URL -> ``""``."""
+    raw = (url or "").strip()
+    host = url_host(raw)
+    if not host:
+        return ""
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "https").lower()
+    rest = "/…" if (parsed.path not in ("", "/") or parsed.query or parsed.fragment) else ""
+    return f"{scheme}://{host}{rest}"
 
 
 def generate_webhook_secret() -> str:
@@ -65,7 +97,11 @@ def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
 
 
 def _resolve_checked(url: str) -> tuple[str, list[str], bool]:
-    """Liefert (host als A-Label, [geprüfte IPs], host_is_literal) oder wirft ValueError."""
+    """Liefert (host als A-Label, [geprüfte IPs], host_is_literal).
+
+    Wirft ``WebhookTargetBlocked`` (private/interne Adresse), ``WebhookResolveError`` (nicht aufloesbar)
+    bzw. ``ValueError`` (ungueltiger Host) – alle sind ``ValueError``.
+    """
     parsed = urlparse((url or "").strip())
     host = (parsed.hostname or "").strip("[]")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -85,10 +121,10 @@ def _resolve_checked(url: str) -> tuple[str, list[str], bool]:
                 if info[4][0] not in candidates:
                     candidates.append(info[4][0])
         except socket.gaierror as exc:
-            raise ValueError(f"Webhook-Host konnte nicht aufgelöst werden: {host}") from exc
+            raise WebhookResolveError(f"Webhook-Host konnte nicht aufgelöst werden: {host}") from exc
     for raw_ip in candidates:
         if _is_blocked_ip(ipaddress.ip_address(raw_ip)):
-            raise ValueError(PRIVATE_WEBHOOK_ERROR)
+            raise WebhookTargetBlocked(PRIVATE_WEBHOOK_ERROR)
     return host, candidates, is_literal
 
 
@@ -133,82 +169,7 @@ def pin_webhook_targets(url: str) -> list[tuple[str, dict, dict]]:
     return out
 
 
-def _build_payload(event: str, data: Dict[str, Any], actor_user_id: int) -> bytes:
-    body = {
-        "v": EVENT_VERSION,
-        "event": event,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "app": settings.APP_NAME,
-        "actor_user_id": actor_user_id,
-        "data": data,
-    }
-    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-async def _post_one(wh: Webhook, event: str, data: Dict[str, Any], actor_user_id: int) -> None:
-    try:
-        target_url = validate_webhook_url(wh.url)
-    except ValueError as e:
-        logger.warning("Webhook %s blocked: %s", wh.id, e)
-        return
-    raw = _build_payload(event, data, actor_user_id)
-    sig = hmac.new(wh.secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
-    try:
-        targets = await asyncio.to_thread(pin_webhook_targets, target_url)
-    except ValueError as e:
-        logger.warning("Webhook %s blocked: %s", wh.id, e)
-        return
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False) as client:
-            for idx, (pinned_url, extra_headers, extensions) in enumerate(targets):
-                try:
-                    r = await client.post(
-                        pinned_url,
-                        content=raw,
-                        headers={
-                            "Content-Type": "application/json; charset=utf-8",
-                            f"{SIG_HEADER}": f"sha256={sig}",
-                            **extra_headers,
-                        },
-                        extensions=extensions,
-                    )
-                except (httpx.ConnectError, httpx.ConnectTimeout):
-                    # Naechste aufgeloeste Adresse probieren (Happy-Eyeballs-Ersatz)
-                    if idx + 1 < len(targets):
-                        continue
-                    raise
-                if r.status_code >= 400:
-                    logger.warning("Webhook %s -> %s %s", wh.id, r.status_code, (r.text or "")[:200])
-                break
-    except Exception as e:
-        logger.warning("Webhook %s failed: %s", wh.id, e)
-
-
-async def deliver_webhooks_background(user_id: int, event: str, data: Dict[str, Any]) -> None:
-    """Lädt aktive Webhooks des Users und feuert asynchron (Fire-and-forget)."""
-
-    async def _run() -> None:
-        try:
-            async with async_session() as db:
-                r = await db.execute(
-                    select(Webhook).where(Webhook.user_id == user_id, Webhook.is_active.is_(True))
-                )
-                rows: List[Webhook] = list(r.scalars().all())
-                to_send = [w for w in rows if _webhook_wants(w, event)]
-                await asyncio.gather(
-                    *(_post_one(w, event, data, user_id) for w in to_send),
-                    return_exceptions=True,
-                )
-        except Exception as e:
-            logger.error("webhook background task: %s", e)
-
-    try:
-        asyncio.get_running_loop().create_task(_run())
-    except RuntimeError:
-        asyncio.run(_run())
-
-
-# Kurz-API für Router (nur Verwaltung)
+# Kurz-API fuer die Webhook-Routen (nur Verwaltung; F6-BE baut sie in Welle 1 aus)
 async def list_webhooks(db: AsyncSession, user_id: int) -> List[Webhook]:
     r = await db.execute(
         select(Webhook)

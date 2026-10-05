@@ -1,12 +1,30 @@
-"""API routes for zone management."""
+"""API routes for zone management.
+
+Zonen anlegen/loeschen/importieren sind Admin-Funktionen (``get_admin_user``, Token nur mit ``allow_admin``)
+und pruefen zusaetzlich den Zonen-Scope eines Panel-Tokens (``assert_token_scope``, F14 5.6). Erfolgs-Audits
+laufen in der Request-Session (``DbWrite``: Commit vor der Antwort), Webhook-Ereignisse ueber die Outbox
+(``await enqueue_event``), danach wird der Zonen-Index fuer DynDNS/PTR verworfen (``zone_index.invalidate``).
+"""
 import logging
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete as sql_delete
-from app.services.audit import write_audit_detached
-from app.core.database import get_db
-from app.core.auth import get_current_user, get_admin_user, assert_zone_access
+
+from app.core.auth import (
+    _normalize_zone_name,
+    assert_token_scope,
+    assert_zone_access,
+    effective_zone_filter,
+    get_admin_user,
+    get_current_user,
+    is_effective_admin,
+)
+from app.core.database import DbRead, DbWrite
+from app.services import zone_index
+from app.services.audit import write_audit
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
 from app.schemas.dns import (
     ZoneCreate, ZoneUpdate, ZoneResponse, ZoneListResponse,
@@ -24,48 +42,31 @@ async def _log_action(
     server_name: str = None, details: dict = None,
     status: str = "success", error_message: str = None,
     user_id: int = None,
-):
-    """Helper to create audit log entries (mit user_id)."""
-    if status != "success":
-        # Fehler-Eintraege in eigener Session: get_db rollt die Request-Session bei der
-        # folgenden HTTPException zurueck, der Eintrag soll aber erhalten bleiben.
-        await write_audit_detached(
-            action, "zone", resource_name, user_id=user_id, details=details,
-            status=status, error_message=error_message, server_name=server_name,
-        )
-        return
-    log = AuditLog(
-        action=action,
-        resource_type="zone",
-        resource_name=resource_name,
-        server_name=server_name,
-        details=details,
-        status=status,
-        error_message=error_message,
-        user_id=user_id,
+) -> Optional[AuditLog]:
+    """Audit-Eintrag (resource_type ``zone``, ``zone_name`` = Zone) ueber ``write_audit``.
+
+    Erfolg: Eintrag in der Request-Session (Rueckgabe mit ``id``); Fehler: eigene Session
+    (``write_audit_detached``), Rueckgabe ``None``.
+    """
+    return await write_audit(
+        db, action, "zone", resource_name, user_id=user_id, details=details, status=status,
+        error_message=error_message, server_name=server_name, zone_name=resource_name,
     )
-    db.add(log)
-    await db.flush()
 
 
 @router.get("/{server_name}", response_model=ZoneListResponse)
 async def list_zones(
     server_name: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """List zones on a server. Non-admin users only see their assigned zones."""
+    """List zones on a server. Sichtbar: Zonenrechte des Benutzers, bei Panel-Token geschnitten mit dem Scope."""
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    allowed_zones = None
-    if current_user.role != "admin":
-        result = await db.execute(
-            select(UserZoneAccess.zone_name).where(UserZoneAccess.user_id == current_user.id)
-        )
-        allowed_zones = set(row[0] for row in result.all())
+    allowed_zones = await effective_zone_filter(db, current_user)
 
     try:
         zones_data = await client.list_zones()
@@ -73,7 +74,7 @@ async def list_zones(
         for z in zones_data:
             zone_name = z.get("name", "")
 
-            if allowed_zones is not None and zone_name not in allowed_zones:
+            if allowed_zones is not None and _normalize_zone_name(zone_name) not in allowed_zones:
                 continue
 
             zones.append(ZoneResponse(
@@ -81,6 +82,7 @@ async def list_zones(
                 name=zone_name,
                 kind=z.get("kind", ""),
                 serial=z.get("serial", 0),
+                edited_serial=z.get("edited_serial"),
                 notified_serial=z.get("notified_serial"),
                 dnssec=z.get("dnssec", False),
                 account=z.get("account"),
@@ -96,8 +98,8 @@ async def list_zones(
 async def get_zone(
     server_name: str,
     zone_id: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Get a specific zone with all records (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id)
@@ -149,10 +151,11 @@ def _allow_writes_column():
 @router.post("", response_model=MessageResponse)
 async def create_zone(
     zone_data: ZoneCreate,
+    db: DbWrite,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Create a new zone (Admin only). Only servers with allow_writes=True are used."""
+    assert_token_scope(zone_data.name, write=True)
     if zone_data.servers:
         target_servers = zone_data.servers
     else:
@@ -178,23 +181,26 @@ async def create_zone(
     if zone_data.masters:
         payload["masters"] = zone_data.masters
 
+    first_audit: Optional[AuditLog] = None
     for server_name in target_servers:
         try:
             client = pdns_manager.get_client(server_name)
             await client.create_zone(payload)
             await _update_zone_soa_and_dnssec(client, server_name, zone_name, zone_data)
             results[server_name] = "created"
-            await _log_action(db, "CREATE", zone_name, server_name, {
+            audit = await _log_action(db, "CREATE", zone_name, server_name, {
                 "kind": zone_data.kind,
                 "nameservers": zone_data.nameservers,
                 "dnssec": zone_data.enable_dnssec,
             }, user_id=admin.id)
+            first_audit = first_audit or audit
         except PowerDNSAPIError as e:
             if e.status_code == 409 or "already exists" in (e.detail or "").lower() or "Conflict" in (e.detail or ""):
                 results[server_name] = "synced"
-                await _log_action(db, "CREATE", zone_name, server_name,
-                                  {"action": "synced (zone already present)"},
-                                  user_id=admin.id)
+                audit = await _log_action(db, "CREATE", zone_name, server_name,
+                                          {"action": "synced (zone already present)"},
+                                          user_id=admin.id)
+                first_audit = first_audit or audit
             else:
                 results[server_name] = f"error: {e.detail}"
                 await _log_action(db, "CREATE", zone_name, server_name,
@@ -202,6 +208,21 @@ async def create_zone(
                                   user_id=admin.id)
         except ValueError as e:
             results[server_name] = f"error: {str(e)}"
+
+    if any(v in ("created", "synced") for v in results.values()):
+        zone_index.invalidate()
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "zone.created", actor=admin, zone=zone_name,
+            data={
+                "zone": zone_name,
+                "kind": zone_data.kind,
+                "nameservers": list(zone_data.nameservers),
+                "dnssec": bool(zone_data.enable_dnssec),
+                "results": dict(results),
+            },
+            audit_log_id=first_audit.id if first_audit else None,
+        )
 
     return MessageResponse(
         message=f"Zone '{zone_name}' creation completed",
@@ -214,14 +235,15 @@ async def update_zone(
     server_name: str,
     zone_id: str,
     zone_data: ZoneUpdate,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Update zone metadata (Auth + Zone-ACL; kind/masters/account nur Admin)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
     # Replikationsart, Master-Liste und Account veraendern, wer die Zone kontrolliert
     # (AXFR von fremden Mastern, Umgehung des Panel-Audits) – das bleibt Admins vorbehalten.
-    if current_user.role != "admin" and any(
+    # Panel-Token ohne allow_admin zaehlt hier nicht als Admin (F14 3.10).
+    if not is_effective_admin(current_user) and any(
         getattr(zone_data, f) is not None for f in ("kind", "masters", "account")
     ):
         raise HTTPException(status_code=403, detail="kind, masters und account darf nur ein Admin aendern")
@@ -234,7 +256,13 @@ async def update_zone(
         update_data = zone_data.model_dump(exclude_none=True)
         await client.update_zone(zone_id, update_data)
 
-        await _log_action(db, "UPDATE", zone_id, server_name, update_data, user_id=current_user.id)
+        audit = await _log_action(db, "UPDATE", zone_id, server_name, update_data, user_id=current_user.id)
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "zone.updated", actor=current_user, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name, "changed": dict(update_data)},
+            audit_log_id=audit.id if audit else None,
+        )
 
         return MessageResponse(
             message=f"Zone '{zone_id}' updated successfully on '{server_name}'"
@@ -252,10 +280,11 @@ async def update_zone(
 async def delete_zone(
     server_name: str,
     zone_id: str,
+    db: DbWrite,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Delete a zone (Admin only)."""
+    assert_token_scope(zone_id, write=True)
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
@@ -266,9 +295,7 @@ async def delete_zone(
 
         # Zonenrechte mit entfernen: sonst haette ein frueherer Nutzer bei einer spaeter neu
         # angelegten Zone gleichen Namens sofort wieder Zugriff (Zombie-ACL).
-        zname = zone_id.strip().lower()
-        if not zname.endswith("."):
-            zname += "."
+        zname = _normalize_zone_name(zone_id)
         # Nur aufraeumen, wenn kein anderer aktiver Server die Zone noch fuehrt
         # (Mixed-Setups: nicht jeder Server hostet jede Zone).
         still_exists = False
@@ -289,15 +316,28 @@ async def delete_zone(
             except Exception:  # noqa: BLE001 - nicht erreichbar: lieber Rechte behalten
                 still_exists = True
                 break
+        # Ereignis VOR dem Entfernen der Zonenrechte einreihen: Empfaenger mit scope="zones" werden ueber
+        # UserZoneAccess ermittelt (F6 3.9); der Audit-Eintrag entsteht erst danach (audit_log_id=None).
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "zone.deleted", actor=admin, zone=zone_id, server=server_name,
+            data={"zone": zone_id, "server": server_name, "zone_still_on_other_server": still_exists},
+        )
         removed = None
+        pruned = 0
         if not still_exists:
             removed = await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.zone_name == zname))
+            # Zone aus den Scopes der Panel-Tokens entfernen (F14 3.10)
+            from app.services import panel_token as ptk
+            pruned = await ptk.remove_zone_from_scopes(db, zname)
         await _log_action(
             db, "DELETE", zone_id, server_name,
             {"removed_zone_access_rows": int(getattr(removed, "rowcount", 0) or 0) if removed is not None else 0,
-             "zone_still_on_other_server": still_exists},
+             "zone_still_on_other_server": still_exists,
+             "pruned_panel_token_scopes": int(pruned or 0)},
             user_id=admin.id,
         )
+        zone_index.invalidate()
 
         return MessageResponse(
             message=f"Zone '{zone_id}' deleted successfully from '{server_name}'"
@@ -315,8 +355,8 @@ async def delete_zone(
 async def notify_zone(
     server_name: str,
     zone_id: str,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Send NOTIFY to all slaves for a zone (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id, write=True)
@@ -334,8 +374,8 @@ async def notify_zone(
 async def export_zone(
     server_name: str,
     zone_id: str,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Export a zone in BIND/AXFR format (Auth + Zone-ACL)."""
     await assert_zone_access(db, current_user, zone_id)
@@ -357,10 +397,11 @@ async def export_zone(
 @router.post("/import/preview")
 async def import_zone_preview(
     import_data: ZoneImport,
+    db: DbWrite,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Vergleich Zonefile vs. bestehende PDNS-Zone (erster schreibender Server) – kein Schreiben."""
+    assert_token_scope(import_data.name, write=False)
     from app.services.zone_import_diff import build_import_diff
 
     col = _allow_writes_column()
@@ -392,10 +433,11 @@ async def import_zone_preview(
 @router.post("/import", response_model=MessageResponse)
 async def import_zone(
     import_data: ZoneImport,
+    db: DbWrite,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Import a zone from BIND zonefile format (Admin only). Only servers with allow_writes=True are used."""
+    assert_token_scope(import_data.name, write=True)
     col = _allow_writes_column()
     if col is not None:
         r = await db.execute(select(ServerConfig.name).where(ServerConfig.is_active == True, col == True))  # noqa: E712
@@ -409,6 +451,7 @@ async def import_zone(
         )
 
     results = {}
+    first_audit: Optional[AuditLog] = None
     payload = {
         "name": import_data.name,
         "kind": import_data.kind,
@@ -426,16 +469,18 @@ async def import_zone(
             try:
                 await client.create_zone(payload)
                 results[server_name] = "imported"
-                await _log_action(db, "IMPORT", import_data.name, server_name, {
+                audit = await _log_action(db, "IMPORT", import_data.name, server_name, {
                     "kind": import_data.kind,
                     "content_length": len(import_data.content),
                 }, user_id=admin.id)
+                first_audit = first_audit or audit
             except PowerDNSAPIError as e:
                 if e.status_code == 409 or "already exists" in (e.detail or "").lower():
                     results[server_name] = "synced"
-                    await _log_action(db, "IMPORT", import_data.name, server_name, {
+                    audit = await _log_action(db, "IMPORT", import_data.name, server_name, {
                         "action": "synced (Zone existiert bereits, z. B. gemeinsame Datenbank)",
                     }, user_id=admin.id)
+                    first_audit = first_audit or audit
                 else:
                     raise
             try:
@@ -452,12 +497,20 @@ async def import_zone(
                 user_id=admin.id,
             )
 
-    from app.services.webhook_service import deliver_webhooks_background
-    deliver_webhooks_background(
-        admin.id,
-        "zone.imported",
-        {"zone": import_data.name, "results": results},
-    )
+    # Ereignis nur, wenn mindestens ein Server die Zone importiert oder bereits hatte (F6 5.9)
+    if any(v.startswith(("imported", "synced")) for v in results.values()):
+        zone_index.invalidate()
+        from app.services.webhook_outbox import enqueue_event
+        await enqueue_event(
+            db, "zone.imported", actor=admin, zone=import_data.name,
+            data={
+                "zone": import_data.name,
+                "kind": import_data.kind,
+                "content_length": len(import_data.content),
+                "results": dict(results),
+            },
+            audit_log_id=first_audit.id if first_audit else None,
+        )
     return MessageResponse(
         message=f"Zone '{import_data.name}' import completed",
         details=results,

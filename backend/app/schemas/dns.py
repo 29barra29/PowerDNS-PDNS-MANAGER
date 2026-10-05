@@ -1,8 +1,33 @@
 """Pydantic schemas for request/response validation."""
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional
 from datetime import datetime
 import re
+
+from app.services.lua_records import validate_lua_content
+
+# Erlaubte Record-Typen (Panel). LUA seit 3.0 (F15); ob ein Benutzer LUA schreiben darf, entscheidet die
+# LUA-Policy in den Record-Endpunkten (services/lua_records.assert_lua_write_allowed).
+ALLOWED_RECORD_TYPES: tuple[str, ...] = (
+    "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "SRV",
+    "CAA", "PTR", "ALIAS", "DNAME", "LOC", "NAPTR", "SSHFP",
+    "TLSA", "DS", "DNSKEY", "NSEC", "NSEC3", "NSEC3PARAM",
+    "RRSIG", "SPF", "OPENPGPKEY", "HTTPS", "SVCB", "LUA",
+)
+
+_GENERIC_TYPE_RE = re.compile(r"TYPE\d+")
+GENERIC_TYPE_ERROR = (
+    "Generische Typangaben (TYPE…) werden nicht unterstützt – bitte den Typnamen verwenden."
+)
+MANAGE_PTR_DESCRIPTION = "PTR in verwalteter Reverse-Zone mitpflegen (nur A/AAAA); None = Admin-Default"
+
+
+def _reject_generic_type(v: str) -> str:
+    """``TYPE65402`` & Co. ablehnen: PowerDNS kennt die Generic-Schreibweise als Synonym (z. B. fuer LUA) –
+    ohne Sperre liesse sich die LUA-Policy darueber umgehen (F15 5.2)."""
+    if _GENERIC_TYPE_RE.fullmatch(v):
+        raise ValueError(GENERIC_TYPE_ERROR)
+    return v
 
 
 # ========================
@@ -26,6 +51,11 @@ class ZoneCreate(BaseModel):
     servers: list[str] = Field(
         default_factory=list,
         description="Server names to create zone on (empty = all servers)"
+    )
+    # Platzhalter (Welle 0b): F4 typisiert das Feld als DNSSECEnable (schemas/dnssec.py) und wertet es aus.
+    dnssec_options: Optional[dict] = Field(
+        default=None,
+        description="DNSSEC-Optionen, nur mit enable_dnssec (wird derzeit noch nicht ausgewertet)",
     )
 
     @field_validator("name")
@@ -91,6 +121,7 @@ class ZoneResponse(BaseModel):
     name: str
     kind: str
     serial: int
+    edited_serial: Optional[int] = None  # PowerDNS: Serial inkl. noch nicht veroeffentlichter Aenderungen (F12)
     notified_serial: Optional[int] = None
     dnssec: bool = False
     account: Optional[str] = None
@@ -123,6 +154,7 @@ class RecordCreate(BaseModel):
     type: str = Field(..., description="Record type (A, AAAA, CNAME, MX, TXT, etc.)")
     ttl: int = Field(default=3600, ge=60, le=604800, description="TTL in seconds")
     records: list[RecordItem] = Field(..., description="Record values")
+    manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
 
     @field_validator("name")
     @classmethod
@@ -135,16 +167,17 @@ class RecordCreate(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        v = v.strip().upper()
-        allowed_types = [
-            "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA", "SRV",
-            "CAA", "PTR", "ALIAS", "DNAME", "LOC", "NAPTR", "SSHFP",
-            "TLSA", "DS", "DNSKEY", "NSEC", "NSEC3", "NSEC3PARAM",
-            "RRSIG", "SPF", "OPENPGPKEY", "HTTPS", "SVCB",
-        ]
-        if v not in allowed_types:
-            raise ValueError(f"Unknown record type: {v}")
+        v = _reject_generic_type(v.strip().upper())
+        if v not in ALLOWED_RECORD_TYPES:
+            raise ValueError(f"Unknown record type: {v}")  # Text bleibt (Skript-Kompatibilitaet)
         return v
+
+    @model_validator(mode="after")
+    def _validate_lua(self):
+        if self.type == "LUA":
+            for item in self.records:
+                item.content = validate_lua_content(item.content)
+        return self
 
 
 class RecordDelete(BaseModel):
@@ -156,6 +189,7 @@ class RecordDelete(BaseModel):
     name: str
     type: str
     content: str | None = None
+    manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
 
     @field_validator("name")
     @classmethod
@@ -168,7 +202,7 @@ class RecordDelete(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        return v.strip().upper()
+        return _reject_generic_type(v.strip().upper())
 
 
 class RecordUpdate(BaseModel):
@@ -179,6 +213,7 @@ class RecordUpdate(BaseModel):
     old_content: str = Field(..., description="Previous content to identify the record")
     new_content: str = Field(..., description="New record content")
     disabled: bool = Field(default=False)
+    manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
 
     @field_validator("name")
     @classmethod
@@ -191,13 +226,21 @@ class RecordUpdate(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        return v.strip().upper()
+        return _reject_generic_type(v.strip().upper())
+
+    @model_validator(mode="after")
+    def _validate_lua(self):
+        # old_content bleibt unveraendert: er muss exakt dem PowerDNS-Bestand entsprechen
+        if self.type == "LUA":
+            self.new_content = validate_lua_content(self.new_content)
+        return self
 
 
 class BulkRecordUpdate(BaseModel):
     """Schema for bulk record operations."""
     create: list[RecordCreate] = Field(default_factory=list)
     delete: list[RecordDelete] = Field(default_factory=list)
+    manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
 
 
 # ========================
@@ -263,7 +306,7 @@ class ZoneImport(BaseModel):
 class ServerInfo(BaseModel):
     """Schema for server information."""
     name: str
-    url: str
+    url: Optional[str] = None  # nur fuer effektive Admins (F14/[S5]); sonst weggelassen
     is_reachable: bool
     version: Optional[str] = None
     daemon_type: Optional[str] = None
