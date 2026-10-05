@@ -168,6 +168,25 @@ async def test_list_non_admin_gets_public_details_and_no_write(fake_pdns):
     assert "audit_logs.id >" in str(compiled) and 20 in compiled.params.values()
 
 
+async def test_list_non_admin_q_does_not_search_hidden_fields(fake_pdns):
+    """Fix-Runde [S12]: ``q`` darf fuer Nicht-Admins weder den ganzen Details-Text noch error_message treffen
+    (sonst waere ``total`` ein Ja/Nein-Orakel fuer ``auth.token_prefix``, ``client_ip``, PowerDNS-Rohtexte)."""
+    from sqlalchemy.dialects import mysql
+
+    async def where_sql(user, perm):
+        db = ListDB([_log(30)], perm=perm)
+        await history.list_zone_history("ns1", Z, db, current_user=user, **_list_kwargs(q="198.51.100"))
+        audit_stmts = [s for s in db.executed if "audit_logs" in str(s) and "198.51.100" in str(s.compile().params)]
+        assert len(audit_stmts) == 2  # count (total) und Trefferliste
+        return [str(s.whereclause.compile(dialect=mysql.dialect())) for s in audit_stmts]
+
+    for sql in await where_sql(_user(), "read"):
+        assert "error_message" not in sql and "CAST(audit_logs.details AS CHAR)" not in sql
+        assert "json_extract(audit_logs.details" in sql and "resource_name" in sql
+    for sql in await where_sql(_user("admin"), None):
+        assert "error_message" in sql and "CAST(audit_logs.details AS CHAR)" in sql
+
+
 async def test_list_admin_sees_everything_with_before_recreate(fake_pdns):
     rows = [_log(30), _log(15)]
     db = ListDB(rows, zone_deletes=[(20, {"zone_still_on_other_server": False})])

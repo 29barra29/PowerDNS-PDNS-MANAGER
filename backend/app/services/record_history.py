@@ -48,6 +48,7 @@ __all__ = [
     "plan_rollback", "inverse_rrsets", "read_rrsets", "capture_after", "PrimaryCapture", "RecordChange",
     "describe_change", "webhook_changes", "serialize_history_entry", "serialize_audit_entry", "public_details",
     "load_reverted_by", "load_usernames", "last_final_zone_delete_id", "build_audit_filters", "parse_actions",
+    "PUBLIC_SEARCH_PATHS",
 ]
 
 HISTORY_VERSION = 2
@@ -584,6 +585,25 @@ def parse_actions(action: Optional[str]) -> list[str]:
     return out
 
 
+# Freitextsuche fuer Nicht-Admins [S12]: nur DNS-Daten, die ``public_details`` ohnehin zeigt (Blattwerte bzw.
+# Record-Listen ohne verschachtelte Schluessel aus ``PRIVATE_NESTED_KEYS``). MariaDB-JSON_EXTRACT mit mehreren
+# Pfaden liefert ein Array aller Treffer bzw. NULL.
+PUBLIC_SEARCH_PATHS = (
+    "$.changes[*].name",
+    "$.changes[*].type",
+    "$.changes[*].before.records[*].content",
+    "$.changes[*].after.records[*].content",
+    "$.changes[*].before.comments[*].content",
+    "$.changes[*].after.comments[*].content",
+    # v1 (vor 3.0)
+    "$.type",
+    "$.records",
+    "$.content",
+    "$.old",
+    "$.new",
+)
+
+
 def build_audit_filters(
     *,
     zone: Optional[str] = None,
@@ -598,12 +618,19 @@ def build_audit_filters(
     name: Optional[str] = None,
     record_type: Optional[str] = None,
     q_admin_columns: bool = False,
+    public_only: bool = False,
 ) -> list:
     """Gemeinsame WHERE-Bedingungen fuer Zonenverlauf, Audit-Log-Liste und CSV-Export (F7 3.2/3.6).
 
     ``name``/``record_type`` treffen v1-Felder und ``changes[*]`` (MariaDB ``JSON_CONTAINS``). ``q`` sucht
     case-insensitiv in Ressource, Details und Fehlertext, mit ``q_admin_columns`` zusaetzlich in Aktion,
     Server und Zone. Verkehrter Zeitraum -> 400.
+
+    ``public_only`` (Aufrufer ist kein Admin) [S12]: ``q`` sucht nur in ``resource_name`` und in den
+    DNS-Daten unter ``PUBLIC_SEARCH_PATHS`` - nie im ganzen Details-Text und nie im Fehlertext. Sonst
+    waere ``total`` ein Ja/Nein-Orakel fuer Werte, die ``public_details``/``public_error_message`` fuer
+    Nicht-Admins ausblenden (``auth.token_prefix``, ``client_ip``, PowerDNS-Rohtexte ...).
+    ``q_admin_columns`` wird dann ignoriert.
     """
     conds: list = []
     if zone:
@@ -641,6 +668,13 @@ def build_audit_filters(
         ))
     if q and q.strip():
         pat = "%" + _escape_like(q.strip().lower()) + "%"
+        if public_only:
+            public_text = cast(func.json_extract(AuditLog.details, *PUBLIC_SEARCH_PATHS), Text)
+            conds.append(or_(
+                func.lower(AuditLog.resource_name).like(pat, escape="\\"),
+                func.lower(public_text).like(pat, escape="\\"),
+            ))
+            return conds
         cols = [
             func.lower(AuditLog.resource_name).like(pat, escape="\\"),
             func.lower(cast(AuditLog.details, Text)).like(pat, escape="\\"),

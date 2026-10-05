@@ -162,6 +162,7 @@ async def list_zone_history(
     conds = build_audit_filters(
         zone=zone, action=action, resource_type=resource_type, user_id=user_id, status=status_filter,
         date_from=date_from, date_to=date_to, q=q, name=name, record_type=record_type,
+        public_only=not admin,  # [S12] q nicht ueber ausgeblendete Felder (kein Such-Orakel)
     )
     visible = [AuditLog.zone_name == zone, AuditLog.user_id.isnot(None)]
     if not admin and cutoff is not None:

@@ -27,7 +27,8 @@
   (Standard) oder 7–3650 Tage. Die Bereinigung laeuft stuendlich im Hintergrund und wird selbst protokolliert.
 - **Datenschutz im Zonenverlauf:** Nicht-Admins sehen keine Client-IPs, keine Token-Kennungen und keine
   PowerDNS-Fehlertexte; Eintraege aus der Zeit vor einer endgueltigen Loeschung und Neuanlage der Zone sind fuer
-  sie ausgeblendet.
+  sie ausgeblendet. Die Volltextsuche (`q`) durchsucht fuer Nicht-Admins nur Record-Namen, -Typen und -Werte
+  (sowie Kommentare), nie die ausgeblendeten Angaben oder Fehlertexte.
 - **Hinweis fuer bestehende Installationen:** Eintraege aus Versionen vor 3.0 erscheinen im Verlauf, lassen sich
   aber nicht zuruecksetzen. Ist eine Aenderung am Server aus der URL nicht moeglich, weil die Zone dort fehlt,
   antworten die Record-Endpunkte jetzt mit `404` statt `502`.

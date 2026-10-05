@@ -281,6 +281,51 @@ def test_admin_audit_log_filters_total_and_csv(seeded, overrides):
     assert c.put("/api/v1/audit-log/settings", json={"retention_days": 0}).status_code == 200
 
 
+# --- Fix-Runde [S12]: kein Such-Orakel ueber versteckte Felder ---------------------------------------------------
+def test_zone_history_q_non_admin_only_public_fields(seeded, overrides):
+    """Nicht-Admin: ``q`` trifft nur Ressource/DNS-Daten, nie ``auth.token_prefix``, ``client_ip`` oder Fehlertexte."""
+    from app.core.timeutil import utcnow
+    from app.models.models import AuditLog, UserZoneAccess
+
+    s = seeded
+    z3 = "hist3.example."
+    now = utcnow()
+    _run(_add(UserZoneAccess(user_id=s["alice"], zone_name=z3, permission="read")))
+    details = {"version": 2, "zone": z3, "after_source": "reread", "fanout": {"ns1": "saved"},
+               "auth": {"via": "token", "token_name": "ci", "token_prefix": "pdm_q7xk"},
+               "client_ip": "203.0.113.77", "ip_source": "x-forwarded-for",
+               "ptr": {"client_ip": "203.0.113.77", "zone": "113.0.203.in-addr.arpa."},
+               "changes": [{"name": f"dyn.{z3}", "type": "A", "before": _snap("192.0.2.40"),
+                            "after": _snap("198.18.7.9")}]}
+    ok, = _run(_add(AuditLog(timestamp=now, action="UPDATE", resource_type="record", resource_name=f"dyn.{z3}",
+                             server_name="ns1", details=details, status="success", user_id=s["admin"],
+                             zone_name=z3, client_ip="203.0.113.77")))
+    err, = _run(_add(AuditLog(timestamp=now, action="UPDATE", resource_type="record", resource_name=f"dyn.{z3}",
+                              server_name="ns1", details={"version": 2, "zone": z3, "changes": []},
+                              status="error", error_message="Backend-Fehler /var/lib/pdns/geheim.sqlite3",
+                              user_id=s["admin"], zone_name=z3)))
+    base = f"/api/v1/zones/ns1/{z3}/history"
+
+    def search(c, q):
+        r = c.get(base, params={"q": q})
+        assert r.status_code == 200, r.text
+        return r.json()["total"], sorted(e["id"] for e in r.json()["entries"])
+
+    hidden = ["pdm_q7", "203.0.113", "forwarded", "in-addr", "geheim.sqlite", "var/lib/pdns"]
+    alice = _client(s["alice"], "user", "f7-alice")
+    for q in hidden:
+        assert search(alice, q) == (0, []), q
+    # sichtbare DNS-Daten bleiben fuer Nicht-Admins durchsuchbar
+    assert search(alice, "198.18.7") == (1, [ok])          # changes[*].after.records[*].content
+    assert search(alice, "192.0.2.40") == (1, [ok])        # changes[*].before
+    assert search(alice, "DYN.hist3") == (2, sorted([ok, err]))  # resource_name
+    # Admins durchsuchen weiterhin alles
+    admin = _client(s["admin"], "admin", "f7-admin")
+    assert search(admin, "pdm_q7") == (1, [ok])
+    assert search(admin, "geheim.sqlite") == (1, [err])
+    assert search(admin, "203.0.113") == (1, [ok])
+
+
 # --- Nr. 37 ------------------------------------------------------------------------------------------------------
 def test_purge_expired_audit_logs_batches(fresh_db, monkeypatch):
     from app.core.database import async_session
