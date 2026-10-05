@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import dns.name
 import dns.rdatatype
@@ -12,6 +14,107 @@ import dns.zone
 logger = logging.getLogger(__name__)
 
 RecordKey = Tuple[str, str, str]  # name, type, content normalized
+
+
+# ---------------------------------------------------------------------------
+# Logische Zeilen (gemeinsamer Scanner fuer Import-Vorschau F15 und BIND-Fragment-Parser F1)
+# ---------------------------------------------------------------------------
+@dataclass
+class LogicalLine:
+    """Eine logische Zeile einer Zonendatei (Klammern ueber mehrere physische Zeilen aufgeloest)."""
+
+    start: int  # 1-basierte erste physische Zeile
+    end: int  # 1-basierte letzte physische Zeile
+    text: str  # Kommentare entfernt, Klammern ausserhalb von Quotes -> " ", Zeilen mit " " verbunden, strip()
+    leading_ws: bool  # erste physische Zeile beginnt mit Space/Tab (Owner vom Vorgaenger)
+    error: Optional[str] = None  # z. B. "Klammer nicht geschlossen"
+    disabled: bool = False  # nur mit disabled_marker=True: Zeile stammt aus ";@disabled <rest>"
+
+
+_DISABLED_MARKER_RE = re.compile(r"^\s*;@disabled\s+(.*)$", re.I)
+ERR_PAREN_UNCLOSED = "Klammer nicht geschlossen"
+ERR_PAREN_UNOPENED = "Schließende Klammer ohne öffnende Klammer"
+
+
+def split_logical_lines(content: str, *, disabled_marker: bool = False) -> List[LogicalLine]:
+    """Zerlegt eine Zonendatei in logische Zeilen.
+
+    Zeichenweise: ``"`` schaltet den Quote-Modus um, ``\\`` maskiert das folgende Zeichen
+    (auch ``\\"`` und ``\\;``), ``;`` ausserhalb von Quotes beendet die physische Zeile,
+    ``(``/``)`` ausserhalb von Quotes aendern die Klammertiefe und werden durch ein
+    Leerzeichen ersetzt; solange die Tiefe > 0 ist, werden Folgezeilen angehaengt. Ein
+    offener Quote endet mit der physischen Zeile. EOF mit offener Klammer -> ``error``
+    "Klammer nicht geschlossen" (Zeile = Start). Leere logische Zeilen entfallen.
+
+    ``disabled_marker=True`` (F1-Text-Editor): Zeilen der Form ``;@disabled <rest>`` am
+    Anfang einer logischen Zeile werden als ``<rest>`` mit ``disabled=True`` geliefert
+    statt als Kommentar verworfen.
+    """
+    phys = (content or "").splitlines()
+    out: List[LogicalLine] = []
+    depth = 0
+    parts: List[str] = []
+    start = 0
+    leading_ws = False
+    disabled = False
+    error: Optional[str] = None
+
+    for idx, line in enumerate(phys, start=1):
+        if depth == 0:
+            disabled = False
+            if disabled_marker:
+                m = _DISABLED_MARKER_RE.match(line)
+                if m:
+                    line = m.group(1)
+                    disabled = True
+            start = idx
+            leading_ws = line[:1] in (" ", "\t")
+            parts = []
+            error = None
+        buf: List[str] = []
+        in_quote = False
+        i = 0
+        n = len(line)
+        while i < n:
+            c = line[i]
+            if c == "\\":
+                buf.append(line[i:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                in_quote = not in_quote
+                buf.append(c)
+                i += 1
+                continue
+            if not in_quote:
+                if c == ";":
+                    break
+                if c == "(":
+                    depth += 1
+                    buf.append(" ")
+                    i += 1
+                    continue
+                if c == ")":
+                    if depth > 0:
+                        depth -= 1
+                    elif error is None:
+                        error = ERR_PAREN_UNOPENED
+                    buf.append(" ")
+                    i += 1
+                    continue
+            buf.append(c)
+            i += 1
+        parts.append("".join(buf))
+        if depth == 0:
+            text = " ".join(parts).strip()
+            if text:
+                out.append(LogicalLine(start, idx, text, leading_ws, error, disabled))
+            parts = []
+
+    if depth > 0:
+        text = " ".join(parts).strip()
+        out.append(LogicalLine(start, len(phys), text, leading_ws, ERR_PAREN_UNCLOSED, disabled))
+    return out
 
 
 def _norm_name(n: str, origin: str) -> str:
