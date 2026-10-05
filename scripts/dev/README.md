@@ -109,7 +109,7 @@ aufloest und bestehende transitive Pins nicht still anhebt (ohne `-o` hebt ein f
 ```bash
 D=$(mktemp -d); cp backend/requirements.txt "$D/"; sed -n '16,$p' backend/requirements.lock > "$D/requirements.lock"
 scripts/dev/with-slot.sh docker run --rm -v "$D:/req" python:3.12-slim bash -c \
-  "pip install -q --root-user-action=ignore uv && cd /req && uv pip compile requirements.txt -o requirements.lock --no-header -q && chown $(id -u):$(id -g) requirements.lock"
+  "pip install -q --root-user-action=ignore --disable-pip-version-check uv && cd /req && uv pip compile requirements.txt -o requirements.lock --no-header -q && chown $(id -u):$(id -g) requirements.lock"
 { head -15 backend/requirements.lock; cat "$D/requirements.lock"; } > "$D/lock.new" && mv "$D/lock.new" backend/requirements.lock
 rm -rf "$D"; git diff --stat backend/requirements.lock
 ```
