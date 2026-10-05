@@ -1,41 +1,77 @@
-"""API routes for search and audit log."""
+"""API-Routen fuer Suche und Audit-Log.
+
+Suche (F8 5.1, F14 3.10): Die sichtbaren Zonen kommen ausschliesslich aus ``_allowed_zones_for`` (=
+``core.auth.effective_zone_filter``: Benutzer-Zonenrechte geschnitten mit dem Token-Scope). Der ACL-Filter
+laeuft VOR der Kappung auf ``max_results`` (sonst verdraengen fremde Treffer die eigenen), ohne Zonenrecht
+gibt es keinen PowerDNS-Aufruf. Die serveruebergreifende Suche fragt alle Server parallel ab und gibt
+keine internen Fehlertexte aus.
+"""
+import asyncio
 import csv
 import io
 import json
 import logging
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.core.timeutil import iso_utc
-from app.core.database import get_db
-from app.core.auth import get_current_user, get_admin_user
+from app.core.database import DbRead
+from app.core.auth import get_current_user, get_admin_user, effective_zone_filter
+from app.core.names import normalize_zone_name
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
-from app.models.models import AuditLog, User, UserZoneAccess
+from app.models.models import AuditLog, User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Search & Audit"])
 
+SearchObjectType = Literal["all", "zone", "record", "comment"]
+# Ueberabfrage fuer Nicht-Admins: der ACL-Filter laeuft vor der Kappung (F8 5.1).
+_ACL_OVERFETCH_FACTOR = 10
+_ACL_OVERFETCH_MIN = 1000
+_ACL_OVERFETCH_MAX = 5000
+SEARCH_SERVER_ERROR = "Suche auf diesem Server fehlgeschlagen"
+
 
 def _record_belongs_to_zone(record_zone: str, allowed_zones: set[str]) -> bool:
-    """Heuristik: PowerDNS-Suchergebnis hat 'zone_id' bzw. 'zone'. Wir matchen normalisiert."""
+    """PowerDNS-Suchergebnis hat 'zone_id' bzw. 'zone'. Vergleich normalisiert (lower + Trailing-Dot)."""
     if not record_zone:
         return False
-    z = record_zone.strip().lower()
-    if not z.endswith("."):
-        z += "."
-    return z in allowed_zones
+    return normalize_zone_name(str(record_zone)) in allowed_zones
 
 
 async def _allowed_zones_for(db: AsyncSession, user: User) -> set[str] | None:
-    """Liefert die Menge erlaubter Zonen-Namen (mit Trailing Dot) – oder None für Admins (Vollzugriff)."""
-    if user.role == "admin":
-        return None
-    result = await db.execute(
-        select(UserZoneAccess.zone_name).where(UserZoneAccess.user_id == user.id)
-    )
-    return {row[0] for row in result.all()}
+    """Erlaubte Zonen (normalisiert) oder ``None`` = Vollzugriff (Admin ohne Token-Scope).
+
+    Einzige Quelle fuer die Such-ACL; delegiert an ``effective_zone_filter`` (User-ACL ∩ Token-Scope).
+    """
+    return await effective_zone_filter(db, user)
+
+
+async def _search_with_acl(
+    client,
+    q: str,
+    max_results: int,
+    object_type: str,
+    allowed: set[str] | None,
+) -> tuple[list[dict], bool]:
+    """ACL-Filter VOR der Kappung. ``allowed=None`` -> Vollzugriff. Liefert (Treffer, truncated)."""
+    if allowed is None:
+        results = await client.search(q, max_results, object_type)
+        return results, len(results) >= max_results
+    if not allowed:
+        return [], False  # ohne Zonenrecht kein PowerDNS-Aufruf
+    fetch = min(max(max_results * _ACL_OVERFETCH_FACTOR, _ACL_OVERFETCH_MIN), _ACL_OVERFETCH_MAX)
+    raw = await client.search(q, fetch, object_type)
+    filtered = [
+        r for r in raw
+        if _record_belongs_to_zone(r.get("zone_id") or r.get("zone") or r.get("name"), allowed)
+    ]
+    truncated = len(filtered) > max_results or len(raw) >= fetch
+    return filtered[:max_results], truncated
 
 
 # ========================
@@ -44,69 +80,54 @@ async def _allowed_zones_for(db: AsyncSession, user: User) -> set[str] | None:
 @router.get("/search/{server_name}", tags=["Search"])
 async def search_records(
     server_name: str,
+    db: DbRead,
     q: str = Query(..., description="Search query", min_length=1, max_length=200),
     max_results: int = Query(100, ge=1, le=1000),
-    object_type: str = Query("all", description="Filter: all, zone, record"),
+    object_type: SearchObjectType = Query("all", description="Filter: all, zone, record, comment"),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Search for zones and records on a specific server (Auth, ACL-gefiltert)."""
+    """Suche nach Zonen und Records auf einem Server (ACL-gefiltert vor der Kappung)."""
     try:
         client = pdns_manager.get_client(server_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    allowed = await _allowed_zones_for(db, current_user)
     try:
-        results = await client.search(q, max_results, object_type)
-        allowed = await _allowed_zones_for(db, current_user)
-        if allowed is not None:
-            results = [
-                r for r in results
-                if _record_belongs_to_zone(r.get("zone_id") or r.get("zone") or r.get("name"), allowed)
-            ]
-        return {
-            "server": server_name,
-            "query": q,
-            "count": len(results),
-            "results": results,
-        }
+        results, truncated = await _search_with_acl(client, q, max_results, object_type, allowed)
     except PowerDNSAPIError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return {
+        "server": server_name,
+        "query": q,
+        "count": len(results),
+        "truncated": truncated,
+        "results": results,
+    }
 
 
 @router.get("/search", tags=["Search"])
 async def search_all_servers(
+    db: DbRead,
     q: str = Query(..., description="Search query", min_length=1, max_length=200),
     max_results: int = Query(100, ge=1, le=1000),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Search across all servers (Auth, ACL-gefiltert)."""
-    all_results = {}
+    """Suche ueber alle Server (parallel, ACL-gefiltert). Fehler je Server ohne interne Details."""
     allowed = await _allowed_zones_for(db, current_user)
 
-    for name, client in pdns_manager.get_all_clients().items():
+    async def _one(name: str, client) -> tuple[str, dict]:
         try:
-            results = await client.search(q, max_results)
-            if allowed is not None:
-                results = [
-                    r for r in results
-                    if _record_belongs_to_zone(r.get("zone_id") or r.get("zone") or r.get("name"), allowed)
-                ]
-            all_results[name] = {
-                "count": len(results),
-                "results": results,
-            }
-        except Exception as e:
-            all_results[name] = {
-                "count": 0,
-                "results": [],
-                "error": str(e),
-            }
+            results, truncated = await _search_with_acl(client, q, max_results, "all", allowed)
+            return name, {"count": len(results), "truncated": truncated, "results": results}
+        except Exception as e:  # noqa: BLE001 - Ursache nur ins Log (kann URL/Interna enthalten)
+            logger.warning("Suche auf %s fehlgeschlagen: %s", name, e)
+            return name, {"count": 0, "truncated": False, "results": [], "error": SEARCH_SERVER_ERROR}
 
+    pairs = await asyncio.gather(*[_one(n, c) for n, c in pdns_manager.get_all_clients().items()])
     return {
         "query": q,
-        "servers": all_results,
+        "servers": dict(pairs),
     }
 
 
@@ -115,13 +136,13 @@ async def search_all_servers(
 # ========================
 @router.get("/audit-log", tags=["Audit"])
 async def get_audit_log(
+    db: DbRead,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     action: str = Query(None, description="Filter by action (CREATE, UPDATE, DELETE, etc.)"),
     resource_type: str = Query(None, description="Filter by resource type (zone, record, dnssec_key)"),
     server_name: str = Query(None, description="Filter by server name"),
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Get audit log entries (Admin only)."""
     query = select(AuditLog).order_by(desc(AuditLog.timestamp))
@@ -162,12 +183,12 @@ async def get_audit_log(
 
 @router.get("/audit-log/export", tags=["Audit"])
 async def export_audit_log_csv(
+    db: DbRead,
     action: str = Query(None, description="Filter: CREATE, UPDATE, …"),
     resource_type: str = Query(None, description="zone, record, …"),
     server_name: str = Query(None),
     max_rows: int = Query(10_000, ge=1, le=50_000),
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Audit-Log als UTF-8-CSV (Excel: Trennzeichen Semikolon). Nur Admin."""
     query = select(AuditLog).order_by(desc(AuditLog.timestamp))

@@ -1,4 +1,17 @@
-"""Authentication and authorization utilities."""
+"""Authentifizierung und Autorisierung (Bauplan B.3, F14 5.2, F2/F3 5.6).
+
+Prinzipale einer Anfrage:
+- Browser-Session (JWT im HttpOnly-Cookie oder als Bearer), ``auth_via = "session"``;
+- Panel-API-Token (``dnsmgr_usr_...``, nur aus dem ``Authorization``-Header), ``auth_via = "panel_token"``,
+  optional eingeschraenkt auf Zonen (``scope_zones``), Leserecht (``permission = "read"``), Ablauf und
+  Admin-Freigabe (``allow_admin``) – die effektiven Rechte sind die Schnittmenge aus Benutzer- und Token-Rechten;
+- eigene Token-Arten (ACME, spaeter DynDNS) setzen den Kontext ueber ``set_auth_context``.
+
+Durchsetzung zentral: ``get_current_user`` (Token-Zustand, Methodenregel, Passwortwechsel-Gate),
+``assert_zone_access`` (Token-Scope vor dem Admin-Shortcut), ``get_admin_user`` (``allow_admin``),
+``get_session_user``/``get_admin_session_user`` (nur Browser-Session). Inline-Pruefungen
+``role == "admin"`` ausserhalb dieses Moduls sind verboten – stattdessen ``is_effective_admin``.
+"""
 import hashlib
 import time
 import pyotp
@@ -18,6 +31,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.client_ip import get_client_ip
 from app.core.database import get_db
+from app.core.names import normalize_zone_name
+# Re-Export (F6/F7/F9 importieren den Kontext auch aus app.core.auth)
+from app.core.request_context import (  # noqa: F401
+    TokenScope,
+    actor_username_ctx,
+    auth_via_ctx,
+    client_ip_ctx,
+    current_token_scope,
+    get_auth_via,
+    get_token_scope,
+    reset_request_context,
+)
+from app.core.timeutil import to_naive_utc, utcnow
 from app.models.models import User, UserZoneAccess, PanelToken
 
 logger = logging.getLogger(__name__)
@@ -44,6 +70,30 @@ PANEL_TOKEN_PREFIX = "dnsmgr_usr_"
 
 # Mindestlänge für Passwörter (gilt für Setup, Register, Reset und Admin-Updates).
 MIN_PASSWORD_LENGTH = 8
+
+# --- Texte und Regeln der Token-Durchsetzung (F14 2.8) -----------------------------------------
+# Methoden, die ein Lese-Token ausfuehren darf (alles andere -> 403 vor jeder Endpunktlogik).
+_TOKEN_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+TOKEN_INVALID_DETAIL = "Ungültiger API-Token"
+TOKEN_PAUSED_DETAIL = "API-Token ist deaktiviert"
+TOKEN_EXPIRED_DETAIL = "API-Token ist abgelaufen"
+TOKEN_READ_ONLY_DETAIL = "Dieser API-Token hat nur Leserechte"
+TOKEN_NO_ADMIN_DETAIL = (
+    "Dieser API-Token hat keine Admin-Rechte – Token mit „Admin-Funktionen erlauben“ "
+    "anlegen oder im Browser anmelden"
+)
+SESSION_REQUIRED_DETAIL = "Diese Aktion ist mit einem API-Token nicht erlaubt – bitte im Browser anmelden"
+ADMIN_ONLY_DETAIL = "Nur Administratoren haben Zugriff"
+
+# --- Gate "Passwortwechsel erforderlich" (F2/F3 3.2.11, 5.6) ------------------------------------
+# Gilt nur fuer Browser-Sessions; Panel-Tokens sind ausgenommen (F3 E7).
+PASSWORD_CHANGE_REQUIRED_DETAIL = "Passwortänderung erforderlich – bitte zuerst ein neues Passwort festlegen"
+PASSWORD_CHANGE_HEADER = "X-Password-Change-Required"
+_PASSWORD_CHANGE_ALLOWED = frozenset({
+    ("GET", "/api/v1/auth/me"),
+    ("PUT", "/api/v1/auth/me/password"),
+    ("POST", "/api/v1/auth/logout"),
+})
 
 
 def get_token_from_cookie_or_bearer(request: Request, token: Optional[str] = Depends(oauth2_scheme)) -> Optional[str]:
@@ -134,9 +184,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, *
     to_encode["typ"] = TOKEN_TYPE_ACCESS
     if user is not None:
         to_encode["pwv"] = password_version(getattr(user, "hashed_password", None))
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
-    )
+    now = datetime.now(timezone.utc)
+    expire = now + (expires_delta or timedelta(minutes=settings.JWT_EXPIRE_MINUTES))
+    # iat = Anmeldezeitpunkt (request.state.auth_time; Step-up fuer externe Konten, Bauplan B.3 [S8])
+    to_encode.setdefault("iat", now)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
@@ -149,14 +200,20 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-def create_password_reset_token(user_id: int, hashed_password: Optional[str] = None) -> str:
-    """Create a short-lived JWT for password reset (1 hour). Tagged typ=password_reset.
+def create_password_reset_token(
+    user_id: int,
+    hashed_password: Optional[str] = None,
+    *,
+    expires_minutes: int = 60,
+) -> str:
+    """Kurzlebiger JWT fuer den Passwort-Reset (Default 60 Minuten), ``typ=password_reset``.
 
     Enthaelt ``pwv`` (Fingerabdruck des aktuellen Hashes): sobald das Passwort gesetzt
-    wurde, passt der Link nicht mehr -> Einmal-Nutzung ohne DB-Tabelle.
+    wurde, passt der Link nicht mehr -> Einmal-Nutzung ohne DB-Tabelle. Admin-Reset-Links
+    (F3) nutzen eine laengere Gueltigkeit ueber ``expires_minutes``.
     """
     to_encode = {"sub": str(user_id), "typ": TOKEN_TYPE_PASSWORD_RESET, "pwv": password_version(hashed_password)}
-    expire = datetime.now(timezone.utc) + timedelta(hours=1)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=max(1, int(expires_minutes)))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
@@ -248,15 +305,183 @@ def decode_password_reset_payload(token: str) -> Optional[dict]:
     return payload
 
 
+# Alias (Bestandsname): lower + Trailing-Dot – passt zur Speicherung in ``UserZoneAccess``.
+_normalize_zone_name = normalize_zone_name
+
+
+# ---------------------------------------------------------------------------------------------
+# Request-Kontext und Token-Scope (F14 5.2)
+# ---------------------------------------------------------------------------------------------
+def scope_from_token(pt: PanelToken) -> TokenScope:
+    """Baut den ``TokenScope`` eines Panel-Tokens – defensiv (fail-safe) bei unerwarteten DB-Werten.
+
+    Unbekannte ``permission`` gilt als Leserecht; ``scope_zones`` in einem anderen Format als Liste
+    ergibt einen leeren Scope (kein Zonenzugriff), ``NULL`` bedeutet alle Zonen des Besitzers.
+    """
+    raw = pt.scope_zones
+    if raw is None:
+        zones = None
+    elif isinstance(raw, list):
+        zones = frozenset(z for z in (_normalize_zone_name(str(x)) for x in raw) if z)
+    else:
+        logger.warning(
+            "Panel-Token %s: scope_zones hat ungueltiges Format – Token erhaelt keinen Zonenzugriff",
+            pt.token_prefix,
+        )
+        zones = frozenset()
+    perm = (pt.permission or "manage").strip().lower()
+    if perm not in ("manage", "read"):
+        perm = "read"
+    return TokenScope(
+        token_id=pt.id,
+        name=pt.name,
+        token_prefix=pt.token_prefix,
+        zones=zones,
+        permission=perm,
+        allow_admin=bool(pt.allow_admin),
+    )
+
+
+def set_auth_context(
+    request: Optional[Request],
+    via: Optional[str],
+    scope: Optional[TokenScope] = None,
+    token_row=None,
+    *,
+    username: Optional[str] = None,
+    client_ip: Optional[str] = None,
+) -> None:
+    """Einziger Setter fuer den Auth-Kontext einer Anfrage (auch fuer ACME/DynDNS-Tokens).
+
+    Setzt ``request.state.auth_via/token_scope/panel_token`` und alle ContextVars aus
+    ``core.request_context`` (``auth_via``, Token-Scope, Akteur und Client-IP fuer das Audit).
+    ``set_auth_context(request, None)`` verwirft den Kontext vollstaendig.
+    """
+    if request is not None:
+        request.state.auth_via = via
+        request.state.token_scope = scope
+        request.state.panel_token = token_row
+    auth_via_ctx.set(via)
+    current_token_scope.set(scope)
+    actor_username_ctx.set((username or "")[:100] or None)
+    client_ip_ctx.set((client_ip or "")[:64] or None)
+
+
+def is_effective_admin(user) -> bool:
+    """Admin-Rolle UND (Browser-Session/kein Token-Kontext oder Token mit ``allow_admin``).
+
+    Ersetzt Inline-Pruefungen ``role == "admin"`` in Routern und Services.
+    """
+    if getattr(user, "role", None) != "admin":
+        return False
+    scope = current_token_scope.get()
+    return scope is None or scope.allow_admin
+
+
+def assert_token_scope(zone_id: str, *, write: bool = False) -> None:
+    """Reine Token-Pruefung ohne DB (No-op ohne Token-Kontext).
+
+    ``write=True`` und Lese-Token -> 403; Zone ausserhalb ``scope_zones`` -> 403.
+    """
+    scope = current_token_scope.get()
+    if scope is None:
+        return
+    if write and scope.read_only:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=TOKEN_READ_ONLY_DETAIL)
+    if not scope.zone_limited:
+        return
+    zone_name = _normalize_zone_name(zone_id)
+    if not zone_name or not scope.covers_zone(zone_name):
+        logger.info("Panel-Token %s: Zone %s ausserhalb des Scopes", scope.token_prefix, zone_name or "-")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Dieser API-Token ist für die Zone „{zone_name}“ nicht freigegeben",
+        )
+
+
+def assert_not_zone_scoped(detail: str) -> None:
+    """403 mit ``detail``, wenn die Anfrage mit einem auf Zonen beschraenkten Token laeuft."""
+    scope = current_token_scope.get()
+    if scope is not None and scope.zone_limited:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def _invalid_api_token(detail: str = TOKEN_INVALID_DETAIL) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _request_path(request: Request) -> str:
+    """Pfad ohne ``root_path`` und ohne Schraegstrich am Ende (fuer Allowlist-Vergleiche)."""
+    path = request.scope.get("path", "") or ""
+    root = request.scope.get("root_path", "") or ""
+    if root and path.startswith(root):
+        path = path[len(root):]
+    return path.rstrip("/") or "/"
+
+
+def _password_change_allowed(request: Request) -> bool:
+    """True fuer die drei Pfade, die bei erzwungenem Passwortwechsel erlaubt bleiben."""
+    return (request.method.upper(), _request_path(request)) in _PASSWORD_CHANGE_ALLOWED
+
+
+async def _authenticate_panel_token(request: Request, db: AsyncSession, token: str) -> User:
+    """Panel-Token-Zweig von ``get_current_user`` (F14 3.11, Texte F14 2.8)."""
+    method = request.method.upper()
+    hdr = (request.headers.get("authorization") or "").strip()
+    if not hdr.lower().startswith("bearer ") or hdr[7:].strip() != token:
+        # Panel-Tokens nur aus dem Authorization-Header – nie aus dem Session-Cookie
+        logger.info("Panel-Token ausserhalb des Authorization-Headers abgelehnt (%s %s)", method, _request_path(request))
+        raise _invalid_api_token()
+    t_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    result = await db.execute(select(PanelToken).where(PanelToken.token_hash == t_hash))
+    pt = result.scalar_one_or_none()
+    if pt is None or pt.revoked_at is not None:
+        logger.info("Unbekannter oder widerrufener Panel-Token (%s %s)", method, _request_path(request))
+        raise _invalid_api_token()
+    if not pt.is_active:
+        logger.info("Panel-Token %s ist pausiert (%s %s)", pt.token_prefix, method, _request_path(request))
+        raise _invalid_api_token(TOKEN_PAUSED_DETAIL)
+    now = utcnow()
+    if pt.expires_at is not None and to_naive_utc(pt.expires_at) <= now:
+        logger.info("Panel-Token %s ist abgelaufen (%s %s)", pt.token_prefix, method, _request_path(request))
+        raise _invalid_api_token(TOKEN_EXPIRED_DETAIL)
+    result = await db.execute(select(User).where(User.id == pt.user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        logger.info("Panel-Token %s: Besitzer fehlt oder ist deaktiviert", pt.token_prefix)
+        raise _invalid_api_token()
+    scope = scope_from_token(pt)
+    if scope.read_only and method not in _TOKEN_SAFE_METHODS:
+        logger.info("Panel-Token %s (Leserecht): %s %s abgelehnt", pt.token_prefix, method, _request_path(request))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=TOKEN_READ_ONLY_DETAIL)
+    client_ip = get_client_ip(request)
+    from app.services.panel_token import touch_last_used  # lazy: panel_token importiert dieses Modul
+
+    if touch_last_used(pt, client_ip, now):
+        await db.flush()
+    set_auth_context(request, "panel_token", scope, pt, username=user.username, client_ip=client_ip)
+    return user
+
+
+# Die Session-Abhaengigkeit laeuft mit scope="function" (wie ``DbWrite``): schreibende Handler teilen sich
+# damit dieselbe Session mit der Authentifizierung (ein Commit VOR dem Senden der Antwort, Bauplan B.7 [D2]),
+# und ``current_user`` gehoert zur Handler-Session.
 async def get_current_user(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     token: Optional[str] = Depends(get_token_from_cookie_or_bearer),
 ) -> User:
-    """Aktuellen Benutzer aus JWT (Cookie oder Bearer) oder Panel-API-Token holen.
+    """Aktuellen Benutzer aus JWT (Cookie oder Bearer) oder Panel-API-Token (nur Header) holen.
 
-    Lehnt ausdrücklich Tokens ab, die keine Session-Tokens sind (z.B. Password-Reset).
+    Lehnt Tokens ab, die keine Session-Tokens sind (z. B. Password-Reset). Setzt den Auth-Kontext
+    (``request.state`` + ContextVars) und prueft bei Browser-Sessions das Passwortwechsel-Gate.
     """
+    set_auth_context(request, None)  # Altwerte verwerfen
+    request.state.auth_time = None
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -266,31 +491,7 @@ async def get_current_user(
 
     # --- Panel-API-Token (Bearer, Prefix dnsmgr_usr_ – kein JWT) -------------------
     if token.startswith(PANEL_TOKEN_PREFIX):
-        t_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        result = await db.execute(
-            select(PanelToken).where(
-                PanelToken.token_hash == t_hash,
-                PanelToken.is_active.is_(True),
-            )
-        )
-        pt = result.scalar_one_or_none()
-        if pt:
-            r_ip = get_client_ip(request)
-            now = datetime.now(timezone.utc)
-            pt.last_used_at = now
-            if r_ip:
-                pt.last_used_ip = r_ip
-            await db.flush()
-            result = await db.execute(select(User).where(User.id == pt.user_id))
-            user = result.scalar_one_or_none()
-            if user and user.is_active:
-                request.state.auth_via = "panel_token"
-                return user
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Ungültiger API-Token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return await _authenticate_panel_token(request, db, token)
 
     payload = decode_token(token)
     if not payload:
@@ -338,7 +539,17 @@ async def get_current_user(
             detail="Sitzung abgelaufen – bitte erneut anmelden",
         )
 
-    request.state.auth_via = "session"
+    set_auth_context(request, "session", None, None, username=user.username, client_ip=get_client_ip(request))
+    iat = payload.get("iat")
+    request.state.auth_time = iat if isinstance(iat, (int, float)) else None
+
+    # Gate: erzwungener Passwortwechsel (nach der Session-Kennzeichnung, F2/F3 5.6)
+    if getattr(user, "must_change_password", False) and not _password_change_allowed(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=PASSWORD_CHANGE_REQUIRED_DETAIL,
+            headers={PASSWORD_CHANGE_HEADER: "1"},
+        )
     return user
 
 
@@ -346,48 +557,45 @@ async def get_session_user(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """Wie get_current_user, aber nur fuer echte Browser-Sessions (kein Panel-API-Token).
+    """Wie get_current_user, aber nur fuer echte Browser-Sessions.
 
-    Credential-Verwaltung (Passwort, E-Mail, TOTP, Passkeys, Panel-Tokens) darf nicht mit
-    einem geleakten API-Token moeglich sein, sonst laesst sich dauerhafter Zugang verankern.
+    Credential-, Settings- und Token-Verwaltung darf nicht mit einem geleakten API-Token (oder
+    einer anderen Token-Art) moeglich sein, sonst laesst sich dauerhafter Zugang verankern.
+    Fail-closed: ohne gesetzten Kontext (``auth_via`` fehlt) gilt die Anfrage nicht als Session [S11].
     """
-    if getattr(request.state, "auth_via", None) == "panel_token":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Diese Aktion ist mit einem API-Token nicht erlaubt – bitte im Browser anmelden",
-        )
+    if getattr(request.state, "auth_via", None) != "session":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SESSION_REQUIRED_DETAIL)
     return current_user
 
 
 async def get_admin_session_user(
     current_user: User = Depends(get_session_user),
 ) -> User:
-    """Admin UND echte Browser-Session (kein Panel-API-Token) – fuer Benutzer-/Credential-Verwaltung."""
+    """Admin UND echte Browser-Session (kein Token) – Benutzer-, Credential- und Settings-Verwaltung."""
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin-Rechte erforderlich")
     return current_user
 
 
+def assert_effective_admin(user) -> None:
+    """403, wenn der Aufrufer keine Admin-Funktionen nutzen darf (gleiche Texte wie ``get_admin_user``).
+
+    Fuer Endpunkte, die erst im Handler entscheiden (z. B. Server-Statistik); sonst ``get_admin_user``.
+    """
+    if getattr(user, "role", None) != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_ONLY_DETAIL)
+    scope = current_token_scope.get()
+    if scope is not None and not scope.allow_admin:
+        logger.info("Panel-Token %s ohne Admin-Freigabe an Admin-Endpunkt abgelehnt", scope.token_prefix)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=TOKEN_NO_ADMIN_DETAIL)
+
+
 async def get_admin_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """Ensure the current user is an admin."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Nur Administratoren haben Zugriff",
-        )
+    """Admin-Endpunkt: Rolle ``admin`` und – bei Token-Zugriff – Freigabe ``allow_admin``."""
+    assert_effective_admin(current_user)
     return current_user
-
-
-def _normalize_zone_name(zone_id: str) -> str:
-    """Normalisiert Zonen-Namen (lower + trailing dot) – muss zur Speicherung in UserZoneAccess passen."""
-    z = (zone_id or "").strip().lower()
-    if not z:
-        return z
-    if not z.endswith("."):
-        z += "."
-    return z
 
 
 async def assert_zone_access(
@@ -397,7 +605,14 @@ async def assert_zone_access(
     *,
     write: bool = False,
 ) -> None:
-    """403 wenn Nicht-Admin die Zone nicht sieht; bei write=True zusätzlich bei Rolle „read“."""
+    """Prueft den ANFRAGENDEN Prinzipal inkl. Token-Scope.
+
+    Reihenfolge: Token-Scope und Methodenregel (``assert_token_scope``), dann Admin-Shortcut, dann
+    ``UserZoneAccess`` (403 ohne Recht; bei ``write=True`` zusaetzlich bei Rolle ``read``).
+    Fuer Rechtepruefungen ANDERER Benutzer (z. B. Webhook-Empfaenger) direkt ``UserZoneAccess``
+    abfragen, nie diese Funktion.
+    """
+    assert_token_scope(zone_id, write=write)
     if user.role == "admin":
         return
     zone_name = _normalize_zone_name(zone_id)
@@ -423,6 +638,35 @@ async def assert_zone_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Nur Lese-Zugriff auf diese Zone",
         )
+
+
+async def has_zone_access(db: AsyncSession, user: User, zone_id: str, *, write: bool = False) -> bool:
+    """Nicht werfende Variante von ``assert_zone_access`` (z. B. PTR: fehlendes Recht -> ueberspringen)."""
+    try:
+        await assert_zone_access(db, user, zone_id, write=write)
+        return True
+    except HTTPException as exc:
+        if exc.status_code in (400, 403):
+            return False
+        raise
+
+
+async def effective_zone_filter(db: AsyncSession, user: User) -> Optional[set[str]]:
+    """Sichtbare Zonen des Aufrufers: ``None`` = keine Einschraenkung, sonst normalisierte Zonennamen.
+
+    Admin ohne Token-Scope -> ``None``; Admin mit Scope -> Scope; Benutzer -> eigene Zonen
+    (``UserZoneAccess``), bei Token-Scope die Schnittmenge.
+    """
+    scope = current_token_scope.get()
+    user_zones: Optional[set[str]] = None
+    if user.role != "admin":
+        rows = await db.execute(select(UserZoneAccess.zone_name).where(UserZoneAccess.user_id == user.id))
+        user_zones = {z for z in (_normalize_zone_name(r[0]) for r in rows.all()) if z}
+    if scope is None or not scope.zone_limited:
+        return user_zones
+    if user_zones is None:
+        return set(scope.zones)
+    return user_zones & set(scope.zones)
 
 
 async def create_initial_admin(db: AsyncSession):

@@ -1,4 +1,11 @@
-"""API routes for system settings and configuration management (Admin only)."""
+"""API-Routen fuer Systemeinstellungen und Server-Konfiguration.
+
+Alle Endpunkte ausser dem oeffentlichen ``GET /settings/app-info`` verlangen einen Admin mit
+Browser-Session (``get_admin_session_user``, F14 3.10): mit einem API-Token lassen sich weder
+PowerDNS-API-Keys auslesen noch SMTP-, Captcha-, Branding- oder ACME-Einstellungen aendern.
+Schreibende Handler nutzen ``DbWrite`` (Commit vor der Antwort, Bauplan B.7); Aenderungen an
+Server-Konfigurationen leeren den Zonen-Index (``zone_index.invalidate``).
+"""
 import asyncio
 import logging
 from pathlib import Path
@@ -13,9 +20,10 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.auth import get_admin_user
+from app.core.database import DbRead, DbWrite
+from app.core.auth import get_admin_session_user
 from app.models.models import User, ServerConfig
+from app.services import zone_index
 from app.services.pdns_client import (
     pdns_manager,
     PowerDNSClient,
@@ -62,7 +70,7 @@ class AppInfoUpdate(BaseModel):
 
 
 @router.get("/app-info", include_in_schema=False)
-async def get_app_info(db: AsyncSession = Depends(get_db)):
+async def get_app_info(db: DbRead):
     """Get *public* app info: name, version, branding, auth feature flags.
 
     Admin-only data (z.B. INSTALL_PATH, app_base_url für E-Mail-Links) wird hier NICHT mehr ausgeliefert,
@@ -115,8 +123,8 @@ async def get_app_info(db: AsyncSession = Depends(get_db)):
 
 @router.get("/admin-info")
 async def get_admin_info(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Liefert sensible/operative Felder (INSTALL_PATH, app_base_url) – nur für Admins."""
     from app.models.models import SystemSetting
@@ -138,9 +146,9 @@ async def get_admin_info(
 
 @router.put("/app-info")
 async def update_app_info(
+    db: DbWrite,
     data: AppInfoUpdate,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db)
+    admin: User = Depends(get_admin_session_user),
 ):
     """Update custom app name and auth feature toggles."""
     from app.models.models import SystemSetting
@@ -224,9 +232,9 @@ def _detect_image_ext(blob: bytes) -> str | None:
 
 @router.post("/app-logo")
 async def upload_app_logo(
+    db: DbWrite,
     file: UploadFile = File(...),
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Upload custom logo for login/setup pages (admin only)."""
     from app.models.models import SystemSetting
@@ -334,8 +342,8 @@ async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
 
 @router.get("/servers")
 async def list_server_configs(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """List all server configurations from database."""
     result = await db.execute(select(ServerConfig).order_by(ServerConfig.sort_order, ServerConfig.name))
@@ -347,9 +355,9 @@ async def list_server_configs(
 
 @router.post("/servers", status_code=201)
 async def add_server_config(
+    db: DbWrite,
     data: ServerConfigCreate,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Add a new PowerDNS server configuration."""
     # Check name unique
@@ -371,6 +379,7 @@ async def add_server_config(
     
     # Live-Verbindung hinzufuegen
     pdns_manager.add_server(cfg.name, cfg.url, cfg.api_key)
+    zone_index.invalidate()
     
     logger.info(f"Server config '{data.name}' added by admin '{admin.username}'")
     await write_audit(db, "SERVER_CREATE", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name,
@@ -380,10 +389,10 @@ async def add_server_config(
 
 @router.put("/servers/{server_id}")
 async def update_server_config(
+    db: DbWrite,
     server_id: int,
     data: ServerConfigUpdate,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Update an existing server configuration."""
     result = await db.execute(select(ServerConfig).where(ServerConfig.id == server_id))
@@ -415,6 +424,7 @@ async def update_server_config(
         pdns_manager.update_server(cfg.name, cfg.url, cfg.api_key)
     else:
         pdns_manager.remove_server(cfg.name)
+    zone_index.invalidate()
     
     logger.info(f"Server config '{cfg.name}' updated by admin '{admin.username}'")
     changed = {k: ({"from": before[k], "to": getattr(cfg, k)} if k != "api_key" else "changed")
@@ -426,9 +436,9 @@ async def update_server_config(
 
 @router.delete("/servers/{server_id}")
 async def delete_server_config(
+    db: DbWrite,
     server_id: int,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Delete a server configuration."""
     result = await db.execute(select(ServerConfig).where(ServerConfig.id == server_id))
@@ -440,6 +450,7 @@ async def delete_server_config(
     
     # Live-Verbindung entfernen
     pdns_manager.remove_server(server_name)
+    zone_index.invalidate()
     
     await db.delete(cfg)
     await db.flush()
@@ -451,29 +462,21 @@ async def delete_server_config(
 
 @router.get("/servers/{server_id}/api-key")
 async def reveal_server_api_key(
+    db: DbWrite,
     server_id: int,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Gibt den vollständigen API-Key eines Servers genau einmal an einen eingeloggten Admin zurück.
 
     Wird ins Audit-Log geschrieben, damit die Aufdeckung nachvollziehbar ist.
     """
-    from app.models.models import AuditLog
     result = await db.execute(select(ServerConfig).where(ServerConfig.id == server_id))
     cfg = result.scalar_one_or_none()
     if not cfg:
         raise HTTPException(status_code=404, detail="Server-Konfiguration nicht gefunden")
 
-    db.add(AuditLog(
-        action="REVEAL_API_KEY",
-        resource_type="server_config",
-        resource_name=cfg.name,
-        server_name=cfg.name,
-        user_id=admin.id,
-        status="success",
-    ))
-    await db.flush()
+    # Audit vor der Antwort committet (DbWrite): ohne Eintrag kein Klartext-Key
+    await write_audit(db, "REVEAL_API_KEY", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name)
     logger.info(f"API key revealed for server '{cfg.name}' by admin '{admin.username}'")
     return {"id": cfg.id, "name": cfg.name, "api_key": cfg.api_key}
 
@@ -484,7 +487,7 @@ async def reveal_server_api_key(
 @router.post("/servers/test")
 async def test_connection(
     data: TestConnectionRequest,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Test connection to a PowerDNS server. Returns server info if successful."""
     url = data.url.rstrip("/")
@@ -570,8 +573,8 @@ class SmtpSettings(BaseModel):
 
 @router.get("/smtp")
 async def get_smtp_settings(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Get current SMTP configuration."""
     from app.services.email_service import get_smtp_settings as _get
@@ -587,9 +590,9 @@ async def get_smtp_settings(
 
 @router.put("/smtp")
 async def update_smtp_settings(
+    db: DbWrite,
     data: SmtpSettings,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Update SMTP configuration."""
     from app.services.email_service import save_smtp_settings, get_smtp_settings as _get
@@ -611,8 +614,8 @@ async def update_smtp_settings(
 
 @router.post("/smtp/test")
 async def test_smtp(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbWrite,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Test the current SMTP connection."""
     from app.services.email_service import get_smtp_settings as _get, test_smtp_connection
@@ -628,9 +631,9 @@ class TestEmailRequest(BaseModel):
 
 @router.post("/smtp/test-email")
 async def send_test_email(
+    db: DbWrite,
     data: TestEmailRequest,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Send a test email to verify SMTP works end-to-end."""
     from app.services.email_service import get_smtp_settings as _get, send_email
@@ -673,8 +676,8 @@ class CaptchaSettings(BaseModel):
 
 @router.get("/captcha")
 async def get_captcha_settings(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Aktuelle Captcha-Konfiguration. Das Secret wird maskiert."""
     from app.services.captcha import get_captcha_settings as _get
@@ -689,9 +692,9 @@ async def get_captcha_settings(
 
 @router.put("/captcha")
 async def update_captcha_settings(
+    db: DbWrite,
     data: CaptchaSettings,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Captcha-Provider und Keys speichern. Wenn das Secret maskiert oder None ist,
     wird das gespeicherte Secret beibehalten."""
@@ -718,9 +721,9 @@ class CaptchaTestRequest(BaseModel):
 
 @router.post("/captcha/test")
 async def test_captcha(
+    db: DbWrite,
     data: CaptchaTestRequest,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Verifiziert ein vom Browser-Widget geliefertes Test-Token gegen die Provider-API.
     So sieht der Admin sofort, ob Site-Key + Secret-Key zusammenpassen."""
@@ -757,8 +760,8 @@ class WelcomeEmailSettings(BaseModel):
 
 @router.get("/welcome-email")
 async def get_welcome_email_settings(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Welcome-Mail-Einstellungen + Default-Templates fuer leere Felder."""
     from app.services.email_service import get_welcome_email_settings as _get
@@ -780,9 +783,9 @@ async def get_welcome_email_settings(
 
 @router.put("/welcome-email")
 async def update_welcome_email_settings(
+    db: DbWrite,
     data: WelcomeEmailSettings,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Welcome-Mail-Einstellungen speichern. Wenn enabled aber Subject/Body leer ->
     werden die Defaults der Admin-Sprache als Initialwerte gespeichert."""
@@ -806,9 +809,9 @@ async def update_welcome_email_settings(
 
 @router.post("/welcome-email/test")
 async def send_welcome_test_email(
+    db: DbWrite,
     data: TestEmailRequest,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Sendet die Welcome-Mail testweise an die angegebene Adresse - mit dem Admin
     als Beispiel-Empfaenger fuer die Platzhalter."""
@@ -873,8 +876,8 @@ def _serialize_acme_token(t) -> dict:
 
 @router.get("/acme/tokens")
 async def list_acme_tokens(
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    admin: User = Depends(get_admin_session_user),
 ):
     """Alle ACME-Tokens auflisten - Plaintext-Wert ist NICHT enthalten (nur Prefix
     zur Wiedererkennung)."""
@@ -885,9 +888,9 @@ async def list_acme_tokens(
 
 @router.post("/acme/tokens", status_code=201)
 async def create_acme_token(
+    db: DbWrite,
     data: AcmeTokenCreate,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Erzeugt einen neuen ACME-Token. Liefert den Plaintext GENAU EINMAL zurueck -
     das UI muss den User anzeigen lassen, weil er danach nirgendwo mehr lesbar ist.
@@ -914,9 +917,9 @@ async def create_acme_token(
 
 @router.delete("/acme/tokens/{token_id}")
 async def delete_acme_token(
+    db: DbWrite,
     token_id: int,
-    admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_session_user),
 ):
     """Loescht einen Token (Hard-Delete - keine Wiederverwendung moeglich)."""
     from app.services import acme as acme_service

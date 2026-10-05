@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.services.pdns_client import PowerDNSAPIError, pdns_manager
 from app.routers import servers, zones, records, dnssec, search, auth, settings as settings_router, setup, templates, acme
+from app.routers import panel_tokens, webhooks
 from app.core.auth import create_initial_admin, get_current_user
 from app.core.database import engine, async_session
 from sqlalchemy import text
@@ -277,6 +278,8 @@ API_PREFIX = "/api/v1"
 # Setup router (muss vor auth router sein für öffentlichen Zugriff)
 app.include_router(setup.router, prefix=API_PREFIX)
 app.include_router(auth.router, prefix=API_PREFIX)
+app.include_router(panel_tokens.router, prefix=API_PREFIX)
+app.include_router(webhooks.router, prefix=API_PREFIX)
 app.include_router(servers.router, prefix=API_PREFIX)
 app.include_router(zones.router, prefix=API_PREFIX)
 app.include_router(records.router, prefix=API_PREFIX)
