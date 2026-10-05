@@ -55,16 +55,6 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 # ========================
 # App Info
 # ========================
-# Felder von PUT /settings/app-info (= system_settings-Keys), Reihenfolge wie im Formular.
-APP_INFO_KEYS = (
-    "app_name",
-    "registration_enabled",
-    "forgot_password_enabled",
-    "app_base_url",
-    "app_tagline",
-    "app_creator",
-    "app_logo_url",
-)
 # Hochgeladene Logos liegen als uploads/custom-logo.<ext> im festen Upload-Verzeichnis.
 CUSTOM_LOGO_URL_PREFIX = "/uploads/custom-logo."
 CUSTOM_LOGO_GLOB = "custom-logo.*"
