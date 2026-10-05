@@ -1,0 +1,17 @@
+{
+  "reason": "Fachbegriffe von ws-a",
+  "global": [
+    "items.count"
+  ],
+  "perLanguage": {
+    "de": [
+      "common.greet"
+    ],
+    "sr": [
+      "common.save"
+    ]
+  },
+  "dynamic": [
+    "dyn.warn.*"
+  ]
+}

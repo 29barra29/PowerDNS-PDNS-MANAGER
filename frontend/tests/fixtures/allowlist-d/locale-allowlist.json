@@ -1,0 +1,14 @@
+{
+  "reason": "Basis",
+  "global": [
+    "common.brand"
+  ],
+  "perLanguage": {
+    "de": [
+      "common.save"
+    ]
+  },
+  "dynamic": [
+    "dyn.err.*"
+  ]
+}

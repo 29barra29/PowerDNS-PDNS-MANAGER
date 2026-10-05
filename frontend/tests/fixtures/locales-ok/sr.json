@@ -1,0 +1,12 @@
+{
+  "common": {
+    "save": "Sačuvaj",
+    "greet": "Zdravo {{name}}",
+    "brand": "PDNS Manager"
+  },
+  "items": {
+    "count_one": "{{count}} stavka",
+    "count_few": "{{count}} stavke",
+    "count_other": "{{count}} stavki"
+  }
+}

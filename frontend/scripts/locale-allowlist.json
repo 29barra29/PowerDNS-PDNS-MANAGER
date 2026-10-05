@@ -1,0 +1,58 @@
+{
+  "$comment": "W1-Ausnahmen (global/perLanguage: Werte, die absichtlich identisch mit en sind - Fachbegriffe, Marken, Platzhalter) und E7-Ausnahmen (dynamic: Key-Praefixe, die im Code per Verkettung gebildet werden). Ergaenzungen nur ueber locale-allowlist.d/<ws>.json (siehe README dort).",
+  "reason": "Startinhalt F8 §6.6 plus dynamische Praefixe aus Plan B.15",
+  "global": [
+    "dashboard.offline", "dashboard.online", "dashboard.url", "layout.admin",
+    "settings.acme.tab", "settings.acme.title", "settings.acme.tokenLabel",
+    "settings.adminUsernamePlaceholder", "settings.appBaseUrlPlaceholder",
+    "settings.captcha.providerHCaptcha", "settings.captcha.providerRecaptcha", "settings.captcha.providerTurnstile",
+    "settings.captcha.title", "settings.integrations.status", "settings.pdnsApiUrlPlaceholder", "settings.port",
+    "settings.smtpFromNamePlaceholder", "settings.systemTitlePlaceholder", "settings.taglinePlaceholder",
+    "settingsMore.backend", "settingsMore.frontend", "settingsMore.powerDnsApiUrl", "settingsMore.versionLatest",
+    "setup.port", "zoneDetail.fieldPort", "zoneDetail.minValue", "zoneDetail.quickTlsaMailNote",
+    "zoneDetail.rdataPh*",
+    "zoneDetail.recordA", "zoneDetail.recordAAAA", "zoneDetail.recordSOA", "zoneDetail.recordSSHFP", "zoneDetail.recordTLSA",
+    "zoneDetail.ttl", "zones.dnssec"
+  ],
+  "perLanguage": {
+    "de": [
+      "audit.ok", "audit.server", "audit.status", "dashboard.version", "login.tagline", "search.name", "search.server", "search.zone",
+      "settings.acme.formName", "settings.administrator", "settings.brandingTitle", "settings.displayNamePlaceholder",
+      "settings.encryptionSsl", "settings.integrations.passkeyNameLabel", "settings.integrations.webhookFieldName",
+      "settings.integrations.webhooks", "settings.nameserverPlaceholder", "settings.updates", "settingsMore.apiKey",
+      "settingsMore.auth", "settingsMore.dnsEngine", "settingsMore.version", "setup.adminPlaceholder", "setup.welcomeTitle",
+      "templates.recordLabelNS", "templates.recordLabelPTR", "users.administrator",
+      "zoneDetail.fieldAlgo", "zoneDetail.fieldExpire", "zoneDetail.fieldFlag", "zoneDetail.fieldFp", "zoneDetail.fieldHash",
+      "zoneDetail.fieldHost", "zoneDetail.fieldMatch", "zoneDetail.fieldMinimum", "zoneDetail.fieldMname", "zoneDetail.fieldNs",
+      "zoneDetail.fieldRefresh", "zoneDetail.fieldRetry", "zoneDetail.fieldSel", "zoneDetail.fieldSerial", "zoneDetail.fieldTag",
+      "zoneDetail.fieldText", "zoneDetail.fieldUsage", "zoneDetail.maxValue", "zoneDetail.name", "zoneDetail.recordNS",
+      "zoneDetail.recordNSEC", "zoneDetail.recordPTR", "zoneDetail.recordTXT", "zones.domain", "zones.importKind",
+      "zones.importZone", "zones.serial", "zones.zone"
+    ],
+    "hu": ["audit.ok", "register.emailPlaceholder", "zoneDetail.fieldHash", "zoneDetail.maxValue", "zones.domain"],
+    "sr": [
+      "audit.server", "audit.status", "login.tagline", "register.emailPlaceholder", "search.server", "settings.administrator",
+      "settings.displayNamePlaceholder", "settings.integrations.webhooks", "settings.nameserverPlaceholder", "settings.smtpServer",
+      "settingsMore.dnsEngine", "setup.adminPlaceholder", "users.administrator", "zones.importZone"
+    ],
+    "bs": [
+      "audit.server", "audit.status", "login.tagline", "register.emailPlaceholder", "search.server", "settings.administrator",
+      "settings.displayNamePlaceholder", "settings.integrations.webhooks", "settings.nameserverPlaceholder", "settings.smtpServer",
+      "settingsMore.dnsEngine", "setup.adminPlaceholder", "users.administrator", "zoneDetail.fieldHash", "zones.importZone"
+    ],
+    "hr": [
+      "audit.status", "login.tagline", "register.emailPlaceholder", "settings.administrator", "settings.displayNamePlaceholder",
+      "settings.integrations.webhooks", "settings.nameserverPlaceholder", "settingsMore.dnsEngine", "setup.adminPlaceholder",
+      "users.administrator", "zoneDetail.fieldHash"
+    ]
+  },
+  "dynamic": [
+    "lua.err.*", "lua.warn.*", "lua.templates.*", "lua.fn.*", "lua.templateGroup.*",
+    "propagation.note_*", "propagation.err_*",
+    "webhooks.event.*", "webhooks.errorCode.*", "webhooks.status.*",
+    "dyndns.result.*", "ptr.reason.*",
+    "dnssec.hint.*", "dnssec.protect.*", "dnssec.phase.*", "dnssec.peerState.*",
+    "history.blocked.*", "history.skipReason.*",
+    "audit.actions.*", "login.ssoError.*"
+  ]
+}

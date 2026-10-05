@@ -1,0 +1,10 @@
+{
+  "set": {
+    "common.prev": "Zurück",
+    "zones.count_one": "{{count}} Zone",
+    "zones.count_other": "{{count}} Zonen"
+  },
+  "remove": [
+    "common.old"
+  ]
+}
