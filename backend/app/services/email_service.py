@@ -1,12 +1,20 @@
-"""Email service for sending emails via SMTP."""
+"""E-Mail-Versand ueber SMTP und die SMTP-/Welcome-Mail-Einstellungen (Key-Value in ``system_settings``).
+
+- Lesen/Schreiben nur ueber ``services/system_settings.py``: ``smtp_password`` ist ein Secret-Key und liegt
+  verschluesselt in der DB (F5). Ist er nicht entschluesselbar, liefert ``get_smtp_settings`` den Platzhalter
+  ``UNREADABLE`` (``== ""``) und ``password_unreadable=True``; Versand und Verbindungstest brechen dann mit
+  einer klaren Meldung ab, statt sich ohne Passwort anzumelden.
+- Die Speicher-Funktionen machen nur ``flush`` – den Commit macht die Request-Dependency (``DbWrite``).
+"""
 import logging
-import json
 import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.secrets import is_unreadable
+from app.services.system_settings import get_settings, set_settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,34 +30,43 @@ SMTP_KEYS = [
     "smtp_enabled",
 ]
 
+SMTP_PASSWORD_UNREADABLE = (
+    "SMTP-Passwort kann nicht entschlüsselt werden – bitte unter Einstellungen → SMTP neu eintragen."
+)
+
+
+def _port(value) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 587
+
 
 async def get_smtp_settings(db: AsyncSession) -> dict:
-    """Load SMTP settings from the database."""
-    from app.models.models import SystemSetting
-    
-    settings = {}
-    result = await db.execute(
-        select(SystemSetting).where(SystemSetting.key.in_(SMTP_KEYS))
-    )
-    for row in result.scalars().all():
-        settings[row.key] = row.value
-    
+    """SMTP-Einstellungen aus der DB. ``password`` ist das Rohobjekt (kann ``UNREADABLE`` sein)."""
+    settings = await get_settings(db, SMTP_KEYS)
+    password = settings.get("smtp_password")
+    if password is None:
+        password = ""
+
     return {
-        "host": settings.get("smtp_host", ""),
-        "port": int(settings.get("smtp_port", "587")),
-        "username": settings.get("smtp_username", ""),
-        "password": settings.get("smtp_password", ""),
-        "from_email": settings.get("smtp_from_email", ""),
-        "from_name": settings.get("smtp_from_name", "PDNS Manager"),
-        "encryption": settings.get("smtp_encryption", "starttls"),
-        "enabled": settings.get("smtp_enabled", "false") == "true",
+        "host": settings.get("smtp_host") or "",
+        "port": _port(settings.get("smtp_port") or "587"),
+        "username": settings.get("smtp_username") or "",
+        "password": password,
+        "password_unreadable": is_unreadable(password),
+        "from_email": settings.get("smtp_from_email") or "",
+        "from_name": settings.get("smtp_from_name") or "PDNS Manager",
+        "encryption": settings.get("smtp_encryption") or "starttls",
+        "enabled": (settings.get("smtp_enabled") or "false") == "true",
     }
 
 
 async def save_smtp_settings(db: AsyncSession, settings: dict):
-    """Save SMTP settings to the database."""
-    from app.models.models import SystemSetting
-    
+    """SMTP-Einstellungen speichern (nur flush, kein Commit).
+
+    ``password=None`` heisst: Passwort nicht anfassen (weder lesen noch neu schreiben).
+    """
     key_map = {
         "host": "smtp_host",
         "port": "smtp_port",
@@ -60,21 +77,14 @@ async def save_smtp_settings(db: AsyncSession, settings: dict):
         "encryption": "smtp_encryption",
         "enabled": "smtp_enabled",
     }
-    
+
+    values: dict[str, str] = {}
     for field, db_key in key_map.items():
-        value = str(settings.get(field, ""))
-        
-        result = await db.execute(
-            select(SystemSetting).where(SystemSetting.key == db_key)
-        )
-        existing = result.scalar_one_or_none()
-        
-        if existing:
-            existing.value = value
-        else:
-            db.add(SystemSetting(key=db_key, value=value))
-    
-    await db.commit()
+        if field == "password" and settings.get("password") is None:
+            continue
+        value = settings.get(field, "")
+        values[db_key] = "" if value is None else str(value)
+    await set_settings(db, values)
 
 
 def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str, body_text: str = None):
@@ -84,7 +94,10 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
     
     if not smtp_settings.get("host"):
         raise RuntimeError("Kein SMTP-Server konfiguriert.")
-    
+
+    if is_unreadable(smtp_settings.get("password")):
+        raise RuntimeError(SMTP_PASSWORD_UNREADABLE)
+
     # Genau EINE Adresse: smtplib wuerde sonst alle kommagetrennten Empfaenger aus
     # dem To-Header bedienen (Mail-Relay ueber fremde Adressen).
     to_email = (to_email or "").strip()
@@ -101,7 +114,7 @@ def send_email(smtp_settings: dict, to_email: str, subject: str, body_html: str,
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     
     host = smtp_settings["host"]
-    port = int(smtp_settings.get("port", 587))
+    port = _port(smtp_settings.get("port", 587))
     encryption = smtp_settings.get("encryption", "starttls")
     
     try:
@@ -140,12 +153,7 @@ WELCOME_EMAIL_KEYS = [
 async def get_welcome_email_settings(db: AsyncSession) -> dict:
     """Welcome-Mail-Einstellungen lesen. Leere Werte sind erlaubt - das UI
     blendet dann das Default-Template ein."""
-    from app.models.models import SystemSetting
-
-    result = await db.execute(
-        select(SystemSetting).where(SystemSetting.key.in_(WELCOME_EMAIL_KEYS))
-    )
-    rows = {row.key: row.value for row in result.scalars().all()}
+    rows = await get_settings(db, WELCOME_EMAIL_KEYS)
     return {
         "enabled": (rows.get("welcome_email_enabled") or "false").strip().lower() == "true",
         "subject": (rows.get("welcome_email_subject") or "").strip(),
@@ -160,33 +168,26 @@ async def save_welcome_email_settings(
     subject: str,
     body: str,
 ) -> None:
-    """Welcome-Mail-Einstellungen schreiben."""
-    from app.models.models import SystemSetting
-
-    pairs = {
+    """Welcome-Mail-Einstellungen schreiben (nur flush, kein Commit)."""
+    await set_settings(db, {
         "welcome_email_enabled": "true" if enabled else "false",
         "welcome_email_subject": (subject or "").strip(),
         "welcome_email_body": body or "",
-    }
-    for key, value in pairs.items():
-        result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.value = value
-        else:
-            db.add(SystemSetting(key=key, value=value))
-    await db.commit()
+    })
 
 
 def _test_smtp_connection_sync(smtp_settings: dict):
     """Test SMTP connection without sending an email."""
     host = smtp_settings.get("host", "")
-    port = int(smtp_settings.get("port", 587))
+    port = _port(smtp_settings.get("port", 587))
     encryption = smtp_settings.get("encryption", "starttls")
-    
+
     if not host:
         return {"success": False, "error": "Kein SMTP-Server angegeben."}
-    
+
+    if is_unreadable(smtp_settings.get("password")):
+        return {"success": False, "error": SMTP_PASSWORD_UNREADABLE}
+
     try:
         if encryption == "ssl":
             server = smtplib.SMTP_SSL(host, port, timeout=10, context=ssl.create_default_context())
