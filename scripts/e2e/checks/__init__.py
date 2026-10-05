@@ -516,7 +516,7 @@ def _bootstrap_fresh(ctx: Ctx) -> None:
     if not ctx.admin_password:
         raise CheckFailed("E2E_ADMIN_PASSWORD fehlt")
     admin = ctx.admin_session
-    tok = admin.post("auth/me/panel-tokens", json={"name": "e2e-admin"}, expect=(200, 201)).json()
+    tok = admin.post("auth/me/panel-tokens", json={"name": "e2e-admin", "allow_admin": True}, expect=(200, 201)).json()
     ctx.admin_token = tok["plaintext_token"]
     ctx.user_name = "e2e-user"
     ctx.user_password = "E2e-User-" + secrets.token_urlsafe(9)
