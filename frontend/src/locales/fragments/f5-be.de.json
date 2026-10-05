@@ -1,0 +1,13 @@
+{
+  "set": {
+    "audit.actions.SECRETS_KEY_GENERATED": "Schlüssel für Geheimnisse erzeugt",
+    "audit.actions.SECRETS_MIGRATE": "Geheimnisse verschlüsselt",
+    "audit.actions.SECRETS_ROTATE": "Geheimnisse umgeschlüsselt",
+    "audit.actions.SECRETS_RESET_UNREADABLE": "Unlesbare Geheimnisse zurückgesetzt",
+    "audit.actions.SECRETS_DECRYPT_ALL": "Geheimnisse entschlüsselt",
+    "audit.actions.CAPTCHA_UPDATE": "Captcha geändert",
+    "audit.actions.SMTP_TEST": "SMTP-Test",
+    "audit.actions.DOWNGRADE_PREPARED": "Downgrade vorbereitet"
+  },
+  "remove": []
+}
