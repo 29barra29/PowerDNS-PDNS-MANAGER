@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.PROPAGATION_SETTINGS_UPDATE": "Propagations-Einstellungen geändert",
-    "audit.actions.METRICS_SETTINGS_UPDATE": "Metrik-Einstellungen geändert",
-    "audit.actions.METRICS_TOKEN_CREATE": "Metrik-Token erstellt",
-    "audit.actions.METRICS_TOKEN_DELETE": "Metrik-Token gelöscht"
-  },
-  "remove": []
-}

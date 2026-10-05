@@ -1,8 +1,0 @@
-{
-  "set": {
-    "audit.actions.USER_ROLE_SYNC": "Uloga preuzeta iz grupa",
-    "settings.sso.allowedGroupsHint": "Pun DN grupe, npr. CN=pdns-admins,OU=Groups,DC=example,DC=com",
-    "settings.sso.allowedGroupsHintOidc": "Naziv grupe ili Keycloak putanja, npr. pdns-admins ili /pdns-admins"
-  },
-  "remove": []
-}

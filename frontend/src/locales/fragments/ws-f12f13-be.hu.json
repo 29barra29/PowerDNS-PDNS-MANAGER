@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.PROPAGATION_SETTINGS_UPDATE": "Propagációs beállítások módosítva",
-    "audit.actions.METRICS_SETTINGS_UPDATE": "Metrikabeállítások módosítva",
-    "audit.actions.METRICS_TOKEN_CREATE": "Metrika-token létrehozva",
-    "audit.actions.METRICS_TOKEN_DELETE": "Metrika-token törölve"
-  },
-  "remove": []
-}
