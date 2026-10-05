@@ -90,7 +90,7 @@
     "loading": "Lade...",
     "welcomeTitle": "PDNS Manager Setup",
     "welcomeSubtitle": "Willkommen! Lass uns deinen PDNS Manager einrichten.",
-    "step1Title": "Administrator Account",
+    "step1Title": "Administrator-Konto",
     "step2Title": "E-Mail Konfiguration (Optional)",
     "step3Title": "Setup abschließen",
     "step4Title": "Setup erfolgreich!",
@@ -98,7 +98,7 @@
     "next": "Weiter →",
     "back": "← Zurück",
     "enableEmail": "E-Mail-Benachrichtigungen aktivieren",
-    "smtpServer": "SMTP Server",
+    "smtpServer": "SMTP-Server",
     "port": "Port",
     "smtpUser": "SMTP Benutzer",
     "smtpPassword": "SMTP Passwort",
@@ -187,7 +187,8 @@
       "passkeyCreatedLabel": "Hinzugefügt",
       "passkeyLastUsedLabel": "zuletzt genutzt",
       "passkeyUnsupported": "Dieser Browser unterstützt keine Passkeys.",
-      "passkeyFailed": "Passkey konnte nicht registriert werden."
+      "passkeyFailed": "Passkey konnte nicht registriert werden.",
+      "webhookSecretTitle": "Webhook-Secret – wird nur jetzt angezeigt"
     },
     "servers": "DNS-Server",
     "templates": "Vorlagen",
@@ -379,7 +380,8 @@
       "howtoStep2": "scripts/certbot-dns-dnsmanager.sh aus dem Repo nach /usr/local/bin/ kopieren und ausführbar machen.",
       "howtoStep3": "certbot mit --manual-auth-hook und --manual-cleanup-hook auf das Skript zeigen lassen (siehe Snippet unten).",
       "scriptHint": "Das Hook-Skript liegt im Repo unter"
-    }
+    },
+    "dnsTab": "DNS-Optionen"
   },
   "dashboard": {
     "welcome": "Willkommen, {{name}}!",
@@ -421,11 +423,61 @@
     "actionDnssecEnable": "DNSSEC aktiviert",
     "actionDnssecDisable": "DNSSEC deaktiviert",
     "actionBulkUpdate": "Massenbearbeitung",
-    "exportCsv": "CSV herunterladen"
+    "exportCsv": "CSV herunterladen",
+    "actions": {
+      "CREATE": "Erstellt",
+      "UPDATE": "Geändert",
+      "DELETE": "Gelöscht",
+      "IMPORT": "Importiert",
+      "BULK_UPDATE": "Massenbearbeitung",
+      "RECORD_ROLLBACK": "Zurückgesetzt",
+      "ZONE_NOTIFY": "NOTIFY gesendet",
+      "DYNDNS_UPDATE": "DynDNS-Update",
+      "DNSSEC_ENABLE": "DNSSEC aktiviert",
+      "DNSSEC_DISABLE": "DNSSEC deaktiviert",
+      "KEY_ACTIVATE": "DNSSEC-Schlüssel aktiviert",
+      "KEY_DEACTIVATE": "DNSSEC-Schlüssel deaktiviert",
+      "KEY_DELETE": "DNSSEC-Schlüssel gelöscht",
+      "ACME_PRESENT": "ACME-Challenge gesetzt",
+      "ACME_CLEANUP": "ACME-Challenge entfernt",
+      "ACME_TOKEN_CREATE": "ACME-Token erstellt",
+      "ACME_TOKEN_DELETE": "ACME-Token gelöscht",
+      "SERVER_CREATE": "Server hinzugefügt",
+      "SERVER_UPDATE": "Server geändert",
+      "SERVER_DELETE": "Server entfernt",
+      "REVEAL_API_KEY": "API-Key angezeigt",
+      "SMTP_UPDATE": "SMTP geändert",
+      "LOGIN": "Anmeldung",
+      "LOGIN_FAILED": "Anmeldung fehlgeschlagen",
+      "PASSWORD_CHANGE": "Passwort geändert",
+      "USER_CREATE": "Benutzer angelegt",
+      "USER_UPDATE": "Benutzer geändert",
+      "USER_DELETE": "Benutzer gelöscht",
+      "USER_PASSWORD_RESET": "Passwort zurückgesetzt (Admin)",
+      "ZONE_ACCESS_UPDATE": "Zonenrechte geändert",
+      "TOTP_ENABLE": "2FA aktiviert",
+      "TOTP_DISABLE": "2FA deaktiviert",
+      "PASSKEY_ADD": "Passkey hinzugefügt",
+      "PASSKEY_DELETE": "Passkey entfernt",
+      "PANEL_TOKEN_CREATE": "API-Token erstellt",
+      "PANEL_TOKEN_DELETE": "API-Token gelöscht",
+      "AUDIT_PURGE": "Protokoll bereinigt",
+      "AUDIT_SETTINGS_UPDATE": "Aufbewahrung geändert"
+    },
+    "resourceTypes": {
+      "zone": "Zone",
+      "record": "Record",
+      "dnssec_key": "DNSSEC",
+      "user": "Benutzer",
+      "server_config": "Server",
+      "settings": "Einstellungen",
+      "acme": "ACME",
+      "acme_token": "ACME-Token",
+      "audit_log": "Protokoll"
+    }
   },
   "users": {
     "title": "Benutzerverwaltung",
-    "usersCount": "{{count}} Benutzer",
     "newUser": "Neuer Benutzer",
     "createUser": "Neuen Benutzer erstellen",
     "assignZones": "Zonen zuweisen",
@@ -435,7 +487,6 @@
     "zonePermRead": "Nur lesen",
     "zonePermManage": "Voll",
     "noZonesAvailable": "Keine Zonen vorhanden",
-    "zonesSelected": "{{count}} Zone(n) ausgewählt",
     "changePassword": "Passwort ändern",
     "newPasswordFor": "Neues Passwort für {{name}} festlegen.",
     "deleteConfirm": "Benutzer \"{{name}}\" wirklich löschen?",
@@ -457,7 +508,11 @@
     "usernameHint": "Erlaubt sind Buchstaben, Ziffern sowie . _ -",
     "usernamePattern": "Nur Buchstaben, Ziffern, Punkt, Unterstrich, Bindestrich",
     "usernamePlaceholder": "benutzername",
-    "displayNamePlaceholder": "Max Mustermann"
+    "displayNamePlaceholder": "Max Mustermann",
+    "usersCount_one": "{{count}} Benutzer",
+    "usersCount_other": "{{count}} Benutzer",
+    "zonesSelected_one": "{{count}} Zone ausgewählt",
+    "zonesSelected_other": "{{count}} Zonen ausgewählt"
   },
   "search": {
     "title": "Suche",
@@ -473,7 +528,6 @@
   "zones": {
     "title": "DNS-Zonen",
     "myZones": "Meine Zonen",
-    "zonesCount": "{{count}} Zone(n)",
     "newZone": "Neue Zone",
     "importZone": "Import (BIND)",
     "importTitle": "Zone aus Zonendatei importieren",
@@ -526,7 +580,7 @@
     "removeNameserver": "Diesen Nameserver entfernen",
     "nameserverListHint": "Pro Zeile ein Nameserver. Trailing-Punkt wird automatisch ergänzt.",
     "dnssecRegistrarTitle": "Wichtig: DS-Record beim Registrar eintragen",
-    "dnssecRegistrarBody": "Es werden KSK + ZSK (oder ein CSK) erzeugt. Den DS-Datensatz musst du bei deinem Domain-Registrar eintragen. Öffne danach die Zonendetails dieser Domain – die DS-Zeilen stehen ganz oben in der gelben Box „DS für den Registrar“ (nicht im Formular „Record hinzufügen“).",
+    "dnssecRegistrarBody": "Es werden KSK + ZSK (oder ein CSK) erzeugt. Den DS-Datensatz musst du bei deinem Domain-Registrar eintragen. Öffne danach die Zonendetails dieser Domain – die DS-Zeilen stehen ganz oben in der gelben Box „DS-Datensätze für deinen Domain-Registrar“ (nicht im Formular „Eintrag hinzufügen“).",
     "enterDomainName": "Bitte einen Domainnamen eingeben.",
     "reverseZoneCreatedAs": "Reverse-Zone: wird als {{zone}} angelegt.",
     "reverseZoneDetected": "Reverse-Zone erkannt – wird so übernommen.",
@@ -535,12 +589,13 @@
     "invalidNameserver": "Kein gültiger Nameserver (z. B. ns1.example.com).",
     "invalidNameserverNamed": "Nameserver ungültig: {{name}}",
     "serverReportedError": "Ein Server hat einen Fehler gemeldet.",
-    "deleteZoneAllServersConfirm": "Zone „{{zone}}“ auf allen {{count}} Servern ({{servers}}) löschen?"
+    "deleteZoneAllServersConfirm": "Zone „{{zone}}“ auf allen {{count}} Servern ({{servers}}) löschen?",
+    "zonesCount_one": "{{count}} Zone",
+    "zonesCount_other": "{{count}} Zonen"
   },
   "zoneDetail": {
     "back": "Zurück",
     "records": "Einträge",
-    "recordsCount": "Server: {{server}} • {{count}} Einträge",
     "readOnlyZone": "Für diese Zone hast du nur Lesezugriff – Records und DNSSEC-Änderungen sind gesperrt.",
     "addRecord": "Eintrag hinzufügen",
     "editRecord": "Eintrag bearbeiten",
@@ -572,10 +627,10 @@
     "apexWarningTitle": "Diese Kombination ist am Apex (@) ungewöhnlich oder verboten",
     "kbdHint": "Esc schließt · Strg+Enter speichert",
     "dnssecRegistrarCardTitle": "DS-Datensätze für deinen Domain-Registrar",
-    "dnssecRegistrarIntro": "Damit DNSSEC in der Elternzone (beim Registrar) greift, musst du dort DS-Einträge veröffentlichen. Die werden aus den Schlüsseln auf diesem Nameserver berechnet – du trägst sie nicht unter „Record hinzufügen“ hier ein.",
-    "dnssecManualRecordHint": "Das Formular „Record hinzufügen“ für Typen wie DNSKEY/DS/RRSIG ist nur für fortgeschrittene manuelle Fälle gedacht. Normal: DNSSEC für die Zone aktivieren – dann die DS-Zeilen aus der Liste unten kopieren und im DNSSEC-Formular deines Registrars einfügen.",
+    "dnssecRegistrarIntro": "Damit DNSSEC in der Elternzone (beim Registrar) greift, musst du dort DS-Einträge veröffentlichen. Die werden aus den Schlüsseln auf diesem Nameserver berechnet – du trägst sie nicht hier unter „Eintrag hinzufügen“ ein.",
+    "dnssecManualRecordHint": "Das Formular „Eintrag hinzufügen“ für Typen wie DNSKEY/DS/RRSIG ist nur für fortgeschrittene manuelle Fälle gedacht. Normal: DNSSEC für die Zone aktivieren – dann die DS-Zeilen aus der Liste unten kopieren und im DNSSEC-Formular deines Registrars einfügen.",
     "dnssecNotActiveTitle": "Für diese Zone ist DNSSEC noch nicht aktiv",
-    "dnssecNotActiveBody": "Ohne DNSSEC gibt es keinen DS zum Eintragen. Du kannst DNSSEC jetzt aktivieren (PowerDNS legt Schlüssel und DS-Werte an), oder beim Anlegen einer neuen Zone die Option „DNSSEC aktivieren“ nutzen.",
+    "dnssecNotActiveBody": "Ohne DNSSEC gibt es keinen DS zum Eintragen. Du kannst DNSSEC jetzt aktivieren (PowerDNS legt Schlüssel und DS-Werte an), oder beim Anlegen einer neuen Zone die Option „DNSSEC sofort aktivieren“ nutzen.",
     "dnssecEnableButton": "DNSSEC für diese Zone aktivieren",
     "dnssecEnableConfirm": "DNSSEC für diese Zone aktivieren? PowerDNS erzeugt Signatur-Schlüssel (je nach Server KSK/ZSK oder CSK).",
     "dnssecEnabledOk": "DNSSEC ist aktiv. Kopiere die DS-Zeile(n) unten zu deinem Registrar.",
@@ -721,7 +776,6 @@
     "enterText": "Bitte einen Text angeben.",
     "tagMissing": "Tag fehlt.",
     "hexLengthEven": "Länge sollte gerade sein.",
-    "txtTooLong": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.",
     "unusualCaaTag": "Ungewöhnlicher Tag „{{tag}}\" (üblich: {{common}}).",
     "minValue": "Minimum: {{min}}",
     "maxValue": "Maximum: {{max}}",
@@ -744,7 +798,13 @@
     "serverReadOnlyTitle": "Server „{{server}}“ ist auf „Speichern: Nein“",
     "serverReadOnlyBody": "Änderungen werden auf diesem Server abgelehnt. Wechsle zu einem Server mit aktivem Speichern, oder aktiviere „Speichern“ für diesen Server in Einstellungen → DNS-Server.",
     "switchToServer": "Wechseln zu {{server}}",
-    "fanoutInfo": "Änderungen werden auf {{primary}} gespeichert und zusätzlich auf {{peers}} angewandt."
+    "fanoutInfo": "Änderungen werden auf {{primary}} gespeichert und zusätzlich auf {{peers}} angewandt.",
+    "recordsCount_one": "Server: {{server}} • {{count}} Eintrag",
+    "recordsCount_other": "Server: {{server}} • {{count}} Einträge",
+    "txtTooLong_one": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.",
+    "txtTooLong_other": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.",
+    "tabRecords": "Records",
+    "fanoutNotLoaded": "Diese Server sind nicht geladen und wurden übersprungen: {{servers}}"
   },
   "settingsMore": {
     "updatesScriptHint": "Per Git (fetch + neuestes Release-Tag v*, sonst Pull auf main) wird der Code aktualisiert, danach Backend-Image neu bauen und Container starten. Voraussetzung: Ordner mit .git (install.sh oder git clone). Ein nacktes git pull reicht nach Tag-Installation oft nicht – dafür ist update.sh da.",
@@ -862,5 +922,29 @@
     "days_other": "{{count}} Tage",
     "weeks_one": "{{count}} Woche",
     "weeks_other": "{{count}} Wochen"
+  },
+  "apiErrors": {
+    "serverUnreachable": "Server nicht erreichbar ({{message}})",
+    "sessionExpired": "Sitzung abgelaufen – bitte erneut anmelden",
+    "loginFailed": "Anmeldung fehlgeschlagen",
+    "twoFactorFailed": "Zwei-Faktor-Prüfung fehlgeschlagen",
+    "passkeyLoginFailed": "Passkey-Anmeldung fehlgeschlagen",
+    "registrationFailed": "Registrierung fehlgeschlagen",
+    "requestFailed": "Anfrage fehlgeschlagen",
+    "resetFailed": "Zurücksetzen fehlgeschlagen",
+    "logoUploadFailed": "Logo-Upload fehlgeschlagen"
+  },
+  "errorBoundary": {
+    "title": "Die Oberfläche konnte nicht geladen werden",
+    "body": "Bitte lade die Seite neu. Wenn der Fehler erneut erscheint, prüfe die Browser-Konsole und die Backend-Logs."
+  },
+  "forcePassword": {
+    "title": "Neues Passwort festlegen",
+    "intro": "Ein Administrator hat festgelegt, dass du dein Passwort ändern musst, bevor du weiterarbeiten kannst.",
+    "currentHint": "Das Passwort, mit dem du dich gerade angemeldet hast (z. B. das vom Administrator vergebene).",
+    "mustDiffer": "Das neue Passwort muss sich vom aktuellen unterscheiden.",
+    "submit": "Passwort ändern und fortfahren",
+    "logout": "Abmelden",
+    "togglePassword": "Passwörter anzeigen oder verbergen"
   }
 }

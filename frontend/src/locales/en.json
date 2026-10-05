@@ -187,7 +187,8 @@
       "passkeyCreatedLabel": "Added",
       "passkeyLastUsedLabel": "last used",
       "passkeyUnsupported": "This browser does not support passkeys.",
-      "passkeyFailed": "Could not register the passkey."
+      "passkeyFailed": "Could not register the passkey.",
+      "webhookSecretTitle": "Webhook secret – shown only now"
     },
     "servers": "DNS servers",
     "templates": "Templates",
@@ -379,7 +380,8 @@
       "howtoStep2": "Drop scripts/certbot-dns-dnsmanager.sh from the repo to /usr/local/bin/ and make it executable.",
       "howtoStep3": "Run certbot with --manual-auth-hook and --manual-cleanup-hook pointing to the script (see snippet below).",
       "scriptHint": "The hook script lives in the repo at"
-    }
+    },
+    "dnsTab": "DNS options"
   },
   "dashboard": {
     "welcome": "Welcome, {{name}}!",
@@ -421,11 +423,61 @@
     "actionDnssecEnable": "DNSSEC enabled",
     "actionDnssecDisable": "DNSSEC disabled",
     "actionBulkUpdate": "Bulk update",
-    "exportCsv": "Download CSV"
+    "exportCsv": "Download CSV",
+    "actions": {
+      "CREATE": "Created",
+      "UPDATE": "Updated",
+      "DELETE": "Deleted",
+      "IMPORT": "Imported",
+      "BULK_UPDATE": "Bulk edit",
+      "RECORD_ROLLBACK": "Rolled back",
+      "ZONE_NOTIFY": "NOTIFY sent",
+      "DYNDNS_UPDATE": "DynDNS update",
+      "DNSSEC_ENABLE": "DNSSEC enabled",
+      "DNSSEC_DISABLE": "DNSSEC disabled",
+      "KEY_ACTIVATE": "DNSSEC key activated",
+      "KEY_DEACTIVATE": "DNSSEC key deactivated",
+      "KEY_DELETE": "DNSSEC key deleted",
+      "ACME_PRESENT": "ACME challenge set",
+      "ACME_CLEANUP": "ACME challenge removed",
+      "ACME_TOKEN_CREATE": "ACME token created",
+      "ACME_TOKEN_DELETE": "ACME token deleted",
+      "SERVER_CREATE": "Server added",
+      "SERVER_UPDATE": "Server updated",
+      "SERVER_DELETE": "Server removed",
+      "REVEAL_API_KEY": "API key revealed",
+      "SMTP_UPDATE": "SMTP updated",
+      "LOGIN": "Login",
+      "LOGIN_FAILED": "Login failed",
+      "PASSWORD_CHANGE": "Password changed",
+      "USER_CREATE": "User created",
+      "USER_UPDATE": "User updated",
+      "USER_DELETE": "User deleted",
+      "USER_PASSWORD_RESET": "Password reset (admin)",
+      "ZONE_ACCESS_UPDATE": "Zone access changed",
+      "TOTP_ENABLE": "2FA enabled",
+      "TOTP_DISABLE": "2FA disabled",
+      "PASSKEY_ADD": "Passkey added",
+      "PASSKEY_DELETE": "Passkey removed",
+      "PANEL_TOKEN_CREATE": "API token created",
+      "PANEL_TOKEN_DELETE": "API token deleted",
+      "AUDIT_PURGE": "Audit log purged",
+      "AUDIT_SETTINGS_UPDATE": "Retention changed"
+    },
+    "resourceTypes": {
+      "zone": "Zone",
+      "record": "Record",
+      "dnssec_key": "DNSSEC",
+      "user": "User",
+      "server_config": "Server",
+      "settings": "Settings",
+      "acme": "ACME",
+      "acme_token": "ACME token",
+      "audit_log": "Audit log"
+    }
   },
   "users": {
     "title": "User management",
-    "usersCount": "{{count}} users",
     "newUser": "New user",
     "createUser": "Create new user",
     "assignZones": "Assign zones",
@@ -435,7 +487,6 @@
     "zonePermRead": "Read only",
     "zonePermManage": "Full",
     "noZonesAvailable": "No zones available",
-    "zonesSelected": "{{count}} zone(s) selected",
     "changePassword": "Change password",
     "newPasswordFor": "Set new password for {{name}}.",
     "deleteConfirm": "Really delete user \"{{name}}\"?",
@@ -457,7 +508,11 @@
     "usernameHint": "Allowed: letters, digits, . _ -",
     "usernamePattern": "Only letters, digits, dot, underscore, hyphen",
     "usernamePlaceholder": "username",
-    "displayNamePlaceholder": "Jane Doe"
+    "displayNamePlaceholder": "Jane Doe",
+    "usersCount_one": "{{count}} user",
+    "usersCount_other": "{{count}} users",
+    "zonesSelected_one": "{{count}} zone selected",
+    "zonesSelected_other": "{{count}} zones selected"
   },
   "search": {
     "title": "Search",
@@ -473,7 +528,6 @@
   "zones": {
     "title": "DNS zones",
     "myZones": "My zones",
-    "zonesCount": "{{count}} zone(s)",
     "newZone": "New zone",
     "importZone": "Import (BIND)",
     "importTitle": "Import zone from zone file",
@@ -526,7 +580,7 @@
     "removeNameserver": "Remove this nameserver",
     "nameserverListHint": "One nameserver per row. Trailing dot is added automatically.",
     "dnssecRegistrarTitle": "Important: add the DS record at your registrar",
-    "dnssecRegistrarBody": "KSK + ZSK (or a CSK) will be generated. You must add the DS record at your registrar. After the zone exists, open Zone details for that domain – the DS lines appear in the yellow “DS records for your registrar” box at the top (not in the “Add record” form).",
+    "dnssecRegistrarBody": "KSK + ZSK (or a CSK) will be generated. You must add the DS record at your registrar. After the zone exists, open Zone details for that domain – the DS lines appear in the yellow “DS records for your domain registrar” box at the top (not in the “Add record” form).",
     "enterDomainName": "Please enter a domain name.",
     "reverseZoneCreatedAs": "Reverse zone: will be created as {{zone}}.",
     "reverseZoneDetected": "Reverse zone detected – will be used as is.",
@@ -535,12 +589,13 @@
     "invalidNameserver": "Not a valid nameserver (e.g. ns1.example.com).",
     "invalidNameserverNamed": "Nameserver invalid: {{name}}",
     "serverReportedError": "A server reported an error.",
-    "deleteZoneAllServersConfirm": "Delete zone \"{{zone}}\" on all {{count}} servers ({{servers}})?"
+    "deleteZoneAllServersConfirm": "Delete zone \"{{zone}}\" on all {{count}} servers ({{servers}})?",
+    "zonesCount_one": "{{count}} zone",
+    "zonesCount_other": "{{count}} zones"
   },
   "zoneDetail": {
     "back": "Back",
     "records": "Records",
-    "recordsCount": "Server: {{server}} • {{count}} records",
     "readOnlyZone": "You have read-only access to this zone (no records or DNSSEC changes).",
     "addRecord": "Add record",
     "editRecord": "Edit record",
@@ -575,7 +630,7 @@
     "dnssecRegistrarIntro": "To complete DNSSEC at the parent (your registrar), you must publish DS records there. They are computed from the keys on this nameserver – you do not type them into “Add record” here.",
     "dnssecManualRecordHint": "The “Add record” form for types like DNSKEY/DS/RRSIG is for advanced manual use only. For normal setups, enable DNSSEC on the zone first – then copy the DS lines from the list below into your registrar’s DNSSEC form.",
     "dnssecNotActiveTitle": "DNSSEC is not enabled for this zone yet",
-    "dnssecNotActiveBody": "When DNSSEC is off, there is no DS data to publish. You can enable it now (PowerDNS will create keys and DS digests), or tick “Enable DNSSEC” when creating a new zone.",
+    "dnssecNotActiveBody": "When DNSSEC is off, there is no DS data to publish. You can enable it now (PowerDNS will create keys and DS digests), or tick “Enable DNSSEC immediately” when creating a new zone.",
     "dnssecEnableButton": "Enable DNSSEC for this zone",
     "dnssecEnableConfirm": "Enable DNSSEC for this zone? PowerDNS will create signing keys (KSK/ZSK or CSK depending on server).",
     "dnssecEnabledOk": "DNSSEC has been enabled. Copy the DS record(s) below to your registrar.",
@@ -721,7 +776,6 @@
     "enterText": "Please enter some text.",
     "tagMissing": "Tag is missing.",
     "hexLengthEven": "Length should be even.",
-    "txtTooLong": "Long ({{count}} characters) – will be split into 255-character chunks in DNS.",
     "unusualCaaTag": "Unusual tag „{{tag}}\" (common: {{common}}).",
     "minValue": "Minimum: {{min}}",
     "maxValue": "Maximum: {{max}}",
@@ -744,7 +798,13 @@
     "serverReadOnlyTitle": "Server '{{server}}' is set to 'Save: No'",
     "serverReadOnlyBody": "Changes will be refused on this server. Switch to a writable server, or enable \"Save\" for this server in Settings → DNS servers.",
     "switchToServer": "Switch to {{server}}",
-    "fanoutInfo": "Changes will be saved on {{primary}} and replicated to: {{peers}}."
+    "fanoutInfo": "Changes will be saved on {{primary}} and replicated to: {{peers}}.",
+    "recordsCount_one": "Server: {{server}} • {{count}} record",
+    "recordsCount_other": "Server: {{server}} • {{count}} records",
+    "txtTooLong_one": "Long ({{count}} character) – will be split into 255-character chunks in DNS.",
+    "txtTooLong_other": "Long ({{count}} characters) – will be split into 255-character chunks in DNS.",
+    "tabRecords": "Records",
+    "fanoutNotLoaded": "These servers are not loaded and were skipped: {{servers}}"
   },
   "settingsMore": {
     "updatesScriptHint": "Uses Git (fetch + latest v* release tag, or pull on main), rebuilds the backend image and restarts containers. Requires a .git folder (install.sh or git clone). A plain git pull often does nothing after a tag-based install—that’s what update.sh fixes.",
@@ -862,5 +922,29 @@
     "days_other": "{{count}} days",
     "weeks_one": "{{count}} week",
     "weeks_other": "{{count}} weeks"
+  },
+  "apiErrors": {
+    "serverUnreachable": "Server not reachable ({{message}})",
+    "sessionExpired": "Session expired – please sign in again",
+    "loginFailed": "Sign-in failed",
+    "twoFactorFailed": "Two-factor verification failed",
+    "passkeyLoginFailed": "Passkey sign-in failed",
+    "registrationFailed": "Registration failed",
+    "requestFailed": "Request failed",
+    "resetFailed": "Password reset failed",
+    "logoUploadFailed": "Logo upload failed"
+  },
+  "errorBoundary": {
+    "title": "The interface could not be loaded",
+    "body": "Please reload the page. If the error persists, check the browser console and the backend logs."
+  },
+  "forcePassword": {
+    "title": "Set a new password",
+    "intro": "An administrator requires you to change your password before you can continue.",
+    "currentHint": "The password you just signed in with (e.g. the one given to you by an administrator).",
+    "mustDiffer": "The new password must differ from the current one.",
+    "submit": "Change password and continue",
+    "logout": "Sign out",
+    "togglePassword": "Show or hide passwords"
   }
 }
