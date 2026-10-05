@@ -1,0 +1,6 @@
+{
+  "reason": "WS-F8b: 'Zone' (Spaltenkopf der Suche, F8-E05) ist im Deutschen derselbe Fachbegriff wie im Englischen; der Eintrag stand bis 0b in der Basis-Allowlist und kommt mit dem Key zurueck (W0-I18N Antrag 1).",
+  "perLanguage": {
+    "de": ["search.zone"]
+  }
+}

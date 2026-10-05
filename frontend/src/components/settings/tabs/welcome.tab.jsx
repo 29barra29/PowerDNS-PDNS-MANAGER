@@ -7,10 +7,10 @@ import { useSettings } from '../settingsContext'
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'welcome', order: 60, labelKey: 'settings.welcomeMail.tab', icon: UserPlus, adminOnly: true }
 
-// Tab "Willkommens-Mail" – mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// Tab "Willkommens-Mail". F8 (Welle 1): Ladefehler sichtbar (6.8), neutrale Beispieladresse (A11).
 export default function WelcomeTab({ active }) {
     const { t } = useTranslation()
-    const { profile, adminInfo, notify } = useSettings()
+    const { profile, adminInfo, notify, isAdmin } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
     // App-Name für die Vorschau (2.4.1: aus dem Profil-Formular, das ihn aus /app-info lädt)
@@ -39,7 +39,10 @@ export default function WelcomeTab({ active }) {
                 default_body: data.default_body || '',
                 placeholders: data.placeholders || ['username', 'display_name', 'email', 'app_name', 'login_url'],
             })
-        } catch { /* settings not yet present is OK */ }
+        } catch (err) {
+            // Ohne gespeicherte Einstellungen liefert das Backend Standardwerte - ein Fehler ist also echt
+            setError(err.message)
+        }
     }
 
     async function handleSaveWelcome(e) {
@@ -85,11 +88,15 @@ export default function WelcomeTab({ active }) {
 
     // Wie 2.4.1: bei jedem Öffnen des Tabs neu laden
     useEffect(() => {
-        if (!active) return
+        if (!active || !isAdmin) return
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Laden beim Aktivieren wie 2.4.1
         loadWelcome()
+        // optional: nur der App-Name fuer die Vorschau; ohne ihn bleibt der Standardname stehen
         api.getAppInfo().then((app) => setAppName(app?.app_name || 'PDNS Manager')).catch(() => {})
-    }, [active])
+    }, [active]) // eslint-disable-line react-hooks/exhaustive-deps -- nur beim Aktivieren laden (wie 2.4.1)
+
+    // Zusaetzliches Render-Gate (F8 6.7): der Tab ist adminOnly
+    if (!isAdmin) return null
 
     return (
         <div className="space-y-6">
@@ -183,7 +190,7 @@ export default function WelcomeTab({ active }) {
                 <div className="flex items-center gap-3">
                     <input type="email" value={welcomeTestEmail}
                         onChange={e => setWelcomeTestEmail(e.target.value)}
-                        placeholder="test@meinedomain.de" className="flex-1 px-3 py-2 text-sm" />
+                        placeholder="test@example.com" className="flex-1 px-3 py-2 text-sm" />
                     <button onClick={handleSendWelcomeTest}
                         disabled={sendingWelcomeTest || !welcomeTestEmail.trim()}
                         className="px-5 py-2 bg-gradient-to-r from-success/80 to-emerald-600 hover:from-success hover:to-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 shrink-0">

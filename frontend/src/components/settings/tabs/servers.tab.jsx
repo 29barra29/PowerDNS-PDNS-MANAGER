@@ -2,22 +2,25 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Server, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap } from 'lucide-react'
 import api from '../../../api'
+import ModalErrorBanner from '../../ModalErrorBanner'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'servers', order: 30, labelKey: 'settings.servers', icon: Server, adminOnly: true }
 
-// Tab "Server" (PowerDNS-Server verwalten) – mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// Tab "Server" (PowerDNS-Server verwalten).
+// F8 (Welle 1): "Anzeigen" holt den Key immer frisch, Fehler im Dialog (C01, D07); gesendet wird der Key nur,
+// wenn das Feld geaendert wurde (f90); Texte uebersetzt (A11); Dialog-Fehler ueber ModalErrorBanner (C05).
 export default function ServersTab() {
     const { t } = useTranslation()
-    const { notify } = useSettings()
+    const { notify, isAdmin } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
     const [servers, setServers] = useState([])
     const [loadingServers, setLoadingServers] = useState(true)
-    // API-Key on-demand: { [serverId]: 'plaintext-key' }
-    const [revealedKeys, setRevealedKeys] = useState({})
     const [revealingKey, setRevealingKey] = useState(false)
+    // true, sobald der Admin das Key-Feld selbst geaendert hat; nur dann wird api_key beim Bearbeiten gesendet
+    const [apiKeyDirty, setApiKeyDirty] = useState(false)
 
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
@@ -50,6 +53,7 @@ export default function ServersTab() {
         setForm({ name: '', display_name: '', url: '', api_key: '', description: '', allow_writes: true })
         setTestResult(null)
         setShowApiKey(false)
+        setApiKeyDirty(false)
         setServerModalError('')
         setShowForm(true)
     }
@@ -68,6 +72,7 @@ export default function ServersTab() {
         })
         setTestResult(null)
         setShowApiKey(false)
+        setApiKeyDirty(false)
         setServerModalError('')
         setShowForm(true)
     }
@@ -78,23 +83,19 @@ export default function ServersTab() {
         setTestResult(null)
     }
 
+    // Key immer frisch vom Server holen (kein Cache, f90); Fehler erscheinen im Dialog (f91)
     async function handleRevealApiKey() {
         if (!editId) return
-        if (revealedKeys[editId]) {
-            // Bereits geladen → einfach ins Form übernehmen und sichtbar machen
-            setForm((prev) => ({ ...prev, api_key: revealedKeys[editId] }))
-            setShowApiKey(true)
-            return
-        }
         setRevealingKey(true)
+        setServerModalError('')
         try {
             const res = await api.revealServerApiKey(editId)
             const key = res?.api_key || ''
-            setRevealedKeys((prev) => ({ ...prev, [editId]: key }))
             setForm((prev) => ({ ...prev, api_key: key }))
+            setApiKeyDirty(false)
             setShowApiKey(true)
         } catch (err) {
-            setError(err.message || 'API-Key konnte nicht geladen werden')
+            setServerModalError(err.message || t('settings.apiKeyRevealFailed'))
         } finally {
             setRevealingKey(false)
         }
@@ -102,7 +103,7 @@ export default function ServersTab() {
 
     async function handleTest() {
         if (!form.url || !form.api_key) {
-            setTestResult({ success: false, error: 'URL und API-Key eingeben!' })
+            setTestResult({ success: false, error: t('settings.testNeedsUrlAndKey') })
             return
         }
         setTesting(true)
@@ -126,14 +127,15 @@ export default function ServersTab() {
                 await api.updateServerConfig(editId, {
                     display_name: form.display_name,
                     url: form.url,
-                    api_key: form.api_key,
+                    // '' = gespeicherten Key behalten; ein nur angezeigter Key wird nicht zurueckgeschickt (f90)
+                    api_key: apiKeyDirty ? form.api_key : '',
                     description: form.description,
                     allow_writes: form.allow_writes,
                 })
-                setSuccess('Server aktualisiert!')
+                setSuccess(t('settings.serverUpdated'))
             } else {
                 await api.addServerConfig(form)
-                setSuccess('Server hinzugefügt!')
+                setSuccess(t('settings.serverAdded'))
             }
             closeServerModal()
             loadServers()
@@ -145,10 +147,10 @@ export default function ServersTab() {
     }
 
     async function handleDelete(id, name) {
-        if (!confirm(`Server "${name}" wirklich löschen? Alle Verbindungsdaten gehen verloren!`)) return
+        if (!window.confirm(t('settings.serverDeleteConfirm', { name }))) return
         try {
             await api.deleteServerConfig(id)
-            setSuccess(`Server "${name}" gelöscht`)
+            setSuccess(t('settings.serverDeleted', { name }))
             loadServers()
         } catch (err) {
             setError(err.message)
@@ -174,9 +176,13 @@ export default function ServersTab() {
     }
 
     useEffect(() => {
+        if (!isAdmin) return
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Laden beim Aktivieren wie 2.4.1
         loadServers()
     }, []) // eslint-disable-line react-hooks/exhaustive-deps -- nur beim Aktivieren laden (wie 2.4.1)
+
+    // Zusaetzliches Render-Gate (F8 6.7): der Tab ist adminOnly, die Daten gibt es ohnehin nur fuer Admins
+    if (!isAdmin) return null
 
     return (
         <>
@@ -234,10 +240,10 @@ export default function ServersTab() {
                                                 ? 'bg-success/10 text-success border border-success/30'
                                                 : 'bg-danger/10 text-danger border border-danger/30'
                                                 }`}>
-                                                {s.is_online ? 'Online' : 'Offline'}
+                                                {s.is_online ? t('dashboard.online') : t('dashboard.offline')}
                                             </span>
                                             {!s.is_active && (
-                                                <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">Deaktiviert</span>
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">{t('settings.serverDisabledBadge')}</span>
                                             )}
                                             <button type="button" onClick={() => toggleAllowWrites(s)} className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${s.allow_writes !== false ? 'bg-success/10 text-success border-success/30' : 'bg-bg-hover text-text-muted border-border'}`} title={s.allow_writes !== false ? t('settings.allowWritesTitleOn') : t('settings.allowWritesTitleOff')}>
                                                 {s.allow_writes !== false ? t('settings.allowWritesYes') : t('settings.allowWritesNo')}
@@ -245,7 +251,7 @@ export default function ServersTab() {
                                         </div>
                                         <p className="text-sm text-text-muted font-mono mt-1">{s.url}</p>
                                         <div className="flex items-center gap-4 mt-2 text-xs text-text-muted">
-                                            {s.version && <span>Version: <span className="text-text-secondary">{s.version}</span></span>}
+                                            {s.version && <span>{t('dashboard.version')}: <span className="text-text-secondary">{s.version}</span></span>}
                                             {s.zone_count != null && <span>{t('settings.zonesCount')}: <span className="text-text-secondary">{s.zone_count}</span></span>}
                                             {s.description && <span className="italic">{s.description}</span>}
                                         </div>
@@ -253,14 +259,14 @@ export default function ServersTab() {
 
                                     {/* Actions */}
                                     <div className="flex items-center gap-1 shrink-0">
-                                        <button onClick={() => openEdit(s)} className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors" title="Bearbeiten">
+                                        <button onClick={() => openEdit(s)} className="p-2 rounded-lg text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors" title={t('common.edit')} aria-label={t('common.edit')}>
                                             <Pencil className="w-4 h-4" />
                                         </button>
                                         <button onClick={() => toggleActive(s)} className={`p-2 rounded-lg transition-colors ${s.is_active ? 'text-text-muted hover:text-warning hover:bg-warning/10' : 'text-success hover:bg-success/10'
-                                            }`} title={s.is_active ? 'Deaktivieren' : 'Aktivieren'}>
+                                            }`} title={s.is_active ? t('settings.serverDeactivate') : t('settings.serverActivate')} aria-label={s.is_active ? t('settings.serverDeactivate') : t('settings.serverActivate')}>
                                             {s.is_active ? <WifiOff className="w-4 h-4" /> : <Wifi className="w-4 h-4" />}
                                         </button>
-                                        <button onClick={() => handleDelete(s.id, s.name)} className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors" title="Löschen">
+                                        <button onClick={() => handleDelete(s.id, s.name)} className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors" title={t('common.delete')} aria-label={t('common.delete')}>
                                             <Trash2 className="w-4 h-4" />
                                         </button>
                                     </div>
@@ -282,23 +288,16 @@ export default function ServersTab() {
                         <h2 className="text-lg font-bold text-text-primary">
                             {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
                         </h2>
-                        <button onClick={closeServerModal} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted">
+                        <button onClick={closeServerModal} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted" title={t('common.close')} aria-label={t('common.close')}>
                             <X className="w-5 h-5" />
                         </button>
                     </div>
 
-                    {serverModalError && (
-                        <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
-                            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                            <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium">
-                                    {editId ? t('settingsMore.updateErrorTitle') : t('settingsMore.createErrorTitle')}
-                                </p>
-                                <p className="text-sm mt-1 break-words">{serverModalError}</p>
-                            </div>
-                            <button type="button" onClick={() => setServerModalError('')} className="text-xs hover:underline shrink-0" aria-label={t('common.close')}>×</button>
-                        </div>
-                    )}
+                    <ModalErrorBanner
+                        message={serverModalError}
+                        title={editId ? t('settingsMore.updateErrorTitle') : t('settingsMore.createErrorTitle')}
+                        onClose={() => setServerModalError('')}
+                    />
 
                     <form onSubmit={handleSave} className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
@@ -340,7 +339,7 @@ export default function ServersTab() {
                             <div className="relative">
                                 <input
                                     type={showApiKey ? 'text' : 'password'} value={form.api_key}
-                                    onChange={e => setForm({ ...form, api_key: e.target.value })}
+                                    onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true) }}
                                     placeholder={editId ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
                                     className="w-full px-3 py-2 pr-20 text-sm"
                                     required={!editId}
@@ -389,7 +388,7 @@ export default function ServersTab() {
                         {/* Test Connection */}
                         <div className="border-t border-border pt-4">
                             <button
-                                type="button" onClick={handleTest} disabled={testing || !form.url || !form.api_key}
+                                type="button" onClick={handleTest} disabled={testing}
                                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 disabled:opacity-50 transition-all"
                             >
                                 {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}

@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, AlertCircle, Eye, EyeOff, UserCog, Lock, Mail, User } from 'lucide-react'
+import { Loader2, AlertCircle, AlertTriangle, Eye, EyeOff, UserCog, Lock, Mail, User } from 'lucide-react'
 import api from '../../../api'
-import { LANGUAGES } from '../../../i18n'
+import { LANGUAGES, applyLanguage } from '../../../i18n'
+import { buildAppInfoPayload, buildProfilePayload } from '../../../lib/settingsForms.js'
+import { useDateFormat } from '../../../lib/useDateFormat'
 import PageSpinner from '../../PageSpinner'
 import { useSettings } from '../settingsContext'
 
@@ -10,21 +12,28 @@ import { useSettings } from '../settingsContext'
 export const tab = { id: 'profile', order: 10, labelKey: 'settings.profile', icon: UserCog, adminOnly: false }
 
 // Tab "Profil": eigenes Profil, Sprache, Branding/Systemeinstellungen (nur Admin), Passwort ändern.
-// Mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// F8 (Welle 1): keine Sprachaenderung beim Laden, Sprachwechsel mit Rollback (A07, f92); App-Info-Ladefehler
+// sperrt die Admin-Felder statt Fallbacks zu speichern (D01); Felder leerbar (D02, D04); erst Profil, dann
+// App-Info speichern (D03); Datumsformat der UI-Sprache (A12).
 export default function ProfileTab() {
     const { t, i18n } = useTranslation()
-    const { profile, setProfile, adminInfo, notify } = useSettings()
+    const { fmtDate, fmtDateTime } = useDateFormat()
+    const { profile, setProfile, isAdmin, adminInfo, notify } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
     // Ohne Profil (getMe fehlgeschlagen) bleibt das Formular leer wie in 2.4.1
-    const [appLoaded, setAppLoaded] = useState(!profile)
+    const [formReady, setFormReady] = useState(!profile)
+    // App-Info (Systemtitel, Registrierung, Branding) geladen? Sonst Admin-Felder gesperrt und nicht gespeichert
+    const [appInfoLoaded, setAppInfoLoaded] = useState(false)
+    const [appInfoFailed, setAppInfoFailed] = useState(false)
+    const [savingLanguage, setSavingLanguage] = useState(false)
     const initialized = useRef(false)
 
     const [profileForm, setProfileForm] = useState({
-        username: '', display_name: '', email: '', app_name: 'PDNS Manager', app_base_url: '',
+        username: '', display_name: '', email: '', app_name: '', app_base_url: '',
         registration_enabled: false, forgot_password_enabled: false,
         app_tagline: '', app_creator: '', app_logo_url: '',
-        phone: '', company: '', street: '', postal_code: '', city: '', country: '', date_of_birth: '', preferred_language: 'de',
+        phone: '', company: '', street: '', postal_code: '', city: '', country: '', date_of_birth: '', preferred_language: '',
     })
     const [savingProfile, setSavingProfile] = useState(false)
 
@@ -35,38 +44,47 @@ export default function ProfileTab() {
     const [showNewPw, setShowNewPw] = useState(false)
     const [uploadingLogo, setUploadingLogo] = useState(false)
 
-    // Formular einmalig aus Profil + öffentlicher App-Info füllen (2.4.1: loadProfile)
+    // Formular einmalig aus Profil + öffentlicher App-Info füllen (2.4.1: loadProfile).
+    // Die Sprache wird hier NICHT umgestellt (A07): das macht Layout beim Laden (preferred_language).
     useEffect(() => {
         if (!profile || initialized.current) return
         initialized.current = true
-        api.getAppInfo().catch(() => ({ app_name: 'PDNS Manager' })).then((app) => {
-            const data = profile
-            const lang = data.preferred_language || 'de'
-            if (lang !== i18n.language) i18n.changeLanguage(lang)
-            setProfileForm((prev) => ({
-                username: data.username || '',
-                display_name: data.display_name || '',
-                email: data.email || '',
-                app_name: app.app_name || 'PDNS Manager',
-                // app_base_url kommt für Admins aus getAdminInfo (siehe Effekt unten)
-                app_base_url: prev.app_base_url || '',
-                registration_enabled: !!app.registration_enabled,
-                forgot_password_enabled: !!app.forgot_password_enabled,
-                app_tagline: app.app_tagline || 'PowerDNS Admin Panel',
-                app_creator: app.app_creator || 'Created by GemTec Games • Barra',
-                app_logo_url: app.app_logo_url || '',
-                phone: data.phone || '',
-                company: data.company || '',
-                street: data.street || '',
-                postal_code: data.postal_code || '',
-                city: data.city || '',
-                country: data.country || '',
-                date_of_birth: data.date_of_birth || '',
-                preferred_language: data.preferred_language || 'de',
-            }))
-            setAppLoaded(true)
+        const data = profile
+        const fillProfile = (prev) => ({
+            ...prev,
+            username: data.username || '',
+            display_name: data.display_name || '',
+            email: data.email || '',
+            phone: data.phone || '',
+            company: data.company || '',
+            street: data.street || '',
+            postal_code: data.postal_code || '',
+            city: data.city || '',
+            country: data.country || '',
+            date_of_birth: data.date_of_birth || '',
+            preferred_language: data.preferred_language || '',
         })
-    }, [profile, i18n])
+        api.getAppInfo()
+            .then((app) => {
+                setProfileForm((prev) => ({
+                    ...fillProfile(prev),
+                    app_name: app?.app_name || '',
+                    // app_base_url kommt für Admins aus getAdminInfo (siehe Effekt unten)
+                    registration_enabled: !!app?.registration_enabled,
+                    forgot_password_enabled: !!app?.forgot_password_enabled,
+                    app_tagline: app?.app_tagline || '',
+                    app_creator: app?.app_creator || '',
+                    app_logo_url: app?.app_logo_url || '',
+                }))
+                setAppInfoLoaded(true)
+            })
+            .catch(() => {
+                // Kein Fallback speichern (f84): Admin-Felder bleiben gesperrt, gespeichert wird nur das Profil
+                setProfileForm(fillProfile)
+                setAppInfoFailed(true)
+            })
+            .finally(() => setFormReady(true))
+    }, [profile])
 
     useEffect(() => {
         if (!adminInfo) return
@@ -74,48 +92,67 @@ export default function ProfileTab() {
         setProfileForm((prev) => ({ ...prev, app_base_url: adminInfo.app_base_url || prev.app_base_url || '' }))
     }, [adminInfo])
 
+    // Admin-Felder nur bearbeitbar, wenn die App-Info geladen ist (D01); die Basis-URL zusaetzlich nur mit admin-info
+    const appFieldsDisabled = !appInfoLoaded
+    const baseUrlLoaded = !!adminInfo
+
+    // ===== Sprache (A07, f92): sofort umschalten, dann speichern; bei Fehler zurück =====
+    async function handleLanguageChange(code) {
+        const prevForm = profileForm.preferred_language
+        const prevLang = i18n.resolvedLanguage || i18n.language
+        setProfileForm((f) => ({ ...f, preferred_language: code }))
+        setSavingLanguage(true)
+        setError('')
+        try {
+            await applyLanguage(code)
+            await api.updateProfile({ preferred_language: code })
+            if (profile) {
+                const updated = { ...profile, preferred_language: code }
+                setProfile(updated)
+                api.setUser(updated)
+            }
+        } catch (err) {
+            setProfileForm((f) => ({ ...f, preferred_language: prevForm }))
+            try { await applyLanguage(prevLang) } catch { /* alte Sprache ist bereits geladen */ }
+            setError(t('settings.languageSaveFailed', { error: err?.message || String(err) }))
+        } finally {
+            setSavingLanguage(false)
+        }
+    }
+
     // ===== Profile functions =====
+    // Zwei Schritte (D03): erst das eigene Profil, dann (Admin) die App-Info. Scheitert nur der zweite Schritt,
+    // ist das Profil trotzdem gespeichert und sofort sichtbar.
     async function handleSaveProfile(e) {
         e.preventDefault()
         setSavingProfile(true)
         setError('')
         setSuccess('')
         try {
-            const result = await api.updateProfile({
-                username: profileForm.username,
-                display_name: profileForm.display_name,
-                email: profileForm.email,
-                phone: profileForm.phone || undefined,
-                company: profileForm.company || undefined,
-                street: profileForm.street || undefined,
-                postal_code: profileForm.postal_code || undefined,
-                city: profileForm.city || undefined,
-                country: profileForm.country || undefined,
-                date_of_birth: profileForm.date_of_birth || undefined,
-                preferred_language: profileForm.preferred_language || undefined,
-            })
-            if (profile?.role === 'admin') {
-                await api.updateAppInfo({
-                    app_name: profileForm.app_name,
-                    app_base_url: profileForm.app_base_url || undefined,
-                    registration_enabled: profileForm.registration_enabled,
-                    forgot_password_enabled: profileForm.forgot_password_enabled,
-                    app_tagline: profileForm.app_tagline || undefined,
-                    app_creator: profileForm.app_creator || undefined,
-                    app_logo_url: profileForm.app_logo_url || undefined,
-                })
+            let result
+            try {
+                result = await api.updateProfile(buildProfilePayload(profileForm))
+            } catch (err) {
+                setError(err.message)
+                return
             }
-            // Trigger a minor refresh on the layout without full reload, by delaying localstorage
-            setSuccess(t('settings.profileSaveSuccess'))
-            if (result.user) {
+            if (result?.user) {
                 api.setUser(result.user)
                 setProfile(result.user)
-                if (result.user.preferred_language && result.user.preferred_language !== i18n.language) {
-                    i18n.changeLanguage(result.user.preferred_language)
+                const lang = result.user.preferred_language
+                if (lang && lang !== (i18n.resolvedLanguage || i18n.language)) {
+                    applyLanguage(lang).catch((err) => console.warn('Sprache konnte nicht geladen werden:', err))
                 }
             }
-        } catch (err) {
-            setError(err.message)
+            if (isAdmin && appInfoLoaded) {
+                try {
+                    await api.updateAppInfo(buildAppInfoPayload(profileForm, { includeBaseUrl: baseUrlLoaded }))
+                } catch (err) {
+                    setError(t('settings.profileSavedAppInfoFailed', { error: err.message }))
+                    return
+                }
+            }
+            setSuccess(t('settings.profileSaveSuccess'))
         } finally {
             setSavingProfile(false)
         }
@@ -124,7 +161,7 @@ export default function ProfileTab() {
     async function handleChangePassword(e) {
         e.preventDefault()
         if (passwordForm.new_password !== passwordForm.confirm_password) {
-            setError('Die neuen Passwörter stimmen nicht überein!')
+            setError(t('settings.passwordsDoNotMatch'))
             return
         }
         if (passwordForm.new_password.length < 8) {
@@ -166,7 +203,7 @@ export default function ProfileTab() {
         }
     }
 
-    if (!appLoaded) return <PageSpinner />
+    if (!formReady) return <PageSpinner />
 
     return (
         <div className="space-y-6">
@@ -186,21 +223,10 @@ export default function ProfileTab() {
                     <div>
                         <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.language')}</label>
                         <select
-                            value={profileForm.preferred_language || 'de'}
-                            onChange={async (e) => {
-                                const code = e.target.value
-                                setProfileForm({ ...profileForm, preferred_language: code })
-                                i18n.changeLanguage(code)
-                                try {
-                                    await api.updateProfile({ preferred_language: code })
-                                    if (profile) {
-                                        const updated = { ...profile, preferred_language: code }
-                                        setProfile(updated)
-                                        api.setUser(updated)
-                                    }
-                                } catch { setProfileForm(prev => ({ ...prev, preferred_language: i18n.language })) }
-                            }}
-                            className="w-full max-w-xs px-3 py-2 text-sm border border-border rounded-lg bg-bg-primary"
+                            value={profileForm.preferred_language || i18n.resolvedLanguage || 'en'}
+                            disabled={savingLanguage}
+                            onChange={(e) => handleLanguageChange(e.target.value)}
+                            className="w-full max-w-xs px-3 py-2 text-sm border border-border rounded-lg bg-bg-primary disabled:opacity-60"
                         >
                             {LANGUAGES.map(({ code, label, flag, wip }) => (
                                 <option key={code} value={code}>
@@ -300,7 +326,7 @@ export default function ProfileTab() {
                             className="w-full px-3 py-2 text-sm" />
                     </div>
 
-                    {profile?.role !== 'admin' && profile?.zones?.length !== undefined && (
+                    {!isAdmin && profile?.zones?.length !== undefined && (
                         <div className="pt-2 border-t border-border">
                             <p className="text-sm font-medium text-text-secondary mb-2">{t('settings.myZones')}</p>
                             <p className="text-xs text-text-muted mb-2">{t('settings.myZonesHint')}</p>
@@ -314,8 +340,14 @@ export default function ProfileTab() {
                         </div>
                     )}
 
-                    {profile?.role === 'admin' && (
+                    {isAdmin && (
                         <>
+                            {appInfoFailed && (
+                                <div className="p-3 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm flex items-start gap-2" role="status">
+                                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                                    <span>{t('settings.appInfoLoadFailed')}</span>
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1">
                                     {t('settings.systemTitle')}
@@ -325,8 +357,9 @@ export default function ProfileTab() {
                                     value={profileForm.app_name}
                                     onChange={e => setProfileForm({ ...profileForm, app_name: e.target.value })}
                                     placeholder={t('settings.systemTitlePlaceholder')}
-                                    className="w-full px-3 py-2 text-sm"
-                                    required
+                                    className="w-full px-3 py-2 text-sm disabled:opacity-50"
+                                    disabled={appFieldsDisabled}
+                                    required={!appFieldsDisabled}
                                 />
                                 <p className="text-xs text-text-muted mt-1">{t('settings.systemTitleHint')}</p>
                             </div>
@@ -339,7 +372,8 @@ export default function ProfileTab() {
                                     value={profileForm.app_base_url}
                                     onChange={e => setProfileForm({ ...profileForm, app_base_url: e.target.value })}
                                     placeholder={t('settings.appBaseUrlPlaceholder')}
-                                    className="w-full px-3 py-2 text-sm"
+                                    className="w-full px-3 py-2 text-sm disabled:opacity-50"
+                                    disabled={appFieldsDisabled || !baseUrlLoaded}
                                 />
                                 <p className="text-xs text-text-muted mt-1">{t('settings.appBaseUrlHint')}</p>
                             </div>
@@ -350,6 +384,7 @@ export default function ProfileTab() {
                                         type="checkbox"
                                         checked={!!profileForm.registration_enabled}
                                         onChange={e => setProfileForm({ ...profileForm, registration_enabled: e.target.checked })}
+                                        disabled={appFieldsDisabled}
                                         className="rounded border-border"
                                     />
                                     <span className="text-sm text-text-primary">{t('settings.allowRegistration')}</span>
@@ -360,6 +395,7 @@ export default function ProfileTab() {
                                         type="checkbox"
                                         checked={!!profileForm.forgot_password_enabled}
                                         onChange={e => setProfileForm({ ...profileForm, forgot_password_enabled: e.target.checked })}
+                                        disabled={appFieldsDisabled}
                                         className="rounded border-border"
                                     />
                                     <span className="text-sm text-text-primary">{t('settings.allowForgotPassword')}</span>
@@ -375,7 +411,8 @@ export default function ProfileTab() {
                                         value={profileForm.app_tagline}
                                         onChange={e => setProfileForm({ ...profileForm, app_tagline: e.target.value })}
                                         placeholder={t('settings.taglinePlaceholder')}
-                                        className="w-full px-3 py-2 text-sm"
+                                        disabled={appFieldsDisabled}
+                                        className="w-full px-3 py-2 text-sm disabled:opacity-50"
                                         maxLength={200}
                                     />
                                     <p className="text-xs text-text-muted mt-1">{t('settings.footerTextHint')}</p>
@@ -387,22 +424,24 @@ export default function ProfileTab() {
                                         value={profileForm.app_creator}
                                         onChange={e => setProfileForm({ ...profileForm, app_creator: e.target.value })}
                                         placeholder={t('settings.creatorPlaceholder')}
-                                        className="w-full px-3 py-2 text-sm"
+                                        disabled={appFieldsDisabled}
+                                        className="w-full px-3 py-2 text-sm disabled:opacity-50"
                                         maxLength={200}
                                     />
                                     <p className="text-xs text-text-muted mt-1">{t('settings.creatorTextHint')}</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-text-secondary mb-1">{t('settings.logoUploadLabel')}</label>
-                                    <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={handleUploadLogo} className="w-full text-sm" />
+                                    <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={handleUploadLogo} disabled={appFieldsDisabled} className="w-full text-sm disabled:opacity-50" />
                                     {uploadingLogo && <p className="text-xs text-text-muted mt-1">{t('settings.logoUploading')}</p>}
                                     {profileForm.app_logo_url && (
                                         <div className="mt-2 flex items-center gap-3">
-                                            <img src={profileForm.app_logo_url} alt="App logo" className="w-10 h-10 rounded-lg object-contain bg-bg-secondary border border-border" />
+                                            <img src={profileForm.app_logo_url} alt={t('common.appLogoAlt')} className="w-10 h-10 rounded-lg object-contain bg-bg-secondary border border-border" />
                                             <button
                                                 type="button"
                                                 onClick={() => setProfileForm({ ...profileForm, app_logo_url: '' })}
-                                                className="text-xs text-danger hover:underline"
+                                                disabled={appFieldsDisabled}
+                                                className="text-xs text-danger hover:underline disabled:opacity-50"
                                             >
                                                 {t('settings.logoRemoveOnSave')}
                                             </button>
@@ -416,9 +455,9 @@ export default function ProfileTab() {
 
                     {profile && (
                         <div className="flex items-center gap-4 pt-2 text-xs text-text-muted">
-                            <span>{t('settings.role')}: <span className="text-accent-light font-medium">{profile.role === 'admin' ? t('settings.administrator') : t('layout.user')}</span></span>
-                            {profile.created_at && <span>{t('settings.created')}: {new Date(profile.created_at).toLocaleDateString()}</span>}
-                            {profile.last_login && <span>{t('settings.lastLogin')}: {new Date(profile.last_login).toLocaleString()}</span>}
+                            <span>{t('settings.role')}: <span className="text-accent-light font-medium">{isAdmin ? t('settings.administrator') : t('layout.user')}</span></span>
+                            {profile.created_at && <span>{t('settings.created')}: {fmtDate(profile.created_at)}</span>}
+                            {profile.last_login && <span>{t('settings.lastLogin')}: {fmtDateTime(profile.last_login)}</span>}
                         </div>
                     )}
 
