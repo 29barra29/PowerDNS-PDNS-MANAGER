@@ -5,6 +5,8 @@ from datetime import datetime
 import re
 
 from app.services.lua_records import validate_lua_content
+# DNSSEC-Schemas liegen ab 3.0 in schemas/dnssec.py (F4 5.6); Re-Export fuer bestehende Importe.
+from app.schemas.dnssec import CryptoKeyResponse, DNSSECEnable  # noqa: F401
 
 # Erlaubte Record-Typen (Panel). LUA seit 3.0 (F15); ob ein Benutzer LUA schreiben darf, entscheidet die
 # LUA-Policy in den Record-Endpunkten (services/lua_records.assert_lua_write_allowed).
@@ -52,10 +54,11 @@ class ZoneCreate(BaseModel):
         default_factory=list,
         description="Server names to create zone on (empty = all servers)"
     )
-    # Platzhalter (Welle 0b): F4 typisiert das Feld als DNSSECEnable (schemas/dnssec.py) und wertet es aus.
-    dnssec_options: Optional[dict] = Field(
+    # Typisiert seit F4-A (schemas/dnssec.py); ausgewertet beim Zonenanlegen ab F4-B
+    # (dnssec_service.enable_dnssec_on_new_zone). Ungueltige Optionen -> 422.
+    dnssec_options: Optional[DNSSECEnable] = Field(
         default=None,
-        description="DNSSEC-Optionen, nur mit enable_dnssec (wird derzeit noch nicht ausgewertet)",
+        description="DNSSEC-Optionen, nur mit enable_dnssec",
     )
 
     @field_validator("name")
@@ -241,42 +244,6 @@ class BulkRecordUpdate(BaseModel):
     create: list[RecordCreate] = Field(default_factory=list)
     delete: list[RecordDelete] = Field(default_factory=list)
     manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
-
-
-# ========================
-# DNSSEC Schemas
-# ========================
-
-class DNSSECEnable(BaseModel):
-    """Schema for enabling DNSSEC."""
-    algorithm: str = Field(default="ECDSAP256SHA256", description="DNSSEC algorithm")
-    nsec3param: str = Field(default="1 0 1 ab", description="NSEC3 parameters")
-
-    @field_validator("algorithm")
-    @classmethod
-    def validate_algorithm(cls, v: str) -> str:
-        allowed = [
-            "ECDSAP256SHA256", "ECDSAP384SHA384",
-            "ED25519", "ED448",
-            "RSASHA256", "RSASHA512",
-        ]
-        if v not in allowed:
-            raise ValueError(f"Algorithm must be one of: {allowed}")
-        return v
-
-
-class CryptoKeyResponse(BaseModel):
-    """Schema for DNSSEC key response."""
-    id: int
-    type: Optional[str] = None
-    keytype: Optional[str] = None
-    active: bool = False
-    published: Optional[bool] = None
-    dnskey: Optional[str] = None
-    ds: Optional[list[str]] = None
-    cds: Optional[list[str]] = None
-    algorithm: Optional[str] = None
-    bits: Optional[int] = None
 
 
 # ========================
