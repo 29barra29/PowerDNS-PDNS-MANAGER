@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 
 // Blaettern ueber offset/limit-Listen (Plan B.14; Audit-Log, Zonenverlauf, Webhook-Zustellprotokoll).
 // onPage(newOffset) bekommt den neuen Offset; die Seitengroessen-Auswahl erscheint nur mit pageSizes + onPageSize
-// (der Aufrufer setzt dann den Offset selbst zurueck).
-export default function Pagination({ offset = 0, limit, total = 0, onPage, pageSizes, onPageSize }) {
-    const { t } = useTranslation()
+// (der Aufrufer setzt dann den Offset selbst zurueck). `t` optional (F7-Signatur), sonst aus useTranslation.
+export default function Pagination({ offset = 0, limit, total = 0, onPage, pageSizes, onPageSize, t: tProp }) {
+    const { t: tHook } = useTranslation()
+    const t = tProp || tHook
     const size = Math.max(1, Number(limit) || 1)
     const count = Math.max(0, Number(total) || 0)
     const start = Math.max(0, Number(offset) || 0)
