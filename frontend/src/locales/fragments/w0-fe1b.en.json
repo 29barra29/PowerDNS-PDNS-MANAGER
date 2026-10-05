@@ -1,0 +1,6 @@
+{
+  "set": {
+    "settings.dnsTab": "DNS options",
+    "settings.integrations.webhookSecretTitle": "Webhook secret – shown only now"
+  }
+}
