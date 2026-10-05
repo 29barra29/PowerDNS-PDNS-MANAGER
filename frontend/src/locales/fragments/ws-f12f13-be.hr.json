@@ -1,0 +1,9 @@
+{
+  "set": {
+    "audit.actions.PROPAGATION_SETTINGS_UPDATE": "Postavke propagacije izmijenjene",
+    "audit.actions.METRICS_SETTINGS_UPDATE": "Postavke metrika izmijenjene",
+    "audit.actions.METRICS_TOKEN_CREATE": "Token za metrike kreiran",
+    "audit.actions.METRICS_TOKEN_DELETE": "Token za metrike obrisan"
+  },
+  "remove": []
+}
