@@ -3,9 +3,14 @@
 This service handles all communication with PowerDNS servers via their HTTP API.
 Supports multiple PowerDNS servers (e.g., DE and FR).
 """
-import httpx
+import json
 import logging
+import time
 from typing import Optional
+
+import httpx
+
+from app.core import metrics as prom
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -37,51 +42,80 @@ class PowerDNSClient:
         params: dict = None,
         timeout: float = 30.0,
     ) -> dict | list | None:
-        """Make an HTTP request to the PowerDNS API."""
+        """Make an HTTP request to the PowerDNS API.
+
+        Jeder Aufruf wird in ``pdnsmgr_pdns_api_requests_total`` (Server, Methode,
+        Status-Klasse) gezaehlt. Transportfehler nach dem Verbindungsaufbau
+        (ReadError, RemoteProtocolError, Timeouts, ...) werden zu
+        ``PowerDNSAPIError`` mit ``transport_error=True`` – das Ergebnis eines
+        schreibenden Aufrufs ist dann unklar (Fan-out prueft per Re-Read nach).
+        """
         url = f"{self.url}/api/v1/servers/localhost{endpoint}"
-        
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            try:
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    headers=self.headers,
-                    json=json_data,
-                    params=params,
-                )
-                
-                if response.status_code == 204:
-                    return None
-                
-                if response.status_code >= 400:
-                    error_body = response.text
-                    logger.error(
-                        f"[{self.name}] PowerDNS API error {response.status_code}: {error_body}"
+        t0 = time.perf_counter()
+        status_label = "error"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                try:
+                    response = await client.request(
+                        method=method,
+                        url=url,
+                        headers=self.headers,
+                        json=json_data,
+                        params=params,
                     )
+                    status_label = f"{response.status_code // 100}xx"
+
+                    if response.status_code == 204:
+                        return None
+
+                    if response.status_code >= 400:
+                        error_body = response.text
+                        logger.error(
+                            f"[{self.name}] PowerDNS API error {response.status_code}: {error_body}"
+                        )
+                        raise PowerDNSAPIError(
+                            status_code=response.status_code,
+                            detail=error_body,
+                            server=self.name,
+                        )
+
+                    if response.headers.get("content-type", "").startswith("application/json"):
+                        return response.json()
+                    return response.text
+
+                except httpx.ConnectError as e:
+                    status_label = "connect_error"
+                    logger.error(f"[{self.name}] Connection failed: {e}")
                     raise PowerDNSAPIError(
-                        status_code=response.status_code,
-                        detail=error_body,
+                        status_code=503,
+                        detail=f"Cannot connect to PowerDNS server '{self.name}' at {self.url}",
                         server=self.name,
                     )
-                
-                if response.headers.get("content-type", "").startswith("application/json"):
-                    return response.json()
-                return response.text
-                
-            except httpx.ConnectError as e:
-                logger.error(f"[{self.name}] Connection failed: {e}")
-                raise PowerDNSAPIError(
-                    status_code=503,
-                    detail=f"Cannot connect to PowerDNS server '{self.name}' at {self.url}",
-                    server=self.name,
-                )
-            except httpx.TimeoutException as e:
-                logger.error(f"[{self.name}] Request timeout: {e}")
-                raise PowerDNSAPIError(
-                    status_code=504,
-                    detail=f"Timeout connecting to PowerDNS server '{self.name}'",
-                    server=self.name,
-                )
+                except httpx.TimeoutException as e:
+                    status_label = "timeout"
+                    logger.error(f"[{self.name}] Request timeout: {e}")
+                    raise PowerDNSAPIError(
+                        status_code=504,
+                        detail=f"Timeout connecting to PowerDNS server '{self.name}'",
+                        server=self.name,
+                        transport_error=True,
+                    )
+                except httpx.HTTPError as e:
+                    # ReadError, RemoteProtocolError, UnsupportedProtocol, ProxyError, ... (nach
+                    # ConnectError/TimeoutException, die beide Unterklassen von HTTPError sind)
+                    status_label = "transport_error"
+                    logger.error(f"[{self.name}] Transport error: {type(e).__name__}: {e}")
+                    raise PowerDNSAPIError(
+                        status_code=502,
+                        detail=(
+                            f"Verbindungsfehler zu PowerDNS-Server '{self.name}' ({type(e).__name__}) "
+                            "– Ergebnis unklar, bitte Zone neu laden."
+                        ),
+                        server=self.name,
+                        transport_error=True,
+                    )
+        finally:
+            prom.observe_pdns_request(self.name, method, status_label, time.perf_counter() - t0)
 
     # ========================
     # Server Info
@@ -94,9 +128,9 @@ class PowerDNSClient:
         """Get PowerDNS server statistics."""
         return await self._request("GET", "/statistics")
 
-    async def get_config(self) -> list:
+    async def get_config(self, timeout: float = 30.0) -> list:
         """Get PowerDNS server configuration."""
-        return await self._request("GET", "/config")
+        return await self._request("GET", "/config", timeout=timeout)
 
     # ========================
     # Zone Management
@@ -105,9 +139,46 @@ class PowerDNSClient:
         """List all zones."""
         return await self._request("GET", "/zones", timeout=timeout)
 
-    async def get_zone(self, zone_id: str) -> dict:
+    async def get_zone(self, zone_id: str, *, timeout: float = 30.0) -> dict:
         """Get a specific zone with all records."""
-        return await self._request("GET", f"/zones/{zone_id}")
+        return await self._request("GET", f"/zones/{zone_id}", timeout=timeout)
+
+    async def get_zone_meta(self, zone_id: str, *, timeout: float = 30.0) -> dict:
+        """Zonen-Metadaten ohne RRsets (``?rrsets=false``, PowerDNS >= 4.3).
+
+        Aeltere PowerDNS-Versionen ignorieren den Parameter und liefern die volle Zone –
+        funktional gleich, nur langsamer.
+        """
+        return await self._request("GET", f"/zones/{zone_id}", params={"rrsets": "false"}, timeout=timeout)
+
+    async def get_zone_rrset(self, zone_id: str, name: str, rtype: str, *, timeout: float = 30.0) -> dict:
+        """Zone mit serverseitig gefiltertem RRset (``rrset_name``/``rrset_type``).
+
+        Neuere PowerDNS-Versionen filtern, aeltere liefern die volle Zone – Aufrufer
+        filtern deshalb IMMER lokal (``rrsets.rrset_snapshot``).
+        """
+        params = {"rrset_name": _abs_name(name), "rrset_type": (rtype or "").upper()}
+        return await self._request("GET", f"/zones/{zone_id}", params=params, timeout=timeout)
+
+    async def get_rrsets(
+        self, zone_id: str, name: str, rtype: str | None = None, *, timeout: float = 10.0
+    ) -> list[dict]:
+        """RRsets eines Namens (optional eines Typs), lokal gefiltert (case-insensitiv)."""
+        n = _abs_name(name)
+        params = {"rrset_name": n}
+        t = (rtype or "").upper() or None
+        if t:
+            params["rrset_type"] = t
+        zone = await self._request("GET", f"/zones/{zone_id}", params=params, timeout=timeout)
+        rrsets = (zone.get("rrsets") or []) if isinstance(zone, dict) else []
+        out = []
+        for rr in rrsets:
+            if _abs_name(str(rr.get("name", ""))) != n:
+                continue
+            if t is not None and str(rr.get("type", "")).upper() != t:
+                continue
+            out.append(rr)
+        return out
 
     async def create_zone(self, zone_data: dict) -> dict:
         """Create a new zone.
@@ -130,9 +201,18 @@ class PowerDNSClient:
         """Delete a zone."""
         return await self._request("DELETE", f"/zones/{zone_id}")
 
-    async def notify_zone(self, zone_id: str) -> None:
-        """Send NOTIFY to all slaves for a zone."""
-        return await self._request("PUT", f"/zones/{zone_id}/notify")
+    async def notify_zone(self, zone_id: str, *, timeout: float = 10.0) -> dict:
+        """NOTIFY an alle Secondaries der Zone senden (PUT ``/zones/{id}/notify``).
+
+        PowerDNS antwortet mit ``{"result": "Notification queued"}``; andere Antworten
+        werden in ``{"result": <text>}`` verpackt, eine leere Antwort ergibt ``{}``.
+        """
+        result = await self._request("PUT", f"/zones/{zone_id}/notify", timeout=timeout)
+        if isinstance(result, dict):
+            return result
+        if result:
+            return {"result": str(result)}
+        return {}
 
     async def get_zone_axfr(self, zone_id: str) -> str:
         """Export a zone in AXFR format (zonefile)."""
@@ -145,7 +225,7 @@ class PowerDNSClient:
     # ========================
     # Record Management
     # ========================
-    async def update_records(self, zone_id: str, rrsets: list[dict]) -> None:
+    async def update_records(self, zone_id: str, rrsets: list[dict], *, timeout: float = 30.0) -> None:
         """Update records in a zone using RRsets.
         
         rrsets example:
@@ -165,6 +245,7 @@ class PowerDNSClient:
             "PATCH",
             f"/zones/{zone_id}",
             json_data={"rrsets": rrsets},
+            timeout=timeout,
         )
 
     async def add_record(
@@ -247,9 +328,21 @@ class PowerDNSClient:
     # ========================
     # DNSSEC
     # ========================
-    async def get_cryptokeys(self, zone_id: str) -> list:
+    async def get_cryptokeys(self, zone_id: str, timeout: float = 30.0) -> list:
         """Get all DNSSEC keys for a zone."""
-        return await self._request("GET", f"/zones/{zone_id}/cryptokeys")
+        return await self._request("GET", f"/zones/{zone_id}/cryptokeys", timeout=timeout)
+
+    async def update_cryptokey(self, zone_id: str, key_id: int, data: dict) -> None:
+        """Schluessel-Eigenschaften setzen (``active``/``published``), PUT ``/cryptokeys/{id}``."""
+        return await self._request("PUT", f"/zones/{zone_id}/cryptokeys/{key_id}", json_data=data)
+
+    async def set_nsec3(self, zone_id: str, nsec3param: str, narrow: bool) -> None:
+        """NSEC3-Parameter setzen; leerer ``nsec3param`` schaltet auf NSEC zurueck."""
+        return await self.update_zone(zone_id, {
+            "nsec3param": nsec3param,
+            "nsec3narrow": bool(narrow) if nsec3param else False,
+            "api_rectify": True,
+        })
 
     async def add_cryptokey(self, zone_id: str, key_data: dict) -> dict:
         """Add a DNSSEC key to a zone.
@@ -364,13 +457,43 @@ class PowerDNSClient:
 
 
 class PowerDNSAPIError(Exception):
-    """Exception raised when PowerDNS API returns an error."""
+    """Exception raised when PowerDNS API returns an error.
 
-    def __init__(self, status_code: int, detail: str, server: str = "unknown"):
+    ``transport_error`` ist True, wenn die Verbindung nach dem Senden abbrach bzw. in ein
+    Timeout lief – das Ergebnis eines schreibenden Aufrufs ist dann unklar.
+    """
+
+    def __init__(self, status_code: int, detail: str, server: str = "unknown", *, transport_error: bool = False):
         self.status_code = status_code
         self.detail = detail
         self.server = server
+        self.transport_error = bool(transport_error)
         super().__init__(f"[{server}] PowerDNS API Error {status_code}: {detail}")
+
+    @property
+    def pdns_message(self) -> str:
+        """Lesbarer Fehlertext: ``{"error": "..."}`` aus dem PowerDNS-Body, sonst der Rohtext (max. 500 Zeichen)."""
+        raw = self.detail if isinstance(self.detail, str) else str(self.detail)
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and isinstance(data.get("error"), str):
+                return data["error"][:500]
+        except (ValueError, TypeError):
+            pass
+        return (raw or "").strip()[:500]
+
+
+def pdns_error_text(exc: PowerDNSAPIError) -> str:
+    """Einheitlicher Fehlertext fuer Antworten: ``PowerDNS (<server>): <meldung>``."""
+    return f"PowerDNS ({getattr(exc, 'server', 'unknown')}): {exc.pdns_message}"
+
+
+def _abs_name(name: str) -> str:
+    """RR-Name fuer PowerDNS-Filter: lower + Trailing-Dot (PowerDNS erwartet absolute Namen)."""
+    n = (name or "").strip().lower()
+    if n and not n.endswith("."):
+        n += "."
+    return n
 
 
 class RecordNotFoundError(PowerDNSAPIError):
@@ -391,6 +514,9 @@ class PowerDNSManager:
 
     def __init__(self):
         self.clients: dict[str, PowerDNSClient] = {}
+        # Konfigurierte, aber nicht geladene Server (Name -> Grund, z. B. "api key unreadable").
+        # Fan-out, Zonen-Index und Propagation melden sie als "skipped (not loaded: <grund>)".
+        self.unloaded: dict[str, str] = {}
         self._load_from_env()
 
     def _load_from_env(self):
@@ -406,30 +532,56 @@ class PowerDNSManager:
         else:
             logger.info("No PowerDNS servers in env. Configure them via the admin panel.")
 
-    def load_from_db_configs(self, configs: list):
+    def load_from_db_configs(self, configs: list) -> list[str]:
         """Load servers from database ServerConfig objects.
         Called during app startup after DB is available.
+
+        Liefert die Namen der wegen unlesbarem/leerem API-Key NICHT geladenen Server; sie
+        stehen danach in ``self.unloaded`` (Name -> Grund). Die DB ist fuehrend, auch
+        gegenueber einem PDNS_SERVERS-Env-Client gleichen Namens.
         """
+        from app.core.secrets import is_unreadable  # lazy: core.secrets importiert Models
+
         db_count = 0
+        skipped: list[str] = []
         for cfg in configs:
             if not cfg.is_active:
+                continue
+            key = cfg.api_key
+            if is_unreadable(key) or not (key or "").strip():
+                reason = "api key unreadable" if is_unreadable(key) else "api key empty"
+                self.mark_unloaded(cfg.name, reason)
+                logger.error(
+                    "PowerDNS-Server '%s' nicht geladen: API-Key %s – bitte unter Einstellungen -> Server neu eintragen.",
+                    cfg.name, "nicht entschluesselbar" if is_unreadable(key) else "leer",
+                )
+                skipped.append(cfg.name)
                 continue
             self.clients[cfg.name] = PowerDNSClient(
                 name=cfg.name,
                 url=cfg.url,
-                api_key=cfg.api_key,
+                api_key=key,
             )
+            self.unloaded.pop(cfg.name, None)
             db_count += 1
         if db_count:
             logger.info(f"Loaded {db_count} PowerDNS servers from database")
+        return skipped
+
+    def mark_unloaded(self, name: str, reason: str) -> None:
+        """Server als konfiguriert, aber nicht geladen markieren (entfernt einen evtl. vorhandenen Client)."""
+        self.clients.pop(name, None)
+        self.unloaded[name] = str(reason or "unknown")
 
     def add_server(self, name: str, url: str, api_key: str):
         """Dynamically add a server connection."""
         self.clients[name] = PowerDNSClient(name=name, url=url, api_key=api_key)
+        self.unloaded.pop(name, None)
         logger.info(f"Added PowerDNS server '{name}' ({url})")
 
     def remove_server(self, name: str):
-        """Remove a server connection."""
+        """Remove a server connection (auch eine evtl. Markierung als nicht geladen)."""
+        self.unloaded.pop(name, None)
         if name in self.clients:
             del self.clients[name]
             logger.info(f"Removed PowerDNS server '{name}'")
@@ -437,6 +589,7 @@ class PowerDNSManager:
     def update_server(self, name: str, url: str, api_key: str):
         """Update an existing server connection."""
         self.clients[name] = PowerDNSClient(name=name, url=url, api_key=api_key)
+        self.unloaded.pop(name, None)
         logger.info(f"Updated PowerDNS server '{name}' ({url})")
 
     def get_client(self, server_name: str) -> PowerDNSClient:
