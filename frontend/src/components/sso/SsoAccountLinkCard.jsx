@@ -39,9 +39,10 @@ export default function SsoAccountLinkCard({ user, providers, onLinked }) {
     const canLdap = !!providers.linking?.ldap
     if (!canOidc && !canLdap) return null
 
+    // Code-Feld immer anzeigen (Profil kann veraltet sein, z. B. 2FA gerade erst eingerichtet); Pflicht laut Profil
     const needTotp = !!user.totp_enabled
     const reauthOk = pw.length > 0 && confirm && (!needTotp || totp.length >= 6)
-    const reauth = () => ({ current_password: pw, ...(needTotp && totp ? { totp_code: totp } : {}) })
+    const reauth = () => ({ current_password: pw, ...(totp ? { totp_code: totp } : {}) })
 
     async function linkOidc() {
         if (!reauthOk || busy) return
@@ -93,14 +94,14 @@ export default function SsoAccountLinkCard({ user, providers, onLinked }) {
                     <input id="sso-link-password" type="password" value={pw} onChange={(e) => setPw(e.target.value)}
                         className="w-full px-3 py-2 text-sm" autoComplete="current-password" maxLength={128} disabled={!!busy} />
                 </div>
-                {needTotp && (
-                    <div>
-                        <label htmlFor="sso-link-totp" className="block text-xs text-text-muted mb-1">{t('settings.integrations.ssoTotpCode')}</label>
-                        <input id="sso-link-totp" type="text" inputMode="numeric" autoComplete="one-time-code" value={totp}
-                            onChange={(e) => setTotp(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                            className="w-full px-3 py-2 text-sm font-mono" placeholder="123456" maxLength={8} disabled={!!busy} />
-                    </div>
-                )}
+                <div>
+                    <label htmlFor="sso-link-totp" className="block text-xs text-text-muted mb-1">
+                        {t('settings.integrations.ssoTotpCode')}{needTotp ? '' : ` ${t('stepUp.totpOptional')}`}
+                    </label>
+                    <input id="sso-link-totp" type="text" inputMode="numeric" autoComplete="one-time-code" value={totp}
+                        onChange={(e) => setTotp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                        className="w-full px-3 py-2 text-sm font-mono" placeholder="123456" maxLength={8} disabled={!!busy} />
+                </div>
             </div>
             <label className="flex items-start gap-2 text-sm text-text-secondary max-w-2xl">
                 <input type="checkbox" className="mt-0.5" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} disabled={!!busy} />

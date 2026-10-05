@@ -93,8 +93,9 @@ function PasswordPanel({ error, needTotp }) {
     const { t } = useTranslation()
     const [pw, setPw] = useState('')
     const [code, setCode] = useState('')
-    // needTotp === null: Benutzer unbekannt -> Feld anzeigen, aber optional
-    const showTotp = needTotp !== false
+    // Das Code-Feld ist immer da (der Benutzer-Cache kann veraltet sein, z. B. 2FA erst in dieser Sitzung
+    // eingerichtet); Pflicht nur, wenn 2FA laut Profil aktiv ist.
+    const showTotp = true
     const totpRequired = needTotp === true
     const canSubmit = pw.length > 0 && (!totpRequired || code.length >= 6)
 
