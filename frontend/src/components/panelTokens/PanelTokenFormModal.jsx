@@ -41,7 +41,12 @@ export default function PanelTokenFormModal({ mode, token, isAdmin, zonePermissi
     const formRef = useRef(null)
     const nameRef = useRef(null)
     const loadedRef = useRef(false)
-    const [form, setForm] = useState(() => initialForm(mode, token))
+    // Ohne eigene Zonen bleibt nur "Alle meine Zonen" (Token ohne Zonenzugriff, z. B. fuer /auth/me, F14 2.2 Nr. 3)
+    const [form, setForm] = useState(() => {
+        const initial = initialForm(mode, token)
+        const ownZones = Object.keys(zonePermissions || {}).length
+        return mode !== 'edit' && !isAdmin && ownZones === 0 ? { ...initial, scopeMode: 'all' } : initial
+    })
     const [filter, setFilter] = useState('')
     const [manualZone, setManualZone] = useState('')
     const [manualError, setManualError] = useState('')
