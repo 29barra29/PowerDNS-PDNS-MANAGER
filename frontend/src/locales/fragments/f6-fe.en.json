@@ -70,6 +70,7 @@
     "webhooks.event.record_deleted": "Record deleted",
     "webhooks.event.record_bulk": "Bulk change",
     "webhooks.event.record_rollback": "Record rolled back",
+    "webhooks.event.record_ptr_synced": "PTR record synced",
     "webhooks.event.zone_created": "Zone created",
     "webhooks.event.zone_updated": "Zone settings changed",
     "webhooks.event.zone_deleted": "Zone deleted",

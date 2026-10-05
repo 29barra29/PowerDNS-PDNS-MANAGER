@@ -70,6 +70,7 @@
     "webhooks.event.record_deleted": "Rekord törölve",
     "webhooks.event.record_bulk": "Tömeges módosítás",
     "webhooks.event.record_rollback": "Rekord visszaállítva",
+    "webhooks.event.record_ptr_synced": "PTR-rekord szinkronizálva",
     "webhooks.event.zone_created": "Zóna létrehozva",
     "webhooks.event.zone_updated": "Zónabeállítások módosítva",
     "webhooks.event.zone_deleted": "Zóna törölve",

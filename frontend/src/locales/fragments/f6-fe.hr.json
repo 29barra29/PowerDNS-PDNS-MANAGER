@@ -71,6 +71,7 @@
     "webhooks.event.record_deleted": "Zapis izbrisan",
     "webhooks.event.record_bulk": "Skupna izmjena",
     "webhooks.event.record_rollback": "Zapis vraćen",
+    "webhooks.event.record_ptr_synced": "PTR zapis usklađen",
     "webhooks.event.zone_created": "Zona stvorena",
     "webhooks.event.zone_updated": "Postavke zone izmijenjene",
     "webhooks.event.zone_deleted": "Zona izbrisana",
