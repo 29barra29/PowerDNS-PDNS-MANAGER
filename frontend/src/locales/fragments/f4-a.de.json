@@ -1,0 +1,10 @@
+{
+  "set": {
+    "audit.actions.KEY_CREATE": "DNSSEC-Schlüssel angelegt",
+    "audit.actions.KEY_PUBLISH": "DNSSEC-Schlüssel veröffentlicht",
+    "audit.actions.KEY_UNPUBLISH": "DNSSEC-Schlüssel zurückgezogen",
+    "audit.actions.KEY_UPDATE": "DNSSEC-Schlüssel geändert",
+    "audit.actions.DNSSEC_NSEC3_UPDATE": "NSEC/NSEC3 geändert"
+  },
+  "remove": []
+}
