@@ -20,13 +20,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
 
+# TTL-Grenzen wie RecordCreate/RecordUpdate (schemas/dns.py): Records aus einer Vorlage muessen beim Anlegen
+# der Zone gueltig sein, sonst scheitert jeder Vorlagen-Record einzeln mit 422 (F8 3.8). Ungueltig -> 422.
+TEMPLATE_TTL_MIN = 60
+TEMPLATE_TTL_MAX = 604800
+
 
 class TemplateRecord(BaseModel):
     """A single record entry within a template."""
     name: str = Field(..., description="Record name, use @ for zone apex or subdomain")
     type: str = Field(..., description="Record type (A, AAAA, MX, CNAME, TXT, NS, etc.)")
     content: str = Field(..., description="Record content (IP, hostname, etc.)")
-    ttl: int = Field(default=3600, description="TTL in seconds")
+    ttl: int = Field(default=3600, ge=TEMPLATE_TTL_MIN, le=TEMPLATE_TTL_MAX, description="TTL in seconds")
     prio: Optional[int] = Field(default=None, description="Priority (for MX, SRV)")
 
 
@@ -37,7 +42,7 @@ class TemplateCreate(BaseModel):
     nameservers: list[str] = Field(default_factory=list, description="Default nameservers")
     kind: str = Field(default="Native")
     soa_edit_api: str = Field(default="DEFAULT")
-    default_ttl: int = Field(default=3600)
+    default_ttl: int = Field(default=3600, ge=TEMPLATE_TTL_MIN, le=TEMPLATE_TTL_MAX)
     records: list[TemplateRecord] = Field(default_factory=list, description="Default records")
     is_default: bool = Field(default=False, description="Is this the default template?")
 
@@ -49,7 +54,7 @@ class TemplateUpdate(BaseModel):
     nameservers: Optional[list[str]] = None
     kind: Optional[str] = None
     soa_edit_api: Optional[str] = None
-    default_ttl: Optional[int] = None
+    default_ttl: Optional[int] = Field(default=None, ge=TEMPLATE_TTL_MIN, le=TEMPLATE_TTL_MAX)
     records: Optional[list[TemplateRecord]] = None
     is_default: Optional[bool] = None
 
