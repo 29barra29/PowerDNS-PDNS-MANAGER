@@ -13,5 +13,5 @@
 - **Fehlermeldungen uebersetzt:** Meldungen wie "Server nicht erreichbar", "Sitzung abgelaufen" oder
   "Anmeldung fehlgeschlagen" sowie die Fehlerseite der Oberflaeche erscheinen in der gewaehlten Sprache.
   Fehler eines PowerDNS-Servers nennen wieder den betroffenen Server.
-- **Grundlage fuer den erzwungenen Passwortwechsel:** Verlangt der Server einen neuen Passwortwechsel, zeigt die
+- **Grundlage fuer den erzwungenen Passwortwechsel:** Verlangt ein Administrator einen Passwortwechsel, zeigt die
   Oberflaeche nach der Anmeldung einen eigenen Dialog dafuer, bevor andere Seiten erreichbar sind.
