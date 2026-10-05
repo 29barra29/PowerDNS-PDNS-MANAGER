@@ -256,8 +256,13 @@ test('Slot-Dateien: Dateinamen, Metadaten-Export, eindeutige ids', () => {
 
 test('Zonenansicht W0: Records-Tab und Kopf-Aktionen sind belegt', () => {
     const list = (dir) => fs.readdirSync(path.join(SRC, dir)).filter((n) => n !== 'README.md').sort()
-    assert.deepEqual(list('zoneDetail/tabs'), ['10-records.tab.jsx'])
-    assert.deepEqual(list('zoneDetail/header-actions'), ['10-dnssec-ds.action.jsx', '90-add-record.action.jsx'])
+    // Teilmengenpruefung: spaetere Wellen ergaenzen eigene Slot-Dateien (Antrag WS-F2F3/F7-FE/F12F13-FE)
+    const tabs = list('zoneDetail/tabs')
+    assert.ok(tabs.includes('10-records.tab.jsx'), `Records-Tab fehlt: ${tabs}`)
+    const actions = list('zoneDetail/header-actions')
+    for (const name of ['10-dnssec-ds.action.jsx', '90-add-record.action.jsx']) {
+        assert.ok(actions.includes(name), `${name} fehlt: ${actions}`)
+    }
     const records = fs.readFileSync(path.join(SRC, 'zoneDetail/tabs/10-records.tab.jsx'), 'utf-8')
     assert.match(records, /labelKey:\s*'zoneDetail\.tabRecords'/)
     for (const readme of ['zoneDetail/row-actions/README.md', 'zoneDetail/form-extensions/README.md']) {
