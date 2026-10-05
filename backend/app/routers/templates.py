@@ -1,13 +1,16 @@
-"""API routes for zone template management."""
+"""API-Routen fuer Zonenvorlagen.
+
+Lesen: alle angemeldeten Benutzer. Anlegen/Aendern/Loeschen: nur Admins (``get_admin_user``, bei Tokens
+zusaetzlich ``allow_admin``); Commit vor der Antwort ueber ``DbWrite``.
+"""
 import logging
 import json
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
-from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.timeutil import iso_utc
-from app.core.database import get_db
-from app.core.auth import get_current_user
+from app.core.database import DbRead, DbWrite
+from app.core.auth import get_current_user, get_admin_user
 from app.models.models import ZoneTemplate, User
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -53,8 +56,8 @@ class TemplateUpdate(BaseModel):
 
 @router.get("")
 async def list_templates(
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """List all zone templates."""
     result = await db.execute(select(ZoneTemplate).order_by(ZoneTemplate.name))
@@ -83,13 +86,11 @@ async def list_templates(
 @router.post("")
 async def create_template(
     data: TemplateCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbWrite,
+    current_user: User = Depends(get_admin_user),
 ):
-    """Create a new zone template."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Nur Admins können Vorlagen erstellen")
-    
+    """Create a new zone template (Admin)."""
+
     # Check for duplicate name
     existing = await db.execute(select(ZoneTemplate).where(ZoneTemplate.name == data.name))
     if existing.scalar_one_or_none():
@@ -119,8 +120,7 @@ async def create_template(
         records=records_json,
     )
     db.add(template)
-    await db.commit()
-    await db.refresh(template)
+    await db.flush()  # ID vergeben; Commit macht DbWrite vor dem Senden der Antwort
     
     return {"message": f"Vorlage '{data.name}' erstellt", "id": template.id}
 
@@ -129,13 +129,11 @@ async def create_template(
 async def update_template(
     template_id: int,
     data: TemplateUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbWrite,
+    current_user: User = Depends(get_admin_user),
 ):
-    """Update an existing zone template."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Nur Admins können Vorlagen bearbeiten")
-    
+    """Update an existing zone template (Admin)."""
+
     result = await db.execute(select(ZoneTemplate).where(ZoneTemplate.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
@@ -176,7 +174,7 @@ async def update_template(
     # Reassign to trigger SQLAlchemy change detection
     template.records = new_records
     flag_modified(template, "records")
-    await db.commit()
+    await db.flush()
     
     return {"message": f"Vorlage '{template.name}' aktualisiert"}
 
@@ -184,13 +182,11 @@ async def update_template(
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbWrite,
+    current_user: User = Depends(get_admin_user),
 ):
-    """Delete a zone template."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Nur Admins können Vorlagen löschen")
-    
+    """Delete a zone template (Admin)."""
+
     result = await db.execute(select(ZoneTemplate).where(ZoneTemplate.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
@@ -198,6 +194,6 @@ async def delete_template(
     
     name = template.name
     await db.delete(template)
-    await db.commit()
+    await db.flush()
     
     return {"message": f"Vorlage '{name}' gelöscht"}

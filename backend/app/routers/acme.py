@@ -19,6 +19,9 @@ Sicherheit:
 - Token-Plaintext wird nicht geloggt.
 - ``last_used_at`` + ``last_used_ip`` werden bei jedem Aufruf aktualisiert,
   damit der Admin im UI verdaechtige Aktivitaet erkennt.
+- Der Request-Kontext traegt ``auth_via = "acme_token"`` (Audit ``details.auth``); Panel-Token-Regeln
+  (Scope, ``get_session_user``) greifen hier nicht – ACME hat eine eigene Token-Pruefung (Kategorie own_auth).
+- Schreibende Handler nutzen ``DbWrite`` (Commit vor der Antwort, Bauplan B.7).
 """
 from __future__ import annotations
 
@@ -29,11 +32,12 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.audit import write_audit_detached
+from app.services.audit import write_audit, write_audit_detached
+from app.core.auth import set_auth_context
 from app.core.timeutil import iso_utc
 from app.core.client_ip import get_client_ip
-from app.core.database import get_db
-from app.models.models import AcmeToken, AuditLog
+from app.core.database import DbWrite
+from app.models.models import AcmeToken
 from app.services import acme as acme_service
 
 logger = logging.getLogger(__name__)
@@ -57,8 +61,8 @@ def _client_ip(request: Request) -> Optional[str]:
 
 async def _require_token(
     request: Request,
+    db: DbWrite,
     authorization: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
 ) -> AcmeToken:
     """Validiert Authorization: Bearer <token>. Liefert die DB-Row zurueck.
 
@@ -72,13 +76,15 @@ async def _require_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     plaintext = authorization[7:].strip()
-    token = await acme_service.verify_token(db, plaintext, remote_ip=_client_ip(request))
+    client_ip = _client_ip(request)
+    token = await acme_service.verify_token(db, plaintext, remote_ip=client_ip)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Ungueltiger oder deaktivierter Token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    set_auth_context(request, "acme_token", None, None, client_ip=client_ip)
     return token
 
 
@@ -104,28 +110,18 @@ async def _audit(
             status=status_value, error_message=error,
         )
         return
-    db.add(AuditLog(
-        action=f"ACME_{action}",
-        resource_type="acme",
-        resource_name=domain,
-        details={
-            "token_id": token.id,
-            "token_name": token.name,
-            **(details or {}),
-        },
-        status=status_value,
-        error_message=error,
-        user_id=token.created_by_id,
-    ))
-    await db.flush()
+    await write_audit(
+        db, f"ACME_{action}", "acme", domain, user_id=token.created_by_id,
+        details={"token_id": token.id, "token_name": token.name, **(details or {})},
+    )
 
 
 @router.post("/present")
 async def acme_present(
     body: AcmeChallengeRequest,
     request: Request,
+    db: DbWrite,
     token: AcmeToken = Depends(_require_token),
-    db: AsyncSession = Depends(get_db),
 ):
     """Legt den ``_acme-challenge.<domain>.`` TXT mit dem Validation-Wert an.
 
@@ -156,8 +152,8 @@ async def acme_present(
 async def acme_cleanup(
     body: AcmeChallengeRequest,
     request: Request,
+    db: DbWrite,
     token: AcmeToken = Depends(_require_token),
-    db: AsyncSession = Depends(get_db),
 ):
     """Entfernt den Validation-Wert wieder. Nicht-existente Records sind OK."""
     try:

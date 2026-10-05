@@ -1,4 +1,10 @@
-"""API routes for authentication and user management."""
+"""API-Routen fuer Anmeldung, eigenes Konto und Benutzerverwaltung.
+
+Seit 3.0 liegen die Panel-Token-Verwaltung in ``routers/panel_tokens.py`` und die Webhook-Verwaltung in
+``routers/webhooks.py`` (Pfade unveraendert). Der Login-Abschluss (Cookie, Audit ``LOGIN``, Metrik,
+Fehlzaehler) laeuft ueber ``services.login_session`` (Aliase ``_user_to_dict``, ``_set_session_cookie``,
+``_complete_login``). Schreibende Handler nutzen ``DbWrite`` (Commit vor der Antwort, Bauplan B.7).
+"""
 import json
 import logging
 from datetime import date, datetime, timezone
@@ -10,12 +16,15 @@ from typing import Optional, Annotated
 from sqlalchemy import select, func, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import metrics as prom
 from app.core.timeutil import iso_utc
 from app.core.config import settings as app_settings
-from app.core.database import get_db
+from app.core.database import DbRead, DbWrite
 from app.core.client_ip import get_client_ip
+from app.core.login_rate_limit import is_login_rate_limited, record_failed_login
 import pyotp
 from starlette.concurrency import run_in_threadpool
+from app.services import login_session
 from app.services.audit import write_audit
 from app.core.auth import (
     get_session_user, get_admin_session_user, totp_verify_once, decode_password_reset_payload, password_version,
@@ -27,11 +36,19 @@ from app.core.auth import (
     generate_random_password, MIN_PASSWORD_LENGTH,
     TOKEN_TYPE_WEBAUTHN_REG, TOKEN_TYPE_WEBAUTHN_AUTH,
 )
-from app.models.models import User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook
+from app.models.models import User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook, WebhookDelivery
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+# Gleicher Text fuer IP- und Benutzer-Sperre (keine Aussage, welche greift)
+RATE_LIMIT_DETAIL = "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen."
+
+# Aliase (Bauplan B.4): Implementierung in services/login_session.py
+_user_to_dict = login_session.user_to_dict
+_set_session_cookie = login_session.set_session_cookie
+_complete_login = login_session.complete_login
 
 
 def _blank_to_none(v):
@@ -175,39 +192,6 @@ async def _get_auth_setting(db: AsyncSession, key: str) -> bool:
     return str(value).strip().lower() == "true"
 
 
-async def _user_to_dict(user: User, db: AsyncSession) -> dict:
-    result = await db.execute(
-        select(UserZoneAccess.zone_name, UserZoneAccess.permission).where(
-            UserZoneAccess.user_id == user.id
-        )
-    )
-    rows = result.all()
-    zones = [row[0] for row in rows]
-    zone_permissions = {row[0]: (row[1] or "manage") for row in rows}
-
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "display_name": user.display_name,
-        "role": user.role,
-        "is_active": user.is_active,
-        "zones": zones,
-        "zone_permissions": zone_permissions,
-        "created_at": iso_utc(user.created_at),
-        "last_login": iso_utc(user.last_login),
-        "phone": getattr(user, "phone", None),
-        "company": getattr(user, "company", None),
-        "street": getattr(user, "street", None),
-        "postal_code": getattr(user, "postal_code", None),
-        "city": getattr(user, "city", None),
-        "country": getattr(user, "country", None),
-        "date_of_birth": user.date_of_birth.isoformat()[:10] if getattr(user, "date_of_birth", None) else None,
-        "preferred_language": getattr(user, "preferred_language", None) or None,
-        "totp_enabled": bool(getattr(user, "totp_enabled", False)),
-    }
-
-
 # ========================
 # Auth Endpoints
 # ========================
@@ -217,27 +201,28 @@ class TwoFactorComplete(BaseModel):
     totp_code: str = Field(..., min_length=4, max_length=12)
 
 
+def _rate_limited(method: str) -> HTTPException:
+    """429 mit identischem Text fuer IP- und Benutzer-Sperre (Metrik ``rate_limited``)."""
+    prom.record_login(method, "rate_limited")
+    return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_DETAIL)
+
+
 @router.post("/login")
 async def login(
+    db: DbWrite,
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     captcha_token: Optional[str] = Form(default=None, description="Captcha-Token (nur wenn aktiviert)"),
     totp_code: Optional[str] = Form(default=None, description="6-stelliger TOTP-Code, falls 2FA aktiv"),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Login with username and password. Setzt HttpOnly-Cookie (kein Token im localStorage)."""
-    from app.core.login_rate_limit import (
-        is_login_rate_limited,
-        record_failed_login,
-        clear_login_fails,
-    )
+    """Anmeldung mit Benutzername und Passwort. Setzt das HttpOnly-Cookie (kein Token im Body).
 
+    Drosselung je IP (/64) UND je Benutzername (B.3 [S2]): ein gesperrter Benutzername loest weder
+    Captcha-Pruefung noch DB-Lookup noch Passwortvergleich aus.
+    """
     client_ip = get_client_ip(request) or "unknown"
-    if is_login_rate_limited(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
-        )
+    if is_login_rate_limited(client_ip, form_data.username):
+        raise _rate_limited("password")
 
     # Captcha vor dem Login pruefen, damit Bots keinen Brute-Force gegen DB+Hash starten koennen.
     from app.services.captcha import verify_or_raise as _verify_captcha
@@ -249,7 +234,8 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):
-        record_failed_login(client_ip)
+        record_failed_login(client_ip, form_data.username)
+        prom.record_login("password", "failure")
         await write_audit(
             db, "LOGIN_FAILED", "user", form_data.username,
             user_id=user.id if user else None, status="error",
@@ -261,12 +247,14 @@ async def login(
         )
 
     if not user.is_active:
+        prom.record_login("password", "denied")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Konto ist deaktiviert",
         )
 
     # --- 2FA (TOTP) ------------------------------------------------------------
+    method = "password"
     if getattr(user, "totp_enabled", False):
         sec = (user.totp_secret or "").strip()
         if not sec:
@@ -276,6 +264,7 @@ async def login(
             )
         code = (totp_code or "").strip().replace(" ", "")
         if not code:
+            prom.record_login("password", "2fa_required")
             pending = create_two_factor_pending_token(user.id)
             return JSONResponse(
                 status_code=200,
@@ -285,60 +274,32 @@ async def login(
                 },
             )
         if not totp_verify_once(user.id, sec, code):
-            record_failed_login(client_ip)
+            record_failed_login(client_ip, user.username)
+            prom.record_login("totp", "failure")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Falscher TOTP-Code",
             )
+        method = "password+totp"
 
-    # Update last login
-    user.last_login = datetime.now(timezone.utc)
-    await db.flush()
-
-    clear_login_fails(client_ip)
-
-    await write_audit(db, "LOGIN", "user", user.username, user_id=user.id, details={"ip": client_ip})
-    token = create_access_token(data={"sub": str(user.id), "role": user.role}, user=user)
-    user_dict = await _user_to_dict(user, db)
-
-    # Token wird NUR per HttpOnly-Cookie gesetzt – nicht mehr im JSON-Body,
-    # damit er nicht in Browser-DevTools/Logs sichtbar wird oder versehentlich
-    # vom Frontend in localStorage etc. gespeichert werden kann.
-    response = JSONResponse(content={"user": user_dict})
-    response.set_cookie(
-        key=app_settings.AUTH_COOKIE_NAME,
-        value=token,
-        max_age=app_settings.AUTH_COOKIE_MAX_AGE,
-        httponly=True,
-        secure=app_settings.AUTH_COOKIE_SECURE,
-        samesite=app_settings.AUTH_COOKIE_SAMESITE,
-        path="/",
-    )
-    return response
+    # Erfolg: last_login, Benutzer-Zaehler des Paars loeschen, Audit LOGIN, Metrik, Cookie (B.4)
+    return await _complete_login(db, user, request, method=method)
 
 
 @router.post("/login/2fa")
 async def login_two_factor(
+    db: DbWrite,
     data: TwoFactorComplete,
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """TOTP-Code + pending-Token aus /login, wenn 2FA aktiv. Setzt Session-Cookie."""
-    from app.core.login_rate_limit import (
-        is_login_rate_limited,
-        record_failed_login,
-        clear_login_fails,
-    )
-
     client_ip = get_client_ip(request) or "unknown"
     if is_login_rate_limited(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
-        )
+        raise _rate_limited("totp")
     uid = decode_two_factor_pending_token(data.two_factor_token)
     if not uid:
         record_failed_login(client_ip)
+        prom.record_login("totp", "failure")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Ungültiger oder abgelaufener Zweitschritt-Token",
@@ -347,31 +308,20 @@ async def login_two_factor(
     user = result.scalar_one_or_none()
     if not user or not user.is_active or not getattr(user, "totp_enabled", False):
         record_failed_login(client_ip)
+        prom.record_login("totp", "failure")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nicht anmeldbar")
+    # Benutzer-Zaehler: dieselbe Sperre wie beim Passwort-Login (kein TOTP-Raten ueber /login/2fa)
+    if is_login_rate_limited(client_ip, user.username):
+        raise _rate_limited("totp")
     sec = (user.totp_secret or "").strip()
     if not sec or not totp_verify_once(user.id, sec, data.totp_code):
-        record_failed_login(client_ip)
+        record_failed_login(client_ip, user.username)
+        prom.record_login("totp", "failure")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Falscher TOTP-Code",
         )
-    user.last_login = datetime.now(timezone.utc)
-    await db.flush()
-    clear_login_fails(client_ip)
-    await write_audit(db, "LOGIN", "user", user.username, user_id=user.id, details={"ip": client_ip})
-    token = create_access_token(data={"sub": str(user.id), "role": user.role}, user=user)
-    user_dict = await _user_to_dict(user, db)
-    response = JSONResponse(content={"user": user_dict})
-    response.set_cookie(
-        key=app_settings.AUTH_COOKIE_NAME,
-        value=token,
-        max_age=app_settings.AUTH_COOKIE_MAX_AGE,
-        httponly=True,
-        secure=app_settings.AUTH_COOKIE_SECURE,
-        samesite=app_settings.AUTH_COOKIE_SAMESITE,
-        path="/",
-    )
-    return response
+    return await _complete_login(db, user, request, method="password+totp")
 
 
 @router.post("/logout")
@@ -384,10 +334,10 @@ async def logout():
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_public(
+    db: DbWrite,
     data: RegisterPublic,
     request: Request,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
 ):
     """Register a new user (only when registration is enabled in settings)."""
     if not await _get_auth_setting(db, "registration_enabled"):
@@ -491,9 +441,9 @@ async def _send_welcome_email_safe(user_id: int, base_url: str) -> None:
 
 @router.post("/forgot-password")
 async def forgot_password(
+    db: DbWrite,
     data: ForgotPasswordRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """Request a password reset email (only when forgot_password is enabled)."""
     if not await _get_auth_setting(db, "forgot_password_enabled"):
@@ -564,8 +514,8 @@ async def forgot_password(
 
 @router.post("/reset-password")
 async def reset_password(
+    db: DbWrite,
     data: ResetPasswordRequest,
-    db: AsyncSession = Depends(get_db),
 ):
     """Set new password using the token from the email."""
     payload = decode_password_reset_payload(data.token)
@@ -585,25 +535,51 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="Dieser Link wurde bereits verwendet. Bitte fordere einen neuen an.")
 
     user.hashed_password = hash_password(data.new_password)
+    user.must_change_password = False  # F3 3.2.9: der Nutzer hat selbst ein neues Passwort gesetzt
     await db.flush()
     logger.info(f"Password reset for user id={user_id}")
     return {"message": "Passwort wurde geändert. Du kannst dich jetzt anmelden."}
 
 
+def _auth_block(request: Request) -> dict:
+    """``auth``-Block fuer ``GET /auth/me`` (F14 3.1): Art des Zugangs und – bei Panel-Tokens – dessen Scope.
+
+    Nie Hash oder Klartext; nur Name, Praefix und Einschraenkungen.
+    """
+    via = getattr(request.state, "auth_via", None)
+    pt = getattr(request.state, "panel_token", None)
+    scope = getattr(request.state, "token_scope", None)
+    token = None
+    if via == "panel_token" and pt is not None and scope is not None:
+        token = {
+            "id": pt.id,
+            "name": pt.name,
+            "token_prefix": pt.token_prefix,
+            "scope_zones": sorted(scope.zones) if scope.zones is not None else None,
+            "permission": scope.permission,
+            "allow_admin": bool(scope.allow_admin),
+            "expires_at": iso_utc(pt.expires_at),
+        }
+    return {"via": via, "token": token}
+
+
 @router.get("/me")
 async def get_me(
+    request: Request,
+    db: DbRead,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Get current user info."""
-    return await _user_to_dict(current_user, db)
+    """Eigenes Konto inkl. ``auth``-Block (Session oder Panel-Token mit Scope)."""
+    out = await _user_to_dict(current_user, db)
+    out["auth"] = _auth_block(request)
+    return out
 
 
 @router.put("/me")
 async def update_profile(
+    db: DbWrite,
     data: ProfileUpdate,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Update own profile (username, email, display_name)."""
     if data.username is not None and data.username != current_user.username:
@@ -649,15 +625,17 @@ async def update_profile(
 
 @router.put("/me/password")
 async def change_password(
+    db: DbWrite,
     data: PasswordChange,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Change own password."""
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Aktuelles Passwort ist falsch")
 
     current_user.hashed_password = hash_password(data.new_password)
+    # Erzwungener Passwortwechsel ist damit erledigt (Gate in core.auth, F3 3.2.8)
+    current_user.must_change_password = False
     await db.flush()
     await write_audit(db, "PASSWORD_CHANGE", "user", current_user.username, user_id=current_user.id)
     # Alle anderen Sessions sind durch die pwv-Bindung jetzt ungueltig; die eigene bekommt
@@ -671,8 +649,8 @@ async def change_password(
 # ========================
 @router.get("/users")
 async def list_users(
+    db: DbRead,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """List all users with their zone assignments. Admin only."""
     result = await db.execute(select(User).order_by(User.created_at))
@@ -682,9 +660,9 @@ async def list_users(
 
 @router.post("/users", status_code=201)
 async def create_user(
+    db: DbWrite,
     data: UserCreate,
     admin: User = Depends(get_admin_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Create a new user. Admin only."""
     result = await db.execute(select(User).where(User.username == data.username))
@@ -710,10 +688,10 @@ async def create_user(
 
 @router.put("/users/{user_id}")
 async def update_user(
+    db: DbWrite,
     user_id: int,
     data: UserUpdate,
     admin: User = Depends(get_admin_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Update a user. Admin only."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -727,7 +705,8 @@ async def update_user(
     if data.display_name is not None:
         user.display_name = data.display_name
     if data.role is not None:
-        if user.role == "admin" and data.role != "admin":
+        # Rolle des ZIEL-Benutzers (letzter Admin), keine Rechtepruefung des Aufrufers
+        if user.role == "admin" and data.role != "admin":  # static-ok: role-admin
             admin_count = await db.execute(
                 select(func.count()).select_from(User).where(User.role == "admin")
             )
@@ -750,9 +729,9 @@ async def update_user(
 
 @router.delete("/users/{user_id}")
 async def delete_user(
+    db: DbWrite,
     user_id: int,
     admin: User = Depends(get_admin_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Delete a user and their zone assignments. Admin only."""
     if admin.id == user_id:
@@ -764,12 +743,16 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
 
     # Alle benutzergebundenen Daten entfernen (keine FK-Constraints im Schema -> manuell).
+    # Zustellungen (Outbox) VOR den Webhooks loeschen (F6 3.9).
     await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.user_id == user_id))
     await db.execute(sql_delete(WebAuthnCredential).where(WebAuthnCredential.user_id == user_id))
     await db.execute(sql_delete(PanelToken).where(PanelToken.user_id == user_id))
-    await db.execute(sql_delete(Webhook).where(Webhook.user_id == user_id))
+    res_deliveries = await db.execute(sql_delete(WebhookDelivery).where(WebhookDelivery.user_id == user_id))
+    res_webhooks = await db.execute(sql_delete(Webhook).where(Webhook.user_id == user_id))
     await write_audit(db, "USER_DELETE", "user", user.username, user_id=admin.id,
-                      details={"target_user_id": user.id, "role": user.role})
+                      details={"target_user_id": user.id, "role": user.role,
+                               "deleted_webhooks": int(res_webhooks.rowcount or 0),
+                               "deleted_webhook_deliveries": int(res_deliveries.rowcount or 0)})
     await db.delete(user)
     await db.flush()
     return {"message": f"Benutzer '{user.username}' geloescht"}
@@ -777,9 +760,9 @@ async def delete_user(
 
 @router.put("/users/{user_id}/reset-password")
 async def reset_user_password(
+    db: DbWrite,
     user_id: int,
     admin: User = Depends(get_admin_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Reset a user's password to a fresh random value. Admin only.
 
@@ -811,10 +794,10 @@ async def reset_user_password(
 # ========================
 @router.put("/users/{user_id}/zones")
 async def update_user_zones(
+    db: DbWrite,
     user_id: int,
     data: ZoneAccessUpdate,
     admin: User = Depends(get_admin_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Set which zones a user can manage. Admin only."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -854,9 +837,9 @@ async def update_user_zones(
 
 @router.get("/users/{user_id}/zones")
 async def get_user_zones(
+    db: DbRead,
     user_id: int,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Get zones assigned to a user. Admin only."""
     result = await db.execute(
@@ -883,7 +866,7 @@ class TotpDisableBody(BaseModel):
 
 
 @router.get("/me/totp/status")
-async def totp_status(current_user: User = Depends(get_current_user)):
+async def totp_status(current_user: User = Depends(get_session_user)):
     """Ob 2FA aktiv ist und ob ein ausstehendes Setup (scan QR) laeuft."""
     pending = bool(
         (getattr(current_user, "totp_pending_secret", None) or "").strip()
@@ -897,8 +880,8 @@ async def totp_status(current_user: User = Depends(get_current_user)):
 
 @router.post("/me/totp/begin")
 async def totp_begin(
+    db: DbWrite,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Startet 2FA-Einrichtung: neues Geheimnis, Secret + otpauth-URI für Authenticator-App."""
     if getattr(current_user, "totp_enabled", False):
@@ -919,9 +902,9 @@ async def totp_begin(
 
 @router.post("/me/totp/enable")
 async def totp_enable(
+    db: DbWrite,
     data: TotpEnableBody,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Bestaetigt das Setup: pending-Secret wird aktiv, 2FA an."""
     ps = (getattr(current_user, "totp_pending_secret", None) or "").strip()
@@ -942,9 +925,9 @@ async def totp_enable(
 
 @router.post("/me/totp/disable")
 async def totp_disable(
+    db: DbWrite,
     data: TotpDisableBody,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """2FA ausschalten: Passwort + gueltiger TOTP."""
     if not verify_password(data.password, current_user.hashed_password):
@@ -965,20 +948,6 @@ async def totp_disable(
 # ========================
 # WebAuthn / Passkeys (passwortlose Anmeldung)
 # ========================
-def _set_session_cookie(response: JSONResponse, token: str) -> JSONResponse:
-    """Setzt das HttpOnly-Session-Cookie (gleiche Parameter wie beim Passwort-Login)."""
-    response.set_cookie(
-        key=app_settings.AUTH_COOKIE_NAME,
-        value=token,
-        max_age=app_settings.AUTH_COOKIE_MAX_AGE,
-        httponly=True,
-        secure=app_settings.AUTH_COOKIE_SECURE,
-        samesite=app_settings.AUTH_COOKIE_SAMESITE,
-        path="/",
-    )
-    return response
-
-
 class WebAuthnRegisterComplete(BaseModel):
     name: str = Field(default="Passkey", min_length=1, max_length=100)
     challenge_token: str = Field(..., min_length=20)
@@ -1010,8 +979,8 @@ def _credential_to_dict(c: WebAuthnCredential) -> dict:
 
 @router.get("/me/webauthn/credentials")
 async def list_passkeys(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: DbRead,
+    current_user: User = Depends(get_session_user),
 ):
     """Eigene registrierte Passkeys auflisten."""
     rows = await _list_user_credentials(db, current_user.id)
@@ -1020,9 +989,9 @@ async def list_passkeys(
 
 @router.post("/me/webauthn/register/begin")
 async def webauthn_register_begin(
+    db: DbWrite,
     request: Request,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Startet die Passkey-Registrierung: liefert Creation-Options + Challenge-Token."""
     from app.services import webauthn_service as wa
@@ -1039,10 +1008,10 @@ async def webauthn_register_begin(
 
 @router.post("/me/webauthn/register/complete", status_code=201)
 async def webauthn_register_complete(
+    db: DbWrite,
     data: WebAuthnRegisterComplete,
     request: Request,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Schließt die Passkey-Registrierung ab: verifiziert Attestation und speichert den Public-Key."""
     from app.services import webauthn_service as wa
@@ -1082,9 +1051,9 @@ async def webauthn_register_complete(
 
 @router.delete("/me/webauthn/credentials/{cred_id}")
 async def delete_passkey(
+    db: DbWrite,
     cred_id: int,
     current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Einen eigenen Passkey entfernen."""
     result = await db.execute(
@@ -1105,8 +1074,8 @@ async def delete_passkey(
 
 @router.post("/webauthn/login/begin")
 async def webauthn_login_begin(
+    db: DbWrite,
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """Öffentlich: startet die Passkey-Anmeldung (usernameless / discoverable).
 
@@ -1121,33 +1090,29 @@ async def webauthn_login_begin(
 
 @router.post("/webauthn/login/complete")
 async def webauthn_login_complete(
+    db: DbWrite,
     data: WebAuthnLoginComplete,
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """Öffentlich: schließt die Passkey-Anmeldung ab und setzt das Session-Cookie."""
     from app.services import webauthn_service as wa
-    from app.core.login_rate_limit import (
-        is_login_rate_limited,
-        record_failed_login,
-        clear_login_fails,
-    )
 
     client_ip = get_client_ip(request) or "unknown"
     if is_login_rate_limited(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
-        )
+        raise _rate_limited("passkey")
+
+    def _fail(username: Optional[str] = None) -> None:
+        record_failed_login(client_ip, username)
+        prom.record_login("passkey", "failure")
 
     payload = decode_webauthn_challenge_token(data.challenge_token, purpose=TOKEN_TYPE_WEBAUTHN_AUTH)
     if not payload:
-        record_failed_login(client_ip)
+        _fail()
         raise HTTPException(status_code=400, detail="Ungültiges oder abgelaufenes Challenge-Token")
 
     cred_id = wa.extract_credential_id(data.credential)
     if not cred_id:
-        record_failed_login(client_ip)
+        _fail()
         raise HTTPException(status_code=400, detail="Ungültige Passkey-Antwort")
 
     result = await db.execute(
@@ -1155,212 +1120,23 @@ async def webauthn_login_complete(
     )
     cred = result.scalar_one_or_none()
     if not cred:
-        record_failed_login(client_ip)
+        _fail()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Passkey nicht erkannt")
 
     result = await db.execute(select(User).where(User.id == cred.user_id))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
-        record_failed_login(client_ip)
+        _fail(user.username if user else None)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Konto ist deaktiviert")
+    if is_login_rate_limited(client_ip, user.username):
+        raise _rate_limited("passkey")
 
     try:
         new_sign_count = wa.verify_authentication(request, data.credential, payload["chal"], cred)
     except wa.WebAuthnError as exc:
-        record_failed_login(client_ip)
+        _fail(user.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     cred.sign_count = new_sign_count
     cred.last_used_at = datetime.now(timezone.utc)
-    user.last_login = datetime.now(timezone.utc)
-    await db.flush()
-    clear_login_fails(client_ip)
-
-    await write_audit(db, "LOGIN", "user", user.username, user_id=user.id, details={"ip": client_ip})
-    token = create_access_token(data={"sub": str(user.id), "role": user.role}, user=user)
-    user_dict = await _user_to_dict(user, db)
-    response = JSONResponse(content={"user": user_dict})
-    return _set_session_cookie(response, token)
-
-
-# ========================
-# Panel-API-Token (Bearer wie Session, für Skripte)
-# ========================
-class PanelTokenCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-
-
-@router.get("/me/panel-tokens")
-async def list_panel_tokens(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import panel_token as ptk
-
-    rows = await ptk.list_tokens(db, current_user.id)
-    return {
-        "tokens": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "token_prefix": t.token_prefix,
-                "created_at": iso_utc(t.created_at),
-                "last_used_at": iso_utc(t.last_used_at),
-                "is_active": t.is_active,
-            }
-            for t in rows
-        ]
-    }
-
-
-@router.post("/me/panel-tokens", status_code=201)
-async def create_panel_token(
-    data: PanelTokenCreate,
-    current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import panel_token as ptk
-
-    row, plain = await ptk.create_token(db, current_user.id, data.name)
-    await write_audit(db, "PANEL_TOKEN_CREATE", "user", current_user.username, user_id=current_user.id,
-                      details={"token_id": row.id, "name": row.name, "prefix": row.token_prefix})
-    return {
-        "token": {
-            "id": row.id,
-            "name": row.name,
-            "token_prefix": row.token_prefix,
-        },
-        "plaintext_token": plain,
-        "warning": "Dieser Token wird nur einmal angezeigt – bitte sicher speichern.",
-    }
-
-
-@router.delete("/me/panel-tokens/{token_id}")
-async def delete_panel_token(
-    token_id: int,
-    current_user: User = Depends(get_session_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import panel_token as ptk
-
-    ok = await ptk.delete_token(db, current_user.id, token_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Token nicht gefunden")
-    await write_audit(db, "PANEL_TOKEN_DELETE", "user", current_user.username, user_id=current_user.id,
-                      details={"token_id": token_id})
-    return {"message": "Token widerrufen"}
-
-
-# ========================
-# Webhooks
-# ========================
-class WebhookCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=5, max_length=1024)
-    events: list[str] = Field(default_factory=lambda: ["*"])
-
-
-class WebhookUpdateBody(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    events: Optional[list[str]] = None
-    is_active: Optional[bool] = None
-    rotate_secret: bool = False
-
-
-@router.get("/me/webhooks")
-async def list_my_webhooks(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import webhook_service as wh
-
-    rows = await wh.list_webhooks(db, current_user.id)
-    return {
-        "webhooks": [
-            {
-                "id": w.id,
-                "name": w.name,
-                "url": w.url,
-                "events": w.events or ["*"],
-                "is_active": w.is_active,
-                "has_secret": True,
-                "created_at": iso_utc(w.created_at),
-            }
-            for w in rows
-        ]
-    }
-
-
-@router.post("/me/webhooks", status_code=201)
-async def create_my_webhook(
-    data: WebhookCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import webhook_service as wh
-
-    try:
-        w = await wh.create_webhook(db, current_user.id, data.name, data.url, data.events)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "webhook": {
-            "id": w.id,
-            "name": w.name,
-            "url": w.url,
-            "events": w.events,
-            "is_active": w.is_active,
-        },
-        "secret": w.secret,
-        "warning": "Das Shared Secret für HMAC (Header X-DNS-Manager-Signature) – nur in dieser Antwort; bei Verlust: rotate_secret im PUT nutzen",
-    }
-
-
-@router.put("/me/webhooks/{webhook_id}")
-async def update_my_webhook(
-    webhook_id: int,
-    data: WebhookUpdateBody,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import webhook_service as wh
-
-    try:
-        w = await wh.update_webhook(
-            db,
-            current_user.id,
-            webhook_id,
-            name=data.name,
-            url=data.url,
-            events=data.events,
-            is_active=data.is_active,
-            new_secret=data.rotate_secret,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not w:
-        raise HTTPException(status_code=404, detail="Webhook nicht gefunden")
-    out: dict = {
-        "id": w.id,
-        "name": w.name,
-        "url": w.url,
-        "events": w.events,
-        "is_active": w.is_active,
-    }
-    if data.rotate_secret:
-        out["new_secret"] = w.secret
-    return out
-
-
-@router.delete("/me/webhooks/{webhook_id}")
-async def delete_my_webhook(
-    webhook_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    from app.services import webhook_service as wh
-
-    if not await wh.delete_webhook(db, current_user.id, webhook_id):
-        raise HTTPException(status_code=404, detail="Webhook nicht gefunden")
-    return {"message": "Webhook gelöscht"}
+    return await _complete_login(db, user, request, method="passkey")

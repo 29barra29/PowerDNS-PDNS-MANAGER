@@ -104,3 +104,50 @@ def test_admin_user_management_requires_browser_session():
                 assert "get_admin_session_user" in names, (path, m, names)
                 seen.add((path, m))
     assert seen == want
+
+
+def _route_walk(routes):
+    """Wie in test_admin_user_management_requires_browser_session: auch eingebundene Router (_IncludedRouter)."""
+    for r in routes:
+        yield r
+        inner = getattr(r, "routes", None)
+        if inner is None:
+            orig = getattr(r, "original_router", None)
+            inner = getattr(orig, "routes", None)
+        yield from _route_walk(inner or [])
+
+
+def test_moved_webhook_and_panel_token_routes_keep_paths():
+    """3.0: Panel-Token- und Webhook-Routen liegen in routers/panel_tokens.py bzw. routers/webhooks.py.
+
+    Die oeffentlichen Pfade unter /api/v1 bleiben wie in 2.4.1; Mutationen (und die Token-Liste)
+    verlangen eine Browser-Session, die Webhook-Liste bleibt per Token lesbar (ohne url).
+    """
+    from app.routers import auth as auth_router, panel_tokens, webhooks
+
+    want = {
+        ("/auth/me/panel-tokens", "GET"): ("app.routers.panel_tokens", "get_session_user"),
+        ("/auth/me/panel-tokens", "POST"): ("app.routers.panel_tokens", "get_session_user"),
+        ("/auth/me/panel-tokens/{token_id}", "DELETE"): ("app.routers.panel_tokens", "get_session_user"),
+        ("/auth/me/webhooks", "GET"): ("app.routers.webhooks", "get_current_user"),
+        ("/auth/me/webhooks", "POST"): ("app.routers.webhooks", "get_session_user"),
+        ("/auth/me/webhooks/{webhook_id}", "PUT"): ("app.routers.webhooks", "get_session_user"),
+        ("/auth/me/webhooks/{webhook_id}", "DELETE"): ("app.routers.webhooks", "get_session_user"),
+    }
+    seen = {}
+    for r in _route_walk(app.routes):
+        path = getattr(r, "path", None)
+        if not path:
+            continue
+        path = path.removeprefix("/api/v1")
+        for m in (getattr(r, "methods", None) or []):
+            if (path, m) in want:
+                names = [getattr(d.call, "__name__", "") for d in r.dependant.dependencies]
+                seen[(path, m)] = (r.endpoint.__module__, names)
+    assert set(seen) == set(want)
+    for key, (module, dep) in want.items():
+        assert seen[key][0] == module, key
+        assert dep in seen[key][1], (key, seen[key][1])
+    # nicht mehr doppelt im auth-Router
+    assert not any("/panel-tokens" in r.path or "/webhooks" in r.path for r in auth_router.router.routes)
+    assert panel_tokens.ROUTER_ORDER == 27 and webhooks.ROUTER_ORDER == 30
