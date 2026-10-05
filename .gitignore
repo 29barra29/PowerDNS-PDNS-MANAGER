@@ -61,6 +61,14 @@ backend/app/static/
 .env.backup*
 *.env.backup-*
 backup_*.sql
+# Schluessel fuer gespeicherte Geheimnisse (ab 3.0) – gehoeren nie ins Repo; update.sh legt seine
+# Kopie ausserhalb des Stack-Ordners ab (${PDNSMGR_KEY_BACKUP_DIR:-$HOME/.pdnsmgr-keys}).
+backup_*.secret_key
+backup_secret_key_*.key
+secret_key_backup*.key
+*.secret_key
+.secret_key*
+.pdnsmgr-keys/
 
 # Lokales Datenverzeichnis (JWT-Key-Datei bei Tests/Dev)
 backend/data/

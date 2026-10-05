@@ -5,13 +5,21 @@ Browser-Session (``get_admin_session_user``, F14 3.10): mit einem API-Token lass
 PowerDNS-API-Keys auslesen noch SMTP-, Captcha-, Branding- oder ACME-Einstellungen aendern.
 Schreibende Handler nutzen ``DbWrite`` (Commit vor der Antwort, Bauplan B.7); Aenderungen an
 Server-Konfigurationen leeren den Zonen-Index (``zone_index.invalidate``).
+
+Geheimnisse (F5): PowerDNS-API-Keys, SMTP-Passwort und Captcha-Secret liegen verschluesselt in der DB.
+Nicht entschluesselbare Werte kommen als Platzhalter ``UNREADABLE`` (``== ""``) an und werden in den
+Antworten als ``*_unreadable``/``api_key_status`` gemeldet, nie ueberschrieben, solange kein neuer Wert
+kommt. Settings nur ueber ``services/system_settings.py``. Wer bei SMTP ein Zielfeld (Host, Port,
+Benutzer, Verschluesselung) aendert, muss das Passwort neu eingeben (``guard_secret_retarget`` [S3], in
+PUT und Test); ``SecretReentryRequired`` bildet main.py auf 400 ab.
+Den Status der Verschluesselung liefert ``routers/settings_secrets.py``.
 """
 import asyncio
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
 import httpx
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, Body, HTTPException, Depends, UploadFile, File
 from starlette.concurrency import run_in_threadpool
 from app.core.timeutil import iso_utc
 from app.services.audit import write_audit
@@ -21,8 +29,17 @@ from sqlalchemy import select
 
 from app.core.database import DbRead, DbWrite
 from app.core.auth import get_admin_session_user
+from app.core.secrets import is_unreadable
+from app.core.secret_mask import (
+    SECRET_MASK,
+    SMTP_TARGET_FIELDS,
+    guard_secret_retarget,
+    pick_targets,
+    secret_input_action,
+)
 from app.models.models import User, ServerConfig
 from app.services import zone_index
+from app.services.system_settings import get_settings, set_settings
 from app.services.pdns_client import (
     pdns_manager,
     PowerDNSClient,
@@ -38,14 +55,20 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 # ========================
 # App Info
 # ========================
+# Hochgeladene Logos liegen als uploads/custom-logo.<ext> im festen Upload-Verzeichnis.
+CUSTOM_LOGO_URL_PREFIX = "/uploads/custom-logo."
+CUSTOM_LOGO_GLOB = "custom-logo.*"
+
+
 class AppInfoUpdate(BaseModel):
     app_name: str = Field(..., min_length=1, max_length=100, description="Name der Anwendung")
-    app_base_url: Optional[str] = Field(None, max_length=500, description="Öffentliche Basis-URL für E-Mail-Links (nur Admin)")
+    # None = nicht aendern, "" (auch nur Leerzeichen) = leeren (F8 3.4)
+    app_base_url: Optional[str] = Field(None, max_length=500, description="Öffentliche Basis-URL für E-Mail-Links (nur Admin); leer = entfernen")
     registration_enabled: Optional[bool] = Field(None, description="Registrierung auf der Login-Seite erlauben")
     forgot_password_enabled: Optional[bool] = Field(None, description="Passwort vergessen-Link anzeigen und erlauben")
     app_tagline: Optional[str] = Field(None, max_length=200, description="Kurzer Footer-Text auf Login-Seiten")
     app_creator: Optional[str] = Field(None, max_length=200, description="Creator-/Branding-Hinweis unter dem Footer")
-    app_logo_url: Optional[str] = Field(None, max_length=500, description="URL zum Logo für Login-/Setup-Seiten")
+    app_logo_url: Optional[str] = Field(None, max_length=500, description="URL zum Logo für Login-/Setup-Seiten; leer = Logo entfernen")
 
     @field_validator("app_base_url")
     @classmethod
@@ -56,7 +79,7 @@ class AppInfoUpdate(BaseModel):
             return v
         v = v.strip()
         if not v:
-            return None
+            return ""  # leeren (nicht None: None hiesse "nicht aendern")
         if any(c in v for c in ("\r", "\n", "\t", " ")):
             raise ValueError("Basis-URL darf keine Leer-/Steuerzeichen enthalten")
         try:
@@ -68,6 +91,30 @@ class AppInfoUpdate(BaseModel):
         return v
 
 
+def _uploads_dir() -> Path:
+    """Festes Upload-Verzeichnis (static_new/uploads, Volume backend_uploads) – nie aus Nutzereingaben."""
+    return Path(__file__).resolve().parent.parent / "static_new" / "uploads"
+
+
+def _remove_custom_logo_files(uploads_dir: Path) -> int:
+    """Loescht ``custom-logo.*`` im Upload-Verzeichnis; Fehler nur als Warnung. Rueckgabe: Anzahl geloeschter Dateien."""
+    removed = 0
+    try:
+        candidates = sorted(uploads_dir.glob(CUSTOM_LOGO_GLOB))
+    except OSError as exc:
+        logger.warning("Logo-Dateien in %s nicht lesbar: %s", uploads_dir, exc)
+        return 0
+    for path in candidates:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                continue
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.warning("Logo-Datei %s konnte nicht geloescht werden: %s", path.name, exc)
+    return removed
+
+
 @router.get("/app-info", include_in_schema=False)
 async def get_app_info(db: DbRead):
     """Get *public* app info: name, version, branding, auth feature flags.
@@ -75,26 +122,20 @@ async def get_app_info(db: DbRead):
     Admin-only data (z.B. INSTALL_PATH, app_base_url für E-Mail-Links) wird hier NICHT mehr ausgeliefert,
     sondern unter /settings/admin-info, der eine eingeloggte Admin-Sitzung verlangt.
     """
-    from app.models.models import SystemSetting
     from app.core.config import settings
 
     from app.services import captcha as captcha_service
 
-    result = await db.execute(
-        select(SystemSetting.key, SystemSetting.value).where(
-            SystemSetting.key.in_((
-                "app_name",
-                "registration_enabled",
-                "forgot_password_enabled",
-                "app_tagline",
-                "app_creator",
-                "app_logo_url",
-                captcha_service.KEY_PROVIDER,
-                captcha_service.KEY_SITE_KEY,
-            ))
-        )
-    )
-    rows = {r[0]: r[1] for r in result.all()}
+    rows = await get_settings(db, (
+        "app_name",
+        "registration_enabled",
+        "forgot_password_enabled",
+        "app_tagline",
+        "app_creator",
+        "app_logo_url",
+        captcha_service.KEY_PROVIDER,
+        captcha_service.KEY_SITE_KEY,
+    ))
 
     captcha_provider = (rows.get(captcha_service.KEY_PROVIDER) or captcha_service.PROVIDER_NONE).strip().lower()
     if captcha_provider not in captcha_service.PROVIDERS:
@@ -126,15 +167,9 @@ async def get_admin_info(
     admin: User = Depends(get_admin_session_user),
 ):
     """Liefert sensible/operative Felder (INSTALL_PATH, app_base_url) – nur für Admins."""
-    from app.models.models import SystemSetting
     from app.core.config import settings
 
-    result = await db.execute(
-        select(SystemSetting.key, SystemSetting.value).where(
-            SystemSetting.key.in_(("app_base_url",))
-        )
-    )
-    rows = {r[0]: r[1] for r in result.all()}
+    rows = await get_settings(db, ("app_base_url",))
     base_url = (rows.get("app_base_url") or "").strip()
 
     return {
@@ -143,75 +178,45 @@ async def get_admin_info(
     }
 
 
+def _app_info_values(data: AppInfoUpdate) -> dict[str, str]:
+    """Zu speichernde Werte (nur mitgeschickte Felder; None = nicht aendern)."""
+    values: dict[str, str] = {"app_name": data.app_name}
+    if data.registration_enabled is not None:
+        values["registration_enabled"] = "true" if data.registration_enabled else "false"
+    if data.forgot_password_enabled is not None:
+        values["forgot_password_enabled"] = "true" if data.forgot_password_enabled else "false"
+    for key in ("app_base_url", "app_tagline", "app_creator", "app_logo_url"):
+        val = getattr(data, key)
+        if val is not None:
+            values[key] = val.strip()
+    return values
+
+
 @router.put("/app-info")
 async def update_app_info(
     db: DbWrite,
     data: AppInfoUpdate,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Update custom app name and auth feature toggles."""
-    from app.models.models import SystemSetting
+    """App-Name, Branding und Auth-Schalter speichern.
 
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_name"))
-    setting = result.scalar_one_or_none()
-    if setting:
-        setting.value = data.app_name
-    else:
-        db.add(SystemSetting(key="app_name", value=data.app_name))
+    ``app_base_url: ""`` leert die Basis-URL, ``app_logo_url: ""`` entfernt das Logo (ein hochgeladenes
+    ``custom-logo.*`` wird dabei geloescht). Audit ``APP_INFO_UPDATE`` nur mit Feldnamen, nie Werten.
+    """
+    values = _app_info_values(data)
+    old = await get_settings(db, values.keys())
+    changed = sorted(key for key, val in values.items() if (old.get(key) or "") != val)
+    if not changed:
+        return {"message": "Einstellungen aktualisiert"}
+    await set_settings(db, {key: values[key] for key in changed})
 
-    if data.registration_enabled is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "registration_enabled"))
-        s = r.scalar_one_or_none()
-        if s:
-            s.value = "true" if data.registration_enabled else "false"
-        else:
-            db.add(SystemSetting(key="registration_enabled", value="true" if data.registration_enabled else "false"))
+    removed = 0
+    old_logo = (old.get("app_logo_url") or "").strip()
+    if "app_logo_url" in changed and values["app_logo_url"] == "" and old_logo.startswith(CUSTOM_LOGO_URL_PREFIX):
+        removed = _remove_custom_logo_files(_uploads_dir())
 
-    if data.forgot_password_enabled is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "forgot_password_enabled"))
-        s = r.scalar_one_or_none()
-        if s:
-            s.value = "true" if data.forgot_password_enabled else "false"
-        else:
-            db.add(SystemSetting(key="forgot_password_enabled", value="true" if data.forgot_password_enabled else "false"))
-
-    if data.app_base_url is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_base_url"))
-        s = r.scalar_one_or_none()
-        val = (data.app_base_url or "").strip() or ""
-        if s:
-            s.value = val
-        else:
-            db.add(SystemSetting(key="app_base_url", value=val))
-
-    if data.app_tagline is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_tagline"))
-        s = r.scalar_one_or_none()
-        val = (data.app_tagline or "").strip()
-        if s:
-            s.value = val
-        else:
-            db.add(SystemSetting(key="app_tagline", value=val))
-
-    if data.app_creator is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_creator"))
-        s = r.scalar_one_or_none()
-        val = (data.app_creator or "").strip()
-        if s:
-            s.value = val
-        else:
-            db.add(SystemSetting(key="app_creator", value=val))
-
-    if data.app_logo_url is not None:
-        r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_logo_url"))
-        s = r.scalar_one_or_none()
-        val = (data.app_logo_url or "").strip()
-        if s:
-            s.value = val
-        else:
-            db.add(SystemSetting(key="app_logo_url", value=val))
-
-    await db.commit()
+    await write_audit(db, "APP_INFO_UPDATE", "settings", "app-info", user_id=admin.id,
+                      details={"changed": changed, "logo_files_removed": removed})
     return {"message": "Einstellungen aktualisiert"}
 
 
@@ -236,8 +241,6 @@ async def upload_app_logo(
     admin: User = Depends(get_admin_session_user),
 ):
     """Upload custom logo for login/setup pages (admin only)."""
-    from app.models.models import SystemSetting
-
     content = await file.read()
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Logo ist zu groß (max. 2 MB)")
@@ -246,29 +249,19 @@ async def upload_app_logo(
     if not ext:
         raise HTTPException(status_code=400, detail="Nur PNG, JPG, WEBP oder SVG erlaubt")
 
-    static_dir = Path(__file__).resolve().parent.parent / "static_new"
-    uploads_dir = static_dir / "uploads"
+    uploads_dir = _uploads_dir()
     uploads_dir.mkdir(parents=True, exist_ok=True)
-
-    for old in uploads_dir.glob("custom-logo.*"):
-        try:
-            old.unlink()
-        except Exception:
-            pass
+    _remove_custom_logo_files(uploads_dir)
 
     filename = f"custom-logo{ext}"
     out = uploads_dir / filename
     out.write_bytes(content)
     logo_url = f"/uploads/{filename}"
 
-    r = await db.execute(select(SystemSetting).where(SystemSetting.key == "app_logo_url"))
-    s = r.scalar_one_or_none()
-    if s:
-        s.value = logo_url
-    else:
-        db.add(SystemSetting(key="app_logo_url", value=logo_url))
-    await db.commit()
-    logger.info(f"Logo uploaded by admin '{admin.username}' ({ext}, {len(content)} bytes)")
+    await set_settings(db, {"app_logo_url": logo_url})
+    await write_audit(db, "APP_LOGO_UPLOAD", "settings", "app-logo", user_id=admin.id,
+                      details={"ext": ext, "bytes": len(content)})
+    logger.info("Logo hochgeladen von Admin '%s' (%s, %d Bytes)", admin.username, ext, len(content))
 
     return {"message": "Logo hochgeladen", "app_logo_url": logo_url}
 
@@ -279,7 +272,7 @@ class ServerConfigCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Eindeutiger Servername, z.B. server1")
     display_name: Optional[str] = Field(None, description="Anzeigename")
     url: str = Field(..., description="PowerDNS API URL, z.B. http://192.168.1.10:8081")
-    api_key: str = Field(..., description="PowerDNS API Key")
+    api_key: str = Field(..., min_length=1, max_length=500, description="PowerDNS API Key")
     description: Optional[str] = None
     allow_writes: Optional[bool] = Field(True, description="Zonen/Änderungen auf diesem Server speichern. Bei gemeinsamer DB nur bei einem Server aktivieren.")
 
@@ -287,7 +280,8 @@ class ServerConfigCreate(BaseModel):
 class ServerConfigUpdate(BaseModel):
     display_name: Optional[str] = None
     url: Optional[str] = None
-    api_key: Optional[str] = None
+    # None/leer = Bestand behalten (auch einen nicht lesbaren Key: der Server bleibt dann ungeladen)
+    api_key: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = None
     is_active: Optional[bool] = None
     allow_writes: Optional[bool] = None
@@ -295,17 +289,54 @@ class ServerConfigUpdate(BaseModel):
 
 class TestConnectionRequest(BaseModel):
     url: str = Field(..., description="PowerDNS API URL")
-    api_key: str = Field(..., description="PowerDNS API Key")
+    api_key: str = Field(..., max_length=500, description="PowerDNS API Key")
 
 
 # ========================
 # Server Configuration CRUD
 # ========================
+REVEAL_UNREADABLE_DETAIL = (
+    "Der API-Key dieses Servers kann nicht entschlüsselt werden (Schlüssel fehlt oder passt nicht). "
+    "Bitte den API-Key neu eintragen."
+)
+REVEAL_EMPTY_DETAIL = "Für diesen Server ist kein API-Key gespeichert."
+
+
+def _api_key_status(cfg: ServerConfig) -> str:
+    """``set`` | ``missing`` | ``unreadable`` (F5 3.2); nie der Wert selbst."""
+    if is_unreadable(cfg.api_key):
+        return "unreadable"
+    return "set" if (cfg.api_key or "").strip() else "missing"
+
+
+def _sync_live_client(cfg: ServerConfig) -> None:
+    """Live-Client an die DB-Zeile angleichen.
+
+    Aktiv und Key lesbar -> Client (neu) anlegen. Aktiv, aber Key unlesbar oder leer -> Server bleibt
+    konfiguriert, aber ungeladen (``pdns_manager.unloaded``; Fan-out meldet "skipped (not loaded: …)",
+    /health lokal ``servers_not_loaded``) [D4]. Inaktiv -> Client und Markierung entfernen.
+    """
+    if not cfg.is_active:
+        pdns_manager.remove_server(cfg.name)
+        return
+    status = _api_key_status(cfg)
+    if status == "set":
+        pdns_manager.update_server(cfg.name, cfg.url, cfg.api_key)
+        return
+    reason = "api key unreadable" if status == "unreadable" else "api key empty"
+    pdns_manager.mark_unloaded(cfg.name, reason)
+    logger.error(
+        "PowerDNS-Server '%s' nicht geladen: API-Key %s – bitte unter Einstellungen -> Server neu eintragen.",
+        cfg.name, "nicht entschluesselbar" if status == "unreadable" else "leer",
+    )
+
+
 async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
     """DB-Zeile + optional Live-Status mit kurzen Timeouts.
 
     Sicherheit: Der vollständige API-Key wird hier NIE ausgeliefert, nur eine kurze Maske.
     Zum Bearbeiten kann der Admin den Key über `GET /settings/servers/{id}/api-key` einmalig anfordern.
+    ``api_key_status``: ``set`` | ``missing`` | ``unreadable`` (nicht entschluesselbar -> Maske "", has_api_key false).
     """
     is_online = False
     version = None
@@ -328,6 +359,7 @@ async def _enrich_server_config_row(cfg: ServerConfig) -> dict:
         "url": cfg.url,
         "api_key": (cfg.api_key[:4] + "…") if cfg.api_key else "",  # Maskiert (auch length wird nicht offengelegt)
         "has_api_key": bool(cfg.api_key),
+        "api_key_status": _api_key_status(cfg),
         "description": cfg.description,
         "is_active": cfg.is_active,
         "allow_writes": getattr(cfg, "allow_writes", True),
@@ -375,9 +407,9 @@ async def add_server_config(
     )
     db.add(cfg)
     await db.flush()
-    
-    # Live-Verbindung hinzufuegen
-    pdns_manager.add_server(cfg.name, cfg.url, cfg.api_key)
+
+    # Live-Verbindung hinzufuegen (ein Key aus Leerzeichen wird nicht geladen)
+    _sync_live_client(cfg)
     zone_index.invalidate()
     
     logger.info(f"Server config '{data.name}' added by admin '{admin.username}'")
@@ -417,12 +449,9 @@ async def update_server_config(
         cfg.allow_writes = data.allow_writes
 
     await db.flush()
-    
-    # Live-Verbindung aktualisieren
-    if cfg.is_active:
-        pdns_manager.update_server(cfg.name, cfg.url, cfg.api_key)
-    else:
-        pdns_manager.remove_server(cfg.name)
+
+    # Live-Verbindung aktualisieren (unlesbarer/leerer Key -> konfiguriert, aber nicht geladen)
+    _sync_live_client(cfg)
     zone_index.invalidate()
     
     logger.info(f"Server config '{cfg.name}' updated by admin '{admin.username}'")
@@ -467,12 +496,21 @@ async def reveal_server_api_key(
 ):
     """Gibt den vollständigen API-Key eines Servers genau einmal an einen eingeloggten Admin zurück.
 
-    Wird ins Audit-Log geschrieben, damit die Aufdeckung nachvollziehbar ist.
+    Wird ins Audit-Log geschrieben, damit die Aufdeckung nachvollziehbar ist. Nicht entschluesselbarer
+    Key -> 409 + Fehler-Audit; kein Key gespeichert -> 409 ohne Audit (F5 3.2).
     """
     result = await db.execute(select(ServerConfig).where(ServerConfig.id == server_id))
     cfg = result.scalar_one_or_none()
     if not cfg:
         raise HTTPException(status_code=404, detail="Server-Konfiguration nicht gefunden")
+
+    if is_unreadable(cfg.api_key):
+        # Fehler-Audit (eigene Session, ueberlebt den Rollback der Request-Session)
+        await write_audit(db, "REVEAL_API_KEY", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name,
+                          status="error", error_message="API-Key nicht entschluesselbar")
+        raise HTTPException(status_code=409, detail=REVEAL_UNREADABLE_DETAIL)
+    if not cfg.api_key:
+        raise HTTPException(status_code=409, detail=REVEAL_EMPTY_DETAIL)
 
     # Audit vor der Antwort committet (DbWrite): ohne Eintrag kein Klartext-Key
     await write_audit(db, "REVEAL_API_KEY", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name)
@@ -559,15 +597,59 @@ async def test_connection(
 # ========================
 # SMTP Settings
 # ========================
+SMTP_TARGETS = tuple(f for f in SMTP_TARGET_FIELDS if f in ("host", "port", "username", "encryption"))
+SMTP_PASSWORD_UNREADABLE_ERROR = (
+    "SMTP-Passwort kann nicht entschlüsselt werden – bitte unter Einstellungen → SMTP neu eintragen."
+)
+_SECRET_STATE = {"keep": "kept", "clear": "cleared", "set": "set"}
+
+
 class SmtpSettings(BaseModel):
     host: str = Field(default="", description="SMTP Server Hostname")
     port: int = Field(default=587, description="SMTP Port")
     username: str = Field(default="", description="SMTP Benutzername")
-    password: str = Field(default="", description="SMTP Passwort")
+    # None oder Maske = gespeichertes Passwort behalten, "" = loeschen, sonst neuer Wert (F8 3.6).
+    # Wer host/port/username/encryption aendert, muss das Passwort neu eingeben [S3].
+    password: Optional[str] = Field(default=None, max_length=500, description="SMTP Passwort (leer lassen = behalten)")
     from_email: str = Field(default="", description="Absender E-Mail")
     from_name: str = Field(default="PDNS Manager", description="Absender Name")
     encryption: str = Field(default="starttls", description="Verschlüsselung: none, starttls, ssl")
     enabled: bool = Field(default=False, description="SMTP aktiviert")
+
+
+class SmtpTestRequest(BaseModel):
+    """Optionale, noch nicht gespeicherte Formularwerte fuer den Verbindungstest.
+
+    Fehlende Felder = gespeicherter Wert. Das gespeicherte Passwort wird nur verwendet, wenn kein
+    Zielfeld (host/port/username/encryption) abweicht – sonst 400 ``secret_reentry_required`` [S3].
+    """
+
+    host: Optional[str] = Field(default=None, max_length=255)
+    port: Optional[int] = None
+    username: Optional[str] = Field(default=None, max_length=255)
+    password: Optional[str] = Field(default=None, max_length=500)
+    encryption: Optional[str] = Field(default=None, max_length=20)
+
+
+def _smtp_password_state(stored: object) -> bool:
+    """Ist ein Passwort gespeichert (auch ein nicht entschluesselbares)?"""
+    return bool(stored) or is_unreadable(stored)
+
+
+async def _audit_smtp_test(db, admin: User, settings: dict, result: dict, *, kind: str, unsaved: bool) -> None:
+    ok = bool(result.get("success"))
+    await write_audit(
+        db, "SMTP_TEST", "settings", "smtp", user_id=admin.id,
+        details={
+            "kind": kind,
+            "host": (settings.get("host") or "")[:255] or None,
+            "port": settings.get("port"),
+            "success": ok,
+            "unsaved_values": unsaved,
+        },
+        status="success" if ok else "error",
+        error_message=None if ok else "SMTP-Test fehlgeschlagen",
+    )
 
 
 @router.get("/smtp")
@@ -575,15 +657,13 @@ async def get_smtp_settings(
     db: DbRead,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Get current SMTP configuration."""
+    """Aktuelle SMTP-Konfiguration; das Passwort nur als Maske (``password_unreadable`` = nicht entschluesselbar)."""
     from app.services.email_service import get_smtp_settings as _get
     settings = await _get(db)
-    # Mask password for security
-    if settings.get("password"):
-        settings["password_set"] = True
-        settings["password"] = "••••••••"
-    else:
-        settings["password_set"] = False
+    password = settings.get("password")
+    settings["password_set"] = bool(password)
+    settings["password"] = SECRET_MASK if password else ""
+    settings["password_unreadable"] = is_unreadable(password)
     return settings
 
 
@@ -593,21 +673,36 @@ async def update_smtp_settings(
     data: SmtpSettings,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Update SMTP configuration."""
+    """SMTP-Konfiguration speichern.
+
+    ``password``: None/Maske = behalten (wird weder gelesen noch neu geschrieben), "" = loeschen, sonst neu.
+    Aendert sich ein Zielfeld, muss das Passwort neu eingegeben werden (``guard_secret_retarget``).
+    """
     from app.services.email_service import save_smtp_settings, get_smtp_settings as _get
-    
+
+    old = await _get(db)
     save_data = data.model_dump()
-    
-    # If password is masked (not changed), keep the old one
-    if save_data["password"] == "••••••••":
-        old = await _get(db)
-        save_data["password"] = old.get("password", "")
-    
+    guard_secret_retarget(
+        targets_before=pick_targets(old, SMTP_TARGETS),
+        targets_after=pick_targets(save_data, SMTP_TARGETS),
+        secret_in=data.password,
+        secret_stored=bool(old.get("password")),
+    )
+    action = secret_input_action(data.password)
+    if action == "keep":
+        save_data["password"] = None  # nicht anfassen (auch einen unlesbaren Chiffretext nicht)
+    elif action == "clear":
+        save_data["password"] = ""
+    state = _SECRET_STATE[action]
+    if action == "clear" and not _smtp_password_state(old.get("password")):
+        state = "kept"  # es gab nichts zu loeschen
+
     save_data["enabled"] = str(save_data["enabled"]).lower()
     await save_smtp_settings(db, save_data)
-    await write_audit(db, "SMTP_UPDATE", "settings", "smtp", user_id=admin.id,
-                      details={k: save_data.get(k) for k in ("host", "port", "encryption", "username", "from_email", "enabled")})
-    
+    details = {k: save_data.get(k) for k in ("host", "port", "encryption", "username", "from_email", "enabled")}
+    details["password_changed"] = state
+    await write_audit(db, "SMTP_UPDATE", "settings", "smtp", user_id=admin.id, details=details)
+
     return {"message": "SMTP-Einstellungen gespeichert"}
 
 
@@ -615,12 +710,34 @@ async def update_smtp_settings(
 async def test_smtp(
     db: DbWrite,
     admin: User = Depends(get_admin_session_user),
+    data: Optional[SmtpTestRequest] = Body(default=None),
 ):
-    """Test the current SMTP connection."""
+    """Verbindungstest. Ohne Body mit den gespeicherten Werten; mit Body mit den uebergebenen
+    (noch nicht gespeicherten) Werten. Audit ``SMTP_TEST`` (Host/Port/Ergebnis, nie das Passwort)."""
     from app.services.email_service import get_smtp_settings as _get, test_smtp_connection
-    
-    settings = await _get(db)
+
+    stored = await _get(db)
+    settings = dict(stored)
+    unsaved = False
+    if data is not None:
+        overrides = {k: v for k, v in data.model_dump(exclude={"password"}).items() if v is not None}
+        candidate = {**stored, **overrides}
+        guard_secret_retarget(
+            targets_before=pick_targets(stored, SMTP_TARGETS),
+            targets_after=pick_targets(candidate, SMTP_TARGETS),
+            secret_in=data.password,
+            secret_stored=bool(stored.get("password")),
+        )
+        action = secret_input_action(data.password)
+        settings = candidate
+        if action == "set":
+            settings["password"] = data.password
+        elif action == "clear":
+            settings["password"] = ""
+        unsaved = bool(overrides) or action != "keep"
+
     result = await test_smtp_connection(settings)
+    await _audit_smtp_test(db, admin, settings, result, kind="connection", unsaved=unsaved)
     return result
 
 
@@ -634,7 +751,7 @@ async def send_test_email(
     data: TestEmailRequest,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Send a test email to verify SMTP works end-to-end."""
+    """Send a test email to verify SMTP works end-to-end (gespeicherte Einstellungen)."""
     from app.services.email_service import get_smtp_settings as _get, send_email
     from app.services.email_templates import pick_language, test_email
     from app.core.config import settings as app_settings
@@ -648,18 +765,23 @@ async def send_test_email(
         await run_in_threadpool(send_email, smtp_settings, data.to_email, subject, body_html, body_text)
         msg_de = f"Test-E-Mail an {data.to_email} gesendet!"
         msg_en = f"Test email sent to {data.to_email}!"
-        return {"success": True, "message": msg_de if lang == "de" else msg_en}
+        result = {"success": True, "message": msg_de if lang == "de" else msg_en}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        result = {"success": False, "error": str(e)}
+    await _audit_smtp_test(db, admin, smtp_settings, result, kind="email", unsaved=False)
+    return result
 
 
 # ========================
 # Captcha Settings
 # ========================
+CAPTCHA_SECRET_UNREADABLE_ERROR = "Captcha-Secret kann nicht entschlüsselt werden – bitte neu eintragen."
+
+
 class CaptchaSettings(BaseModel):
     provider: str = Field(default="none", description="none | turnstile | hcaptcha | recaptcha")
     site_key: str = Field(default="", max_length=500, description="Public Site-Key (im Browser sichtbar)")
-    # secret_key=None heisst "nicht aendern" (Pattern wie bei den PowerDNS-API-Keys),
+    # secret_key=None oder Maske heisst "nicht aendern" (Pattern wie bei den PowerDNS-API-Keys),
     # secret_key="" loescht den Schluessel.
     secret_key: Optional[str] = Field(default=None, max_length=500, description="Privater Schluessel - leer lassen, um den bestehenden zu behalten")
 
@@ -678,14 +800,15 @@ async def get_captcha_settings(
     db: DbRead,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Aktuelle Captcha-Konfiguration. Das Secret wird maskiert."""
+    """Aktuelle Captcha-Konfiguration. Das Secret wird maskiert (``secret_key_unreadable`` = nicht entschluesselbar)."""
     from app.services.captcha import get_captcha_settings as _get
     s = await _get(db)
     return {
         "provider": s["provider"],
         "site_key": s["site_key"],
-        "secret_key": "••••••••" if s["secret_key"] else "",
+        "secret_key": SECRET_MASK if s["secret_key"] else "",
         "secret_key_set": bool(s["secret_key"]),
+        "secret_key_unreadable": bool(s["secret_unreadable"]),
     }
 
 
@@ -696,14 +819,17 @@ async def update_captcha_settings(
     admin: User = Depends(get_admin_session_user),
 ):
     """Captcha-Provider und Keys speichern. Wenn das Secret maskiert oder None ist,
-    wird das gespeicherte Secret beibehalten."""
-    from app.services.captcha import save_captcha_settings
+    wird das gespeicherte Secret beibehalten; "" loescht es. Audit ``CAPTCHA_UPDATE`` (ohne Werte)."""
+    from app.services.captcha import get_captcha_settings as _get, save_captcha_settings
 
-    new_secret: Optional[str] = data.secret_key
-    if new_secret is not None and new_secret.strip() in ("••••••••", ""):
-        # Maskierter oder leerer Wert: nicht ueberschreiben, falls Provider gewechselt wird
-        # ist der alte Schluessel evtl. ungueltig - das ist ein bewusster Trade-off.
-        new_secret = None if new_secret.strip() == "••••••••" else ""
+    # Provider-Wechsel bei behaltenem Secret: das alte Secret ist evtl. ungueltig – bewusster
+    # Trade-off; die Verify-Endpunkte der Provider sind fest (kein frei waehlbares Ziel).
+    action = secret_input_action(data.secret_key)
+    new_secret: Optional[str] = None if action == "keep" else ("" if action == "clear" else data.secret_key)
+    old = await _get(db)
+    state = _SECRET_STATE[action]
+    if action == "clear" and not (old["secret_key"] or old["secret_unreadable"]):
+        state = "kept"
 
     await save_captcha_settings(
         db,
@@ -711,6 +837,11 @@ async def update_captcha_settings(
         site_key=data.site_key,
         secret_key=new_secret,
     )
+    await write_audit(db, "CAPTCHA_UPDATE", "settings", "captcha", user_id=admin.id, details={
+        "provider": data.provider,
+        "site_key_set": bool((data.site_key or "").strip()),
+        "secret_key_changed": state,
+    })
     return {"message": "Captcha-Einstellungen gespeichert"}
 
 
@@ -735,6 +866,8 @@ async def test_captcha(
     s = await _get(db)
     if s["provider"] == PROVIDER_NONE:
         return {"success": False, "error": "Kein Captcha-Provider konfiguriert"}
+    if s["secret_unreadable"]:
+        return {"success": False, "error": CAPTCHA_SECRET_UNREADABLE_ERROR}
     if not s["secret_key"]:
         return {"success": False, "error": "Kein Secret-Key gespeichert"}
 
@@ -821,15 +954,13 @@ async def send_welcome_test_email(
     )
     from app.services.email_templates import render_welcome_email, pick_language
     from app.core.config import settings as app_settings
-    from app.models.models import SystemSetting
 
     smtp_settings = await _smtp(db)
     welcome_settings = await _welcome(db)
 
-    name_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_name"))
-    app_name = (name_row.scalar_one_or_none() or app_settings.APP_NAME or "PDNS Manager").strip()
-    base_row = await db.execute(select(SystemSetting.value).where(SystemSetting.key == "app_base_url"))
-    base_url = (base_row.scalar_one_or_none() or "").strip() or "http://localhost:5380"
+    rows = await get_settings(db, ("app_name", "app_base_url"))
+    app_name = (rows.get("app_name") or app_settings.APP_NAME or "PDNS Manager").strip()
+    base_url = (rows.get("app_base_url") or "").strip() or "http://localhost:5380"
 
     lang = pick_language(admin.preferred_language, app_settings.DEFAULT_LANGUAGE)
     subject, body_html, body_text = render_welcome_email(
@@ -906,7 +1037,7 @@ async def create_acme_token(
         raise HTTPException(status_code=400, detail=str(exc))
     await write_audit(db, "ACME_TOKEN_CREATE", "acme_token", row.name, user_id=admin.id,
                       details={"token_id": row.id, "allowed_zones": list(getattr(row, "allowed_zones", None) or data.allowed_zones or [])})
-    await db.commit()
+    # Commit macht DbWrite vor dem Senden der Antwort: ohne gespeicherten Token kein Klartext.
     return {
         "token": _serialize_acme_token(row),
         "plaintext_token": plaintext,  # NUR HIER, einmalig
@@ -927,6 +1058,5 @@ async def delete_acme_token(
         raise HTTPException(status_code=404, detail="Token nicht gefunden")
     await write_audit(db, "ACME_TOKEN_DELETE", "acme_token", str(token_id), user_id=admin.id,
                       details={"token_id": token_id})
-    await db.commit()
     return {"message": "Token geloescht"}
 

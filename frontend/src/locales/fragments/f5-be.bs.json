@@ -1,0 +1,13 @@
+{
+  "set": {
+    "audit.actions.SECRETS_KEY_GENERATED": "Ključ za tajne generisan",
+    "audit.actions.SECRETS_MIGRATE": "Tajne šifrovane",
+    "audit.actions.SECRETS_ROTATE": "Tajne ponovo šifrovane",
+    "audit.actions.SECRETS_RESET_UNREADABLE": "Nečitljive tajne resetovane",
+    "audit.actions.SECRETS_DECRYPT_ALL": "Tajne dešifrovane",
+    "audit.actions.CAPTCHA_UPDATE": "Captcha izmijenjen",
+    "audit.actions.SMTP_TEST": "SMTP provjera",
+    "audit.actions.DOWNGRADE_PREPARED": "Vraćanje na stariju verziju pripremljeno"
+  },
+  "remove": []
+}

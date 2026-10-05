@@ -8,15 +8,24 @@ Architektur:
   zurueckgegebene Token gegen die Provider-API, bevor sie die Aktion ausfuehren.
 
 Hinzufuegen weiterer Provider: ``PROVIDERS`` erweitern und ``_VERIFY_URLS`` ergaenzen.
+
+Geheimnis (F5): ``captcha_secret_key`` liegt verschluesselt in der DB (Zugriff nur ueber
+``services/system_settings.py``). Ist es nicht entschluesselbar, liefert ``get_captcha_settings``
+``secret_unreadable=True`` und ein leeres ``secret_key``. Die Login-Pruefung ist dann bewusst
+**fail-open** (sonst waeren alle Nutzer ausgesperrt; das Login-Rate-Limit bleibt aktiv) und meldet
+das gedrosselt als ERROR; Admins sehen es im Banner/Status.
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional, Tuple
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.secrets import is_unreadable
+from app.services.system_settings import get_settings, set_settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,28 +55,30 @@ ALL_KEYS = (KEY_PROVIDER, KEY_SITE_KEY, KEY_SECRET_KEY)
 # Timeout fuer den HTTPS-Call zum Provider (typisch <500ms; 5s sind grosszuegig)
 _VERIFY_TIMEOUT = 5.0
 
+# Drosselung der ERROR-Meldung "Secret nicht lesbar" (sonst eine Zeile je Login-Versuch)
+_UNREADABLE_LOG_INTERVAL = 600.0
+_unreadable_log_state: dict[str, float] = {}
+
 
 # ----------------------------------------------------------------------------
 # Settings I/O
 # ----------------------------------------------------------------------------
 async def get_captcha_settings(db: AsyncSession) -> dict:
     """Liest Captcha-Settings. ``secret_key`` wird mit zurueckgegeben - nur
-    intern verwenden, NIE im API-Response an Nicht-Admins durchreichen."""
-    from app.models.models import SystemSetting
+    intern verwenden, NIE im API-Response an Nicht-Admins durchreichen.
 
-    result = await db.execute(
-        select(SystemSetting.key, SystemSetting.value).where(
-            SystemSetting.key.in_(ALL_KEYS)
-        )
-    )
-    rows = {r[0]: r[1] for r in result.all()}
+    ``secret_unreadable``: das gespeicherte Secret ist nicht entschluesselbar (``secret_key`` ist dann "").
+    """
+    rows = await get_settings(db, ALL_KEYS)
     provider = (rows.get(KEY_PROVIDER) or PROVIDER_NONE).strip().lower()
     if provider not in PROVIDERS:
         provider = PROVIDER_NONE
+    raw_secret = rows.get(KEY_SECRET_KEY)
     return {
         "provider": provider,
         "site_key": (rows.get(KEY_SITE_KEY) or "").strip(),
-        "secret_key": (rows.get(KEY_SECRET_KEY) or "").strip(),
+        "secret_key": (raw_secret or "").strip(),
+        "secret_unreadable": is_unreadable(raw_secret),
     }
 
 
@@ -78,13 +89,12 @@ async def save_captcha_settings(
     site_key: Optional[str],
     secret_key: Optional[str],
 ) -> None:
-    """Speichert die Captcha-Settings in der DB.
+    """Speichert die Captcha-Settings in der DB (nur flush, Commit macht die Request-Dependency).
 
     ``secret_key=None`` bedeutet *unveraendert lassen* (Pattern wie bei den
-    PowerDNS-API-Keys). ``secret_key=""`` bedeutet *loeschen*.
+    PowerDNS-API-Keys; auch ein nicht entschluesselbares Secret bleibt dann unangetastet).
+    ``secret_key=""`` bedeutet *loeschen*. Das Secret wird verschluesselt gespeichert.
     """
-    from app.models.models import SystemSetting
-
     provider = (provider or PROVIDER_NONE).strip().lower()
     if provider not in PROVIDERS:
         raise ValueError(f"Unbekannter Captcha-Provider: {provider!r}")
@@ -96,15 +106,7 @@ async def save_captcha_settings(
     if secret_key is not None:
         pairs[KEY_SECRET_KEY] = secret_key.strip()
 
-    for key, value in pairs.items():
-        result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.value = value
-        else:
-            db.add(SystemSetting(key=key, value=value))
-
-    await db.commit()
+    await set_settings(db, pairs)
 
 
 async def is_captcha_required(db: AsyncSession) -> bool:
@@ -114,6 +116,22 @@ async def is_captcha_required(db: AsyncSession) -> bool:
         s["provider"] != PROVIDER_NONE
         and bool(s["site_key"])
         and bool(s["secret_key"])
+    )
+
+
+def _log_unreadable_secret() -> None:
+    """ERROR-Meldung fuer ein unlesbares Captcha-Secret, hoechstens alle 10 Minuten."""
+    now = time.monotonic()
+    last = _unreadable_log_state.get("last")
+    if last is not None and now - last < _UNREADABLE_LOG_INTERVAL:
+        _unreadable_log_state["suppressed"] = _unreadable_log_state.get("suppressed", 0) + 1
+        return
+    suppressed = int(_unreadable_log_state.pop("suppressed", 0))
+    _unreadable_log_state["last"] = now
+    logger.error(
+        "Captcha-Secret kann nicht entschluesselt werden – Captcha-Pruefung beim Login ist bis zur "
+        "Neueingabe (Einstellungen -> Sicherheit) ausgesetzt.%s",
+        f" ({suppressed} gleiche Meldungen unterdrueckt)" if suppressed else "",
     )
 
 
@@ -184,7 +202,13 @@ async def verify_or_raise(
     from fastapi import HTTPException
 
     s = await get_captcha_settings(db)
-    if s["provider"] == PROVIDER_NONE or not s["secret_key"]:
+    if s["provider"] == PROVIDER_NONE:
+        return  # Captcha nicht konfiguriert, alles erlaubt
+    if s["secret_unreadable"]:
+        # Bewusst fail-open (F5 §12 Nr. 8): ein unlesbares Secret darf nicht alle Nutzer aussperren.
+        _log_unreadable_secret()
+        return
+    if not s["secret_key"]:
         return  # Captcha nicht konfiguriert, alles erlaubt
 
     ok, error = await verify_captcha_token(

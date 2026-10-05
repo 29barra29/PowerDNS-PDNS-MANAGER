@@ -13,8 +13,14 @@ backend/app/static
 **/__pycache__
 **/*.pyc
 **/.pytest_cache
-backup_*.sql
+backup_*
 *.env.backup-*
+# Schluessel fuer gespeicherte Geheimnisse nie ins Image (F5)
+**/*.key
+**/*.secret_key
+**/.secret_key*
+**/.pdnsmgr-keys
+backend/data
 local-scripts
 docs
 *.md

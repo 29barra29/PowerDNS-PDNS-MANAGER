@@ -2,14 +2,22 @@
 # PDNS Manager - Update: Git-Stand aktualisieren, Backend-Image bauen, Container neu starten.
 #
 # Optionale Flags:
-#   --rebuild       Erzwingt --no-cache Build (sonst nur bei Versionswechsel).
-#   --no-backup     Ueberspringt die Frage nach einem DB-Backup.
-#   --skip-fetch    Kein git fetch/pull (z. B. fuer rein lokales Rebuild).
+#   --rebuild          Erzwingt --no-cache Build (sonst nur bei Versionswechsel).
+#   --no-backup        Ueberspringt die Frage nach einem DB-Backup.
+#   --skip-fetch       Kein git fetch/pull (z. B. fuer rein lokales Rebuild).
+#   --no-key-backup    Keine Kopie des Schluessels fuer gespeicherte Geheimnisse anlegen.
+#   --backup-key-only  Nur den Schluessel des laufenden Backends sichern (kein Update).
+#
+# Schluessel-Sicherung (ab 3.0): Liegt der Schluessel nicht in der .env (SECRET_ENCRYPTION_KEY), sondern
+# im Daten-Volume (/app/data/.secret_key), legt das Skript nach dem Start EINE Kopie je Schluessel unter
+# ${PDNSMGR_KEY_BACKUP_DIR:-$HOME/.pdnsmgr-keys}/<stack>-<fingerprint>.key ab (Ordner 0700, Datei 0600) –
+# nie neben den DB-Dump und nie im Stack-Ordner. Dieses Verzeichnis getrennt sichern.
 #
 # Beispiele:
 #   ./update.sh
 #   ./update.sh --rebuild
 #   ./update.sh --no-backup --rebuild
+#   ./update.sh --backup-key-only
 set -e
 
 # ----------------------------------------------------------------------------
@@ -18,17 +26,156 @@ set -e
 FORCE_REBUILD=false
 SKIP_BACKUP=false
 SKIP_FETCH=false
+SKIP_KEY_BACKUP=false
+KEY_BACKUP_ONLY=false
 for arg in "$@"; do
     case "$arg" in
         --rebuild|--no-cache) FORCE_REBUILD=true ;;
         --no-backup)          SKIP_BACKUP=true ;;
         --skip-fetch)         SKIP_FETCH=true ;;
+        --no-key-backup)      SKIP_KEY_BACKUP=true ;;
+        --backup-key-only)    KEY_BACKUP_ONLY=true ;;
         --help|-h)
-            sed -n '2,15p' "$0"
+            sed -n '2,21p' "$0"
             exit 0
             ;;
     esac
 done
+
+KEY_BACKUP_DIR="${PDNSMGR_KEY_BACKUP_DIR:-$HOME/.pdnsmgr-keys}"
+
+# ----------------------------------------------------------------------------
+# Docker-Befehle (mit sudo-Fallback wie install.sh)
+# ----------------------------------------------------------------------------
+detect_docker() {
+    if ! docker ps &> /dev/null && sudo docker ps &> /dev/null 2>&1; then
+        COMPOSE_CMD="sudo docker compose"
+        DOCKER_CMD="sudo docker"
+    else
+        COMPOSE_CMD="docker compose"
+        DOCKER_CMD="docker"
+    fi
+}
+
+# ----------------------------------------------------------------------------
+# Schluessel fuer gespeicherte Geheimnisse sichern (ab 3.0) [S7]
+# ----------------------------------------------------------------------------
+# Name des Stacks fuer den Dateinamen der Kopie (Compose-Projektname oder Ordnername).
+stack_name() {
+    local n="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
+    n=$(printf '%s' "$n" | tr -c 'A-Za-z0-9._-' '_')
+    printf '%s' "${n:-pdns-manager}"
+}
+
+# Liegt $1 im Stack-Ordner (aktuelles Verzeichnis)? Dann waere die Kopie Teil desselben Backups.
+path_inside_stack() {
+    local target here
+    command -v realpath >/dev/null 2>&1 || return 1
+    target=$(realpath -m "$1" 2>/dev/null) || return 1
+    here=$(realpath -m "$PWD" 2>/dev/null) || return 1
+    case "$target/" in
+        "$here"/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Wert aus der Ausgabe von "python -m app.cli.secrets key-info" (Zeilen name=wert).
+key_info_value() {
+    printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1
+}
+
+# $1 = ask (interaktiv nachfragen, Default ja) | yes (ohne Rueckfrage).
+# Kopiert den Schluessel des laufenden Backends nach $KEY_BACKUP_DIR/<stack>-<fingerprint>.key,
+# nur wenn diese Datei noch fehlt. Gibt nie den Schluessel aus. Rueckgabe 1 bei Fehlern.
+backup_secret_key() {
+    local mode="$1" info src fp kfile explicit target tmp len reply
+    KEY_BACKUP_FILE=""
+    if [ -f .env ] && grep -qE '^SECRET_ENCRYPTION_KEY=.+' .env; then
+        echo "🔑 Der Schlüssel für gespeicherte Geheimnisse steht in der .env (SECRET_ENCRYPTION_KEY)."
+        echo "   Keine Kopie nötig – die .env getrennt vom DB-Backup sichern."
+        return 0
+    fi
+    if ! info=$($COMPOSE_CMD exec -T backend python -m app.cli.secrets key-info 2>/dev/null); then
+        echo "⚠️  Schlüssel-Info nicht abrufbar (läuft das Backend in Version 3.x?)."
+        echo "   Schlüssel bitte von Hand sichern, siehe INSTALL.md → Geheimnisse & Schlüssel."
+        return 1
+    fi
+    src=$(key_info_value "$info" source)
+    fp=$(key_info_value "$info" fingerprint)
+    kfile=$(key_info_value "$info" key_file)
+    explicit=$(key_info_value "$info" key_file_explicit)
+    case "$src" in
+        env)
+            echo "🔑 Der Schlüssel kommt aus SECRET_ENCRYPTION_KEY (Fingerprint $fp) – dort getrennt vom DB-Backup sichern."
+            return 0
+            ;;
+        file) ;;
+        *)
+            echo "⚠️  Kein Schlüssel für gespeicherte Geheimnisse aktiv (Quelle: ${src:-?})."
+            echo "   Bitte Einstellungen → Sicherheit und das Backend-Log prüfen."
+            return 1
+            ;;
+    esac
+    if [ "$explicit" = "1" ]; then
+        echo "🔑 Der Schlüssel kommt aus SECRET_ENCRYPTION_KEY_FILE=$kfile (Fingerprint $fp) – diese Datei selbst sichern."
+        return 0
+    fi
+    if ! printf '%s' "$fp" | grep -qE '^[0-9a-f]{12}$'; then
+        echo "⚠️  Unerwartete Schlüssel-Info vom Backend – keine Kopie angelegt."
+        return 1
+    fi
+    if path_inside_stack "$KEY_BACKUP_DIR"; then
+        echo "⚠️  $KEY_BACKUP_DIR liegt im Stack-Ordner – dort wird der Schlüssel NICHT abgelegt"
+        echo "   (er würde mit dem DB-Backup zusammen gesichert). PDNSMGR_KEY_BACKUP_DIR auf einen Ordner"
+        echo "   außerhalb setzen und ./update.sh --backup-key-only ausführen."
+        return 1
+    fi
+    target="$KEY_BACKUP_DIR/$(stack_name)-$fp.key"
+    if [ -f "$target" ]; then
+        echo "🔑 Schlüssel bereits gesichert: $target (Fingerprint $fp)"
+        KEY_BACKUP_FILE="$target"
+        return 0
+    fi
+    if [ "$mode" = "ask" ] && [ -t 0 ]; then
+        read -p "🔑 Schlüssel für gespeicherte Geheimnisse jetzt nach $KEY_BACKUP_DIR sichern? (j/n) [j]: " -n 1 -r reply || true
+        echo
+        if [[ $reply =~ ^[Nn]$ ]]; then
+            echo "   Übersprungen. Später nachholen: ./update.sh --backup-key-only (Fingerprint $fp)"
+            return 0
+        fi
+    fi
+    ( umask 077; mkdir -p "$KEY_BACKUP_DIR" ) && chmod 700 "$KEY_BACKUP_DIR" || {
+        echo "⚠️  $KEY_BACKUP_DIR kann nicht angelegt werden – keine Kopie."
+        return 1
+    }
+    tmp="$target.tmp.$$"
+    if ( umask 077; $COMPOSE_CMD exec -T backend cat "$kfile" > "$tmp" ) 2>/dev/null; then
+        len=$(tr -d '\r\n' < "$tmp" | wc -c | tr -d ' ')
+        if [ "$len" != "44" ]; then
+            rm -f "$tmp"
+            echo "⚠️  Die Schlüsseldatei im Backend sieht ungültig aus – keine Kopie angelegt."
+            return 1
+        fi
+        chmod 600 "$tmp" && mv -f "$tmp" "$target"
+        KEY_BACKUP_FILE="$target"
+        echo "🔑 Schlüssel gesichert: $target (Fingerprint $fp, nur für dich lesbar)."
+        echo "   Diesen Ordner NICHT in das Backup-Set des Stack-Ordners aufnehmen, sondern getrennt sichern"
+        echo "   (z. B. Passwortmanager oder anderes Medium). Ohne Schlüssel sind die Geheimnisse aus einem"
+        echo "   DB-Backup nicht lesbar. Fingerprint vergleichen: Einstellungen → Sicherheit."
+        return 0
+    fi
+    rm -f "$tmp"
+    echo "⚠️  Schlüssel konnte nicht aus dem Backend kopiert werden – bitte von Hand sichern (INSTALL.md)."
+    return 1
+}
+
+if $KEY_BACKUP_ONLY; then
+    detect_docker
+    if backup_secret_key yes; then
+        exit 0
+    fi
+    exit 1
+fi
 
 echo "🔄 Suche nach Updates..."
 
@@ -80,7 +227,7 @@ if ! $SKIP_FETCH; then
             elif git show-ref --verify --quiet refs/remotes/origin/main; then
                 git checkout -B main origin/main
             else
-                echo "❌ Weder v*-Tags noch origin/main gefunden. Prüfe Remote „origin“."
+                echo "❌ Weder v*-Tags noch origin/main gefunden. Prüfe das Remote 'origin'."
                 exit 1
             fi
             git pull origin main
@@ -123,6 +270,11 @@ fi
 extract_major() { echo "${1#v}" | cut -d. -f1; }
 MAJOR_BEFORE=$(extract_major "$VERSION_BEFORE")
 MAJOR_AFTER=$(extract_major "$VERSION_AFTER")
+# Sprung von < 3 auf >= 3 (Verschluesselung der Geheimnisse, Downgrade-Grenze)
+is_major_30_jump() {
+    [[ "$MAJOR_BEFORE" =~ ^[0-9]+$ ]] && [[ "$MAJOR_AFTER" =~ ^[0-9]+$ ]] \
+        && [ "$MAJOR_BEFORE" -lt 3 ] && [ "$MAJOR_AFTER" -ge 3 ]
+}
 if [ -n "$MAJOR_BEFORE" ] && [ -n "$MAJOR_AFTER" ] \
    && [ "$MAJOR_BEFORE" != "?" ] && [ "$MAJOR_AFTER" != "?" ] \
    && [ "$MAJOR_BEFORE" != "$MAJOR_AFTER" ]; then
@@ -131,6 +283,23 @@ if [ -n "$MAJOR_BEFORE" ] && [ -n "$MAJOR_AFTER" ] \
     echo "  ⚠️  MAJOR-VERSION-SPRUNG: $VERSION_BEFORE → $VERSION_AFTER"
     echo "  Bitte CHANGELOG / README lesen, BEVOR du fortfährst."
     echo "  https://github.com/29barra29/PowerDNS-PDNS-MANAGER/releases"
+    if is_major_30_jump; then
+        echo "  ──────────────────────────────────────────────────"
+        echo "  3.0 verschlüsselt beim ersten Start alle gespeicherten Geheimnisse"
+        echo "  (PowerDNS-API-Keys, SMTP-Passwort, Captcha-Secret, Webhook-Secrets und"
+        echo "  -URLs, 2FA-Geheimnisse) in der Datenbank."
+        echo "  • Schlüssel: SECRET_ENCRYPTION_KEY in der .env oder automatisch erzeugt in"
+        echo "    /app/data/.secret_key (Volume backend_data). Im zweiten Fall legt dieses Skript"
+        echo "    nach dem Start eine Kopie in $KEY_BACKUP_DIR ab (nicht neben dem Dump)."
+        echo "    Ohne Schlüssel sind die Geheimnisse aus einem DB-Backup NICHT lesbar."
+        echo "  • Downgrade auf 2.4.x danach nur mit dem DB-Dump von vorher oder mit"
+        echo "    python -m app.cli.secrets prepare-downgrade --yes (im 3.0-Container)."
+        echo "  • Der Dump von vor dem Update enthält die Geheimnisse noch im Klartext."
+        echo "  • Einstellungen, Token- und Webhook-Verwaltung nur noch per Browser-Anmeldung"
+        echo "    (nicht mehr per Panel-Token); /health zeigt Details nur noch lokal."
+        echo "  • Neue Variablen (optional): SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS,"
+        echo "    SECRET_ENCRYPTION_KEY_FILE, BACKGROUND_WORKERS_ENABLED, PDNSMGR_KEY_BACKUP_DIR."
+    fi
     echo "════════════════════════════════════════════════════"
     read -p "Trotzdem fortfahren? (j/y/n): " -n 1 -r
     echo
@@ -143,17 +312,12 @@ fi
 # ----------------------------------------------------------------------------
 # Docker-Befehle (mit sudo-Fallback wie install.sh)
 # ----------------------------------------------------------------------------
-if ! docker ps &> /dev/null && sudo docker ps &> /dev/null 2>&1; then
-    COMPOSE_CMD="sudo docker compose"
-    DOCKER_CMD="sudo docker"
-else
-    COMPOSE_CMD="docker compose"
-    DOCKER_CMD="docker"
-fi
+detect_docker
 
 # ----------------------------------------------------------------------------
 # Optional: DB-Dump anlegen, bevor irgendetwas neu gebaut wird
 # ----------------------------------------------------------------------------
+BACKUP_DONE=""
 if ! $SKIP_BACKUP && [ -f .env ]; then
     echo ""
     read -p "💾 Vor dem Update einen DB-Dump anlegen? (j/n) [j]: " -n 1 -r DB_BACKUP_REPLY
@@ -176,10 +340,13 @@ if ! $SKIP_BACKUP && [ -f .env ]; then
                 echo "→ Schreibe $BACKUP_FILE …"
                 # Passwort per Umgebungsvariable statt als -p-Argument, damit es nicht in der
                 # Prozessliste (ps / /proc) des Containers auftaucht.
-                if $DOCKER_CMD exec -e MYSQL_PWD="$DB_ROOT_PW" "$DB_CID" mysqldump --single-transaction --quick \
-                        -u root "$DB_NAME_VAL" > "$BACKUP_FILE" 2>/dev/null; then
+                # umask 077: der Dump enthaelt Passwort-Hashes und (vor 3.0) Geheimnisse im Klartext.
+                if ( umask 077; $DOCKER_CMD exec -e MYSQL_PWD="$DB_ROOT_PW" "$DB_CID" mysqldump --single-transaction --quick \
+                        -u root "$DB_NAME_VAL" > "$BACKUP_FILE" 2>/dev/null ); then
+                    chmod 600 "$BACKUP_FILE" 2>/dev/null || true
                     SIZE=$(du -h "$BACKUP_FILE" 2>/dev/null | cut -f1 || echo "?")
-                    echo "✅ Backup ok ($SIZE) – $BACKUP_FILE"
+                    echo "✅ Backup ok ($SIZE, nur für dich lesbar) – $BACKUP_FILE"
+                    BACKUP_DONE="$BACKUP_FILE"
                 else
                     echo "⚠️  Backup fehlgeschlagen (DB-Login? Container healthy?). Datei wird entfernt."
                     rm -f "$BACKUP_FILE"
@@ -202,6 +369,13 @@ else
 fi
 
 $COMPOSE_CMD build "${BUILD_FLAGS[@]}" backend
+
+# Daten- und Uploads-Volume dem App-User (UID 1001) geben, BEVOR das Backend startet: Installationen
+# vor v2.3.3 haben sie als root angelegt. Ab 3.0 erzeugt das Backend beim ersten Start seinen
+# Schluessel in /app/data – ohne Schreibrecht liefe es im unverschluesselten Notbetrieb.
+$COMPOSE_CMD run --rm --no-deps -T --name "pdnsmgr-chown-$$" -u root backend \
+    chown -R 1001:1001 /app/app/static_new/uploads /app/data >/dev/null 2>&1 || true
+
 $COMPOSE_CMD up -d
 
 # Uploads-Volume dem App-User (UID 1001) geben: Installationen vor v2.3.3 haben es als
@@ -209,7 +383,81 @@ $COMPOSE_CMD up -d
 # mit "Permission denied" scheitern.
 $COMPOSE_CMD exec -T -u root backend chown -R 1001:1001 /app/app/static_new/uploads /app/data 2>/dev/null || true
 
+# ----------------------------------------------------------------------------
+# Warten, bis das Backend gesund ist (lokal im Container, max. 120 s). Ein Startabbruch
+# (z. B. "Start abgebrochen – Schluessel ...") wird hier sichtbar statt erst im Browser.
+# ----------------------------------------------------------------------------
+echo "⏳ Warte auf das Backend (max. 120 s) …"
+HEALTH_OK=false
+for _i in $(seq 1 60); do
+    if $COMPOSE_CMD exec -T backend python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3).read()" >/dev/null 2>&1; then
+        HEALTH_OK=true
+        break
+    fi
+    sleep 2
+done
+if ! $HEALTH_OK; then
+    echo ""
+    echo "❌ Das Backend ist nach 120 s nicht bereit. Letzte Log-Zeilen:"
+    $COMPOSE_CMD logs --tail=60 backend 2>&1 || true
+    echo ""
+    echo "   Meldet das Log 'Start abgebrochen – Schluessel ...', siehe INSTALL.md → Geheimnisse & Schlüssel"
+    echo "   bzw. https://pdns-manager.gemtecgames.com/docs/features/verschluesselung/"
+    echo "   Rollback: Dump einspielen und auf die vorherige Version wechseln (INSTALL.md → Updates)."
+    exit 1
+fi
+
+# Zusatzinfos des lokalen /health (nur ueber Loopback sichtbar): Verschluesselung, Migrationsfehler,
+# nicht geladene Server. Aeltere Versionen liefern die Felder nicht – dann bleibt es still.
+HEALTH_INFO=$($COMPOSE_CMD exec -T backend python -c "import json,urllib.request as u
+d=json.load(u.urlopen('http://127.0.0.1:8000/health',timeout=5))
+s=d.get('secrets') or {}
+print('mode='+str(s.get('mode') or ''))
+print('unreadable='+str(s.get('unreadable_values') or 0))
+print('migration_errors='+str(len(d.get('migration_errors') or [])))
+print('not_loaded='+','.join(sorted((d.get('servers_not_loaded') or {}).keys())))" 2>/dev/null || true)
+HEALTH_MODE=$(printf '%s\n' "$HEALTH_INFO" | sed -n 's/^mode=//p')
+HEALTH_UNREADABLE=$(printf '%s\n' "$HEALTH_INFO" | sed -n 's/^unreadable=//p')
+HEALTH_MIGERR=$(printf '%s\n' "$HEALTH_INFO" | sed -n 's/^migration_errors=//p')
+HEALTH_NOTLOADED=$(printf '%s\n' "$HEALTH_INFO" | sed -n 's/^not_loaded=//p')
+if [ "$HEALTH_MODE" = "plaintext_fallback" ]; then
+    echo "⚠️  Geheimnisse werden NICHT verschlüsselt (Schlüsseldatei nicht beschreibbar). Beheben:"
+    echo "   $COMPOSE_CMD exec -u root backend chown -R 1001:1001 /app/data && $COMPOSE_CMD restart backend"
+fi
+if [ -n "$HEALTH_UNREADABLE" ] && [ "$HEALTH_UNREADABLE" != "0" ]; then
+    echo "⚠️  $HEALTH_UNREADABLE gespeicherte Geheimnisse sind nicht lesbar – Einstellungen → Sicherheit zeigt, welche."
+fi
+if [ -n "$HEALTH_MIGERR" ] && [ "$HEALTH_MIGERR" != "0" ]; then
+    echo "⚠️  $HEALTH_MIGERR Datenbank-Migrationsschritte sind fehlgeschlagen – Details: $COMPOSE_CMD logs backend"
+fi
+if [ -n "$HEALTH_NOTLOADED" ]; then
+    echo "⚠️  Nicht geladene PowerDNS-Server (API-Key fehlt/unlesbar): $HEALTH_NOTLOADED – unter Einstellungen → Server neu eintragen."
+fi
+
 echo "✅ App-Update erfolgreich abgeschlossen!"
+
+# ----------------------------------------------------------------------------
+# Schluessel fuer gespeicherte Geheimnisse sichern (nur bei neuem Fingerprint) [S7]
+# ----------------------------------------------------------------------------
+KEY_BACKUP_FILE=""
+if ! $SKIP_KEY_BACKUP && [ "$HEALTH_MODE" = "encrypted" ]; then
+    echo ""
+    backup_secret_key ask || true
+fi
+
+if is_major_30_jump; then
+    echo ""
+    echo "📋 Nach dem Update auf $VERSION_AFTER bitte prüfen:"
+    echo "   • Einstellungen → Sicherheit: Verschlüsselung aktiv, Schlüssel gesichert (Fingerprint vergleichen)."
+    if [ -n "$KEY_BACKUP_FILE" ]; then
+        echo "   • Schlüssel-Kopie: $KEY_BACKUP_FILE – getrennt vom Stack-Ordner und vom DB-Dump sichern."
+    fi
+    if [ -n "$BACKUP_DONE" ]; then
+        echo "   • Der Dump $BACKUP_DONE enthält die Geheimnisse noch im KLARTEXT –"
+        echo "     sicher verwahren oder löschen, sobald 3.0 läuft."
+    fi
+    echo "   • Panel-Tokens prüfen und bei Bedarf einschränken; Webhook-Empfänger erhalten jetzt wirklich Zustellungen."
+fi
 
 # ----------------------------------------------------------------------------
 # Status der Compose-Services anzeigen (generisch, ohne Container-Namen-Filter)

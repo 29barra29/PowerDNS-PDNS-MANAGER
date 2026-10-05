@@ -1,0 +1,13 @@
+{
+  "set": {
+    "audit.actions.SECRETS_KEY_GENERATED": "Titkosítási kulcs létrehozva",
+    "audit.actions.SECRETS_MIGRATE": "Titkos adatok titkosítva",
+    "audit.actions.SECRETS_ROTATE": "Titkos adatok újratitkosítva",
+    "audit.actions.SECRETS_RESET_UNREADABLE": "Olvashatatlan titkos adatok visszaállítva",
+    "audit.actions.SECRETS_DECRYPT_ALL": "Titkos adatok visszafejtve",
+    "audit.actions.CAPTCHA_UPDATE": "Captcha módosítva",
+    "audit.actions.SMTP_TEST": "SMTP-teszt",
+    "audit.actions.DOWNGRADE_PREPARED": "Visszaállítás régebbi verzióra előkészítve"
+  },
+  "remove": []
+}

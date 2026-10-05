@@ -23,6 +23,22 @@ generate_secret() {
     openssl rand -hex 64
 }
 
+generate_fernet_key() {
+    # Fernet-Schluessel (32 Byte, urlsafe-Base64, 44 Zeichen) fuer SECRET_ENCRYPTION_KEY.
+    openssl rand -base64 32 | tr '+/' '-_'
+}
+
+# Wert einer Variable aus einer bestehenden .env (erste Fundstelle, ohne sie ins Shell-Env zu laden).
+read_env_value() {
+    grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# Schluessel fuer gespeicherte Geheimnisse aus einer vorhandenen .env uebernehmen – ein neuer Wert
+# wuerde alle bereits verschluesselten Geheimnisse unlesbar machen.
+OLD_SEK=""
+OLD_SEK_PREV=""
+OLD_SEK_FILE=""
+
 # Prüfe ob .env bereits existiert
 if [ -f .env ]; then
     echo "⚠️  Eine .env Datei existiert bereits!"
@@ -34,8 +50,12 @@ if [ -f .env ]; then
     fi
     # Zeitgestempeltes Backup, damit ältere Backups nicht überschrieben werden.
     BACKUP_FILE=".env.backup.$(date +%Y%m%d-%H%M%S)"
-    cp .env "$BACKUP_FILE"
+    ( umask 077; cp .env "$BACKUP_FILE" )
+    chmod 600 "$BACKUP_FILE" 2>/dev/null || true
     echo "✅ Backup erstellt: $BACKUP_FILE"
+    OLD_SEK=$(read_env_value SECRET_ENCRYPTION_KEY)
+    OLD_SEK_PREV=$(read_env_value SECRET_ENCRYPTION_KEY_PREVIOUS)
+    OLD_SEK_FILE=$(read_env_value SECRET_ENCRYPTION_KEY_FILE)
 fi
 
 # Auch wenn das Skript zwischendrin abbricht (Ctrl-C, Fehler), kein halbfertiges
@@ -135,6 +155,19 @@ DB_PASSWORD=$(generate_password)
 echo "✅ JWT Secret generiert (${#JWT_SECRET} Zeichen)"
 echo "✅ Datenbank-Passwörter generiert"
 
+# Schluessel fuer verschluesselte Geheimnisse (ab 3.0): API-Keys, SMTP, Webhooks, 2FA.
+if [ -n "$OLD_SEK" ]; then
+    SECRET_KEY="$OLD_SEK"
+    echo "✅ Schlüssel für gespeicherte Geheimnisse aus der bisherigen .env übernommen"
+elif [ -n "$OLD_SEK_FILE" ]; then
+    # Schluessel kommt aus einer Datei (z. B. Docker-Secret) – keinen zweiten erzeugen.
+    SECRET_KEY=""
+    echo "✅ Schlüssel für gespeicherte Geheimnisse bleibt in SECRET_ENCRYPTION_KEY_FILE ($OLD_SEK_FILE)"
+else
+    SECRET_KEY=$(generate_fernet_key)
+    echo "✅ Schlüssel für gespeicherte Geheimnisse erzeugt"
+fi
+
 echo ""
 echo "Wirst du das Panel hinter einem Reverse-Proxy mit HTTPS betreiben?"
 echo "(Caddy, nginx, Traefik, Cloudflare Tunnel, …)"
@@ -196,6 +229,13 @@ INSTALL_PATH=${INSTALL_PATH:-$(pwd)}
 # Sicherheit
 JWT_SECRET_KEY=${JWT_SECRET}
 
+# Verschluesselung gespeicherter Geheimnisse (API-Keys, SMTP, Webhooks, 2FA).
+# NIE verlieren oder einfach aendern – ohne ihn sind Geheimnisse aus DB-Backups unlesbar.
+# Wechsel: neuen Wert hier, alten als SECRET_ENCRYPTION_KEY_PREVIOUS eintragen (siehe INSTALL.md).
+SECRET_ENCRYPTION_KEY=${SECRET_KEY}
+${OLD_SEK_PREV:+SECRET_ENCRYPTION_KEY_PREVIOUS=${OLD_SEK_PREV}}
+${OLD_SEK_FILE:+SECRET_ENCRYPTION_KEY_FILE=${OLD_SEK_FILE}}
+
 # First-Run Settings
 ENABLE_REGISTRATION=${ENABLE_REGISTRATION}
 ${ADMIN_PASSWORD:+INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}}
@@ -246,6 +286,7 @@ chmod 600 .env.tmp 2>/dev/null || true
 mv .env.tmp .env
 
 echo "✅ .env Datei erstellt (chmod 600)!"
+echo "🔑 Die .env enthält den Schlüssel für verschlüsselte Geheimnisse – sicher (getrennt vom DB-Backup) aufbewahren."
 
 echo ""
 echo "================================================"
@@ -271,7 +312,7 @@ fi
 if [ "$1" != "--from-install" ]; then
     echo ""
     echo "🚀 Nächste Schritte:"
-    echo "   1. Falls nicht gestartet: cd $(basename $(pwd)) && docker compose up -d"
+    echo "   1. Falls nicht gestartet: cd \"$(basename "$(pwd)")\" && docker compose up -d"
     echo "   2. Öffne im Browser:   http://localhost:5380"
     
     if [ "$ENABLE_REGISTRATION" = "true" ]; then
