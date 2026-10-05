@@ -84,7 +84,9 @@ def test_admin_user_management_requires_browser_session():
             ("/auth/users/{user_id}/reset-2fa", "POST"),
             ("/auth/users/{user_id}/webauthn-credentials", "DELETE"),
             ("/auth/users/{user_id}/send-reset-link", "POST"),
-            ("/auth/users/{user_id}/revoke-access", "POST")}
+            ("/auth/users/{user_id}/revoke-access", "POST"),
+            # F10 9.1 Nr. 30: Umwandlung externer Konten nur per Browser-Session
+            ("/auth/users/{user_id}/convert-to-local", "POST")}
 
     def _walk(routes):
         # FastAPI >= 0.14x haengt eingebundene Router als _IncludedRouter ein; die APIRoutes
@@ -156,3 +158,28 @@ def test_moved_webhook_and_panel_token_routes_keep_paths():
     # nicht mehr doppelt im auth-Router
     assert not any("/panel-tokens" in r.path or "/webhooks" in r.path for r in auth_router.router.routes)
     assert panel_tokens.ROUTER_ORDER == 27 and webhooks.ROUTER_ORDER == 30
+
+
+def test_sso_admin_routes_require_browser_session():
+    """F10 9.1 Nr. 30: SSO-Einstellungen und Umwandlung nur fuer Admins mit Browser-Session (direkt
+    ``get_admin_session_user``), Selbst-Verknuepfung nur mit Browser-Session (direkt ``get_session_user``)."""
+    want = {
+        ("/settings/sso", "GET"): "get_admin_session_user",
+        ("/settings/sso", "PUT"): "get_admin_session_user",
+        ("/settings/sso/test", "POST"): "get_admin_session_user",
+        ("/auth/users/{user_id}/convert-to-local", "POST"): "get_admin_session_user",
+        ("/auth/me/sso/oidc/link", "POST"): "get_session_user",
+        ("/auth/me/sso/ldap/link", "POST"): "get_session_user",
+    }
+    seen = {}
+    for r in _route_walk(app.routes):
+        path = getattr(r, "path", None)
+        if not path:
+            continue
+        path = path.removeprefix("/api/v1")
+        for m in (getattr(r, "methods", None) or []):
+            if (path, m) in want:
+                seen[(path, m)] = [getattr(d.call, "__name__", "") for d in r.dependant.dependencies]
+    assert set(seen) == set(want)
+    for key, dep in want.items():
+        assert dep in seen[key], (key, seen[key])
