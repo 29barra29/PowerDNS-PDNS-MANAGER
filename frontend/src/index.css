@@ -27,7 +27,8 @@
 body {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
-  font-family: 'Inter', 'Segoe UI', sans-serif;
+  /* Inter wird lokal ausgeliefert (@fontsource-variable/inter, Import in main.jsx) - keine Google-Fonts-Requests (F8-B04) */
+  font-family: 'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif;
 }
 
 /* Glass card effect */

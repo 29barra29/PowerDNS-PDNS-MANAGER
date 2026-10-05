@@ -2,20 +2,26 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Wifi, Eye, EyeOff, Mail, Send } from 'lucide-react'
 import api from '../../../api'
+import { smtpPasswordValue } from '../../../lib/settingsForms.js'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'smtp', order: 50, labelKey: 'settings.smtp', icon: Mail, adminOnly: true }
 
-// Tab "E-Mail (SMTP)" – mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// Tab "E-Mail (SMTP)".
+// F8-D05 (N20): das gespeicherte Passwort wird nie ins Formular geladen. Leeres Feld = behalten (password: null),
+// neuer Wert = ersetzen, Haken "entfernen" = loeschen (password: ''). Texte uebersetzt (A11).
 export default function SmtpTab({ active }) {
     const { t } = useTranslation()
-    const { notify } = useSettings()
+    const { notify, isAdmin } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
     const [smtpForm, setSmtpForm] = useState({
         host: '', port: 587, username: '', password: '', from_email: '', from_name: 'PDNS Manager', encryption: 'starttls', enabled: false
     })
+    // Ist serverseitig ein Passwort gespeichert? / Soll es beim Speichern entfernt werden?
+    const [smtpPasswordSet, setSmtpPasswordSet] = useState(false)
+    const [smtpClearPassword, setSmtpClearPassword] = useState(false)
     const [loadingSmtp, setLoadingSmtp] = useState(false)
     const [savingSmtp, setSavingSmtp] = useState(false)
     const [testingSmtp, setTestingSmtp] = useState(false)
@@ -31,12 +37,15 @@ export default function SmtpTab({ active }) {
             const data = await api.getSmtpSettings()
             setSmtpForm({
                 host: data.host || '', port: data.port || 587, username: data.username || '',
-                password: data.password || '', from_email: data.from_email || '',
+                password: '', from_email: data.from_email || '',
                 from_name: data.from_name || 'PDNS Manager', encryption: data.encryption || 'starttls',
-                enabled: data.enabled || false,
+                enabled: data.enabled === true || data.enabled === 'true',
             })
-        } catch { /* ignore */ }
-        finally { setLoadingSmtp(false) }
+            setSmtpPasswordSet(!!data.password_set)
+            setSmtpClearPassword(false)
+        } catch (err) {
+            setError(err.message)
+        } finally { setLoadingSmtp(false) }
     }
 
     async function handleSaveSmtp(e) {
@@ -44,8 +53,13 @@ export default function SmtpTab({ active }) {
         setSavingSmtp(true)
         setError('')
         try {
-            await api.updateSmtpSettings(smtpForm)
+            await api.updateSmtpSettings({
+                ...smtpForm,
+                password: smtpPasswordValue(smtpForm.password, smtpClearPassword),
+            })
             setSuccess(t('settings.smtpSaveSuccess'))
+            // Neu laden: zeigt, ob jetzt ein Passwort gespeichert ist, und leert das Feld
+            await loadSmtp()
         } catch (err) { setError(err.message) }
         finally { setSavingSmtp(false) }
     }
@@ -74,8 +88,11 @@ export default function SmtpTab({ active }) {
     // Wie 2.4.1: bei jedem Öffnen des Tabs neu laden
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Laden beim Aktivieren wie 2.4.1
-        if (active) loadSmtp()
-    }, [active])
+        if (active && isAdmin) loadSmtp()
+    }, [active]) // eslint-disable-line react-hooks/exhaustive-deps -- nur beim Aktivieren laden (wie 2.4.1)
+
+    // Zusaetzliches Render-Gate (F8 6.7): der Tab ist adminOnly
+    if (!isAdmin) return null
 
     return (
         <div className="space-y-6">
@@ -139,12 +156,33 @@ export default function SmtpTab({ active }) {
                                 <div className="relative">
                                     <input type={showSmtpPassword ? 'text' : 'password'} value={smtpForm.password}
                                         onChange={e => setSmtpForm({ ...smtpForm, password: e.target.value })}
-                                        placeholder="••••••••" className="w-full px-3 py-2 pr-10 text-sm" />
+                                        placeholder={smtpPasswordSet ? t('settings.smtpPasswordKeepPlaceholder') : ''}
+                                        disabled={smtpClearPassword}
+                                        autoComplete="new-password"
+                                        className="w-full px-3 py-2 pr-10 text-sm disabled:opacity-50" />
                                     <button type="button" onClick={() => setShowSmtpPassword(!showSmtpPassword)}
-                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                                        aria-label={t('login.password')}>
                                         {showSmtpPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                     </button>
                                 </div>
+                                {smtpPasswordSet && (
+                                    <label className="mt-2 flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={smtpClearPassword}
+                                            onChange={e => {
+                                                setSmtpClearPassword(e.target.checked)
+                                                if (e.target.checked) setSmtpForm(f => ({ ...f, password: '' }))
+                                            }}
+                                            className="w-3.5 h-3.5 rounded"
+                                        />
+                                        {t('settings.smtpPasswordClear')}
+                                    </label>
+                                )}
+                                {smtpClearPassword && (
+                                    <p className="mt-1 text-xs text-warning">{t('settings.smtpPasswordWillBeCleared')}</p>
+                                )}
                             </div>
                         </div>
 
@@ -199,11 +237,11 @@ export default function SmtpTab({ active }) {
                 </div>
                 <div className="flex items-center gap-3">
                     <input type="email" value={testEmailAddr} onChange={e => setTestEmailAddr(e.target.value)}
-                        placeholder="test@meinedomain.de" className="flex-1 px-3 py-2 text-sm" />
+                        placeholder="test@example.com" className="flex-1 px-3 py-2 text-sm" />
                     <button onClick={handleSendTestEmail} disabled={sendingTest || !testEmailAddr.trim()}
                         className="px-5 py-2 bg-gradient-to-r from-success/80 to-emerald-600 hover:from-success hover:to-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 shrink-0">
                         {sendingTest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                        Senden
+                        {t('common.send')}
                     </button>
                 </div>
             </div>

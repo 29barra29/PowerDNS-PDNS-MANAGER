@@ -1,21 +1,31 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Lock, Download, GitCommit, Code, Copy, Check } from 'lucide-react'
+import { RefreshCw, Lock, Download, GitCommit, Code, Copy, Check, AlertTriangle } from 'lucide-react'
 import { useUpdateAvailability } from '../../../hooks/useUpdateAvailability'
+import { GITHUB_REPO } from '../../../lib/githubLatestVersion'
+import { commitErrorKind } from '../../../lib/settingsForms.js'
+import { useDateFormat } from '../../../lib/useDateFormat'
 import { compareSemver } from '../../../utils/semverCompare'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'updates', order: 90, labelKey: 'settings.updates', icon: Download, adminOnly: true }
 
-// Tab "Updates" – mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// Tab "Updates".
+// F8 (Welle 1): Versionsbanner mit Fehlerzustand und "Erneut pruefen" (B07); Commits einmal pro Seitenaufruf mit
+// Fehlerart 404/Limit/sonstig statt pauschal "privat" (D08); Datum in der UI-Sprache (A12).
 export default function UpdatesTab({ active }) {
     const { t } = useTranslation()
-    const { adminInfo } = useSettings()
-    const { updateAvailable, dismissUpdate, latestVersion, currentVersion } = useUpdateAvailability()
+    const { fmtDateTime } = useDateFormat()
+    const { adminInfo, isAdmin } = useSettings()
+    const { updateAvailable, dismissUpdate, latestVersion, currentVersion, checked, checkError, recheck } = useUpdateAvailability()
     const [commits, setCommits] = useState([])
     const [loadingCommits, setLoadingCommits] = useState(false)
-    const [commitError, setCommitError] = useState('')
+    // { kind: 'notFound'|'rateLimit'|'other', message } oder null
+    const [commitError, setCommitError] = useState(null)
+    // Commits nur einmal pro Seitenaufruf automatisch laden (nicht bei jedem Tab-Wechsel)
+    const [commitsLoaded, setCommitsLoaded] = useState(false)
+    const [rechecking, setRechecking] = useState(false)
     // "Befehl kopiert"-Toast für den Update-Tab
     const [updateCmdCopied, setUpdateCmdCopied] = useState(false)
 
@@ -36,37 +46,51 @@ export default function UpdatesTab({ active }) {
 
     async function loadCommits() {
         setLoadingCommits(true)
-        setCommitError('')
+        setCommitError(null)
         try {
-            const res = await fetch('https://api.github.com/repos/29barra29/PowerDNS-PDNS-MANAGER/commits?per_page=5')
-            if (!res.ok) throw new Error('Repository ist privat (Änderungen können nicht abgerufen werden)')
+            const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits?per_page=5`, {
+                headers: { Accept: 'application/vnd.github+json' },
+            })
+            if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status })
             const data = await res.json()
-            setCommits(data)
+            setCommits(Array.isArray(data) ? data : [])
         } catch (err) {
-            setCommitError(err.message)
+            setCommitError({ kind: commitErrorKind(err?.status), message: err?.message || String(err) })
         } finally {
             setLoadingCommits(false)
+            setCommitsLoaded(true)
         }
     }
 
-    // Wie 2.4.1: Commits beim Öffnen laden, solange noch keine da sind
+    async function handleRecheck() {
+        setRechecking(true)
+        try { await recheck() } finally { setRechecking(false) }
+    }
+
+    // Commits beim ersten Oeffnen laden (einmal pro Seitenaufruf, F8-D08); "Neu laden" laedt erneut
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Laden beim Aktivieren wie 2.4.1
-        if (active && commits.length === 0) loadCommits()
+        if (active && isAdmin && !commitsLoaded && !loadingCommits) loadCommits()
     }, [active]) // eslint-disable-line react-hooks/exhaustive-deps -- nur beim Aktivieren laden (wie 2.4.1)
+
+    // Zusaetzliches Render-Gate (F8 6.7): der Tab ist adminOnly
+    if (!isAdmin) return null
 
     return (
         <div className="space-y-6">
             {(() => {
                 const isUpToDate = !!(latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) <= 0)
                 const hasUpdate = !!(latestVersion && currentVersion && compareSemver(latestVersion, currentVersion) > 0)
+                const checkFailed = !!checkError && !latestVersion
                 return (
                     <div className={`p-4 rounded-xl border text-sm ${
                         hasUpdate
                             ? 'border-amber-500/40 bg-amber-500/10 text-text-secondary'
                             : isUpToDate
                                 ? 'border-success/40 bg-success/10 text-text-secondary'
-                                : 'border-border bg-bg-hover/40 text-text-muted'
+                                : checkFailed
+                                    ? 'border-warning/40 bg-warning/10 text-text-secondary'
+                                    : 'border-border bg-bg-hover/40 text-text-muted'
                     }`}>
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                             <div className="flex-1 min-w-0">
@@ -80,9 +104,25 @@ export default function UpdatesTab({ active }) {
                                         <p className="font-medium text-success mb-1">{t('settingsMore.upToDateTitle')}</p>
                                         <p>{t('settingsMore.upToDateBody', { current: currentVersion })}</p>
                                     </>
-                                ) : (
+                                ) : checkFailed ? (
+                                    <div className="flex items-start gap-2">
+                                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-warning" />
+                                        <div className="space-y-2">
+                                            <p className="text-warning">{t('settingsMore.versionCheckFailed')}</p>
+                                            <button
+                                                type="button"
+                                                onClick={handleRecheck}
+                                                disabled={rechecking}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary disabled:opacity-50"
+                                            >
+                                                <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
+                                                {t('settingsMore.versionRecheck')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : !checked ? (
                                     <p>{t('settingsMore.versionUnknown')}</p>
-                                )}
+                                ) : null}
                             </div>
                             <div className="flex items-center gap-3 text-xs">
                                 <div className="flex items-center gap-1.5">
@@ -120,9 +160,7 @@ export default function UpdatesTab({ active }) {
 
                     {(() => {
                         const installPath = adminInfo?.install_path || ''
-                        const updateCmd = installPath
-                            ? `cd ${installPath} && ./update.sh`
-                            : `cd <DEIN-INSTALLATIONS-PFAD> && ./update.sh`
+                        const updateCmd = `cd ${installPath || t('settingsMore.updatePathPlaceholder')} && ./update.sh`
                         const onCopy = async () => {
                             try {
                                 if (navigator.clipboard?.writeText) {
@@ -193,9 +231,25 @@ export default function UpdatesTab({ active }) {
                     </div>
 
                     {commitError ? (
-                        <div className="p-4 rounded-lg bg-bg-hover border border-border text-text-muted text-sm text-center flex flex-col items-center gap-2">
-                            <Lock className="w-5 h-5 opacity-50" />
-                            {t('settings.updatesPrivateRepo')}
+                        <div className="p-4 rounded-lg bg-bg-hover border border-border text-text-muted text-sm text-center flex flex-col items-center gap-2" role="status">
+                            {commitError.kind === 'notFound'
+                                ? <Lock className="w-5 h-5 opacity-50" />
+                                : <AlertTriangle className="w-5 h-5 opacity-60" />}
+                            <span>
+                                {commitError.kind === 'notFound'
+                                    ? t('settings.updatesRepoNotFound')
+                                    : commitError.kind === 'rateLimit'
+                                        ? t('settings.updatesRateLimited')
+                                        : t('settings.updatesLoadFailed', { error: commitError.message })}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={loadCommits}
+                                disabled={loadingCommits}
+                                className="text-xs text-accent-light hover:underline disabled:opacity-50"
+                            >
+                                {t('settings.reload')}
+                            </button>
                         </div>
                     ) : commits.length === 0 && !loadingCommits ? (
                         <p className="text-sm text-text-muted">{t('settingsMore.noChangesFound')}</p>
@@ -208,12 +262,12 @@ export default function UpdatesTab({ active }) {
                                     </div>
                                     <div className="min-w-0 flex-1">
                                         <div className="flex items-center gap-2 mb-1">
-                                            <span className="text-sm font-medium text-text-primary truncate">{c.commit.message.split('\n')[0]}</span>
+                                            <span className="text-sm font-medium text-text-primary truncate">{String(c.commit?.message || '').split('\n')[0]}</span>
                                         </div>
                                         <div className="flex items-center gap-3 text-xs text-text-muted">
-                                            <span>{new Date(c.commit.author.date).toLocaleString('de-DE')}</span>
+                                            <span>{fmtDateTime(c.commit?.author?.date)}</span>
                                             <span className="font-mono bg-bg-hover px-1.5 py-0.5 rounded border border-border">{c.sha.substring(0, 7)}</span>
-                                            <span>{t('settingsMore.by')} <strong className="text-text-secondary">{c.commit.author.name}</strong></span>
+                                            <span>{t('settingsMore.by')} <strong className="text-text-secondary">{c.commit?.author?.name || '–'}</strong></span>
                                         </div>
                                     </div>
                                 </div>

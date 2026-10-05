@@ -14,6 +14,7 @@ import { DEFAULT_TAB_ID, ZONE_DETAIL_SLOTS } from '../zoneDetail/ZoneDetailSlots
 // Zonenansicht - Shell (Plan B.14): Laden, Kopf, Banner, Tab-Leiste, Modals. Daten und Handler kommen aus
 // useZoneData (zoneDetail/), Inhalte aus den Slot-Verzeichnissen (zoneDetail/ZoneDetailSlots.js).
 // Features docken ueber neue Slot-Dateien an, nicht ueber Aenderungen an dieser Datei.
+// Fehler eines offenen Dialogs zeigt der Dialog selbst (ModalErrorBanner, F8 6.8); die Banner hier gelten der Seite.
 export default function ZoneDetailPage() {
     const { server, zoneId } = useParams()
     // Zonen- bzw. Serverwechsel ("Wechsel zu <Server>") startet mit frischem Zustand
@@ -81,10 +82,10 @@ function ZoneDetailBody({ ctx, t, navigate }) {
             </div>
 
             {error && (
-                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3">
+                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3" role="alert">
                     <AlertCircle className="w-5 h-5 shrink-0" />
-                    <p className="text-sm">{error}</p>
-                    <button onClick={() => setError('')} className="ml-auto text-xs hover:underline">×</button>
+                    <p className="text-sm break-words min-w-0">{error}</p>
+                    <button onClick={() => setError('')} className="ml-auto text-xs hover:underline" aria-label={t('common.close')}>×</button>
                 </div>
             )}
 
@@ -130,7 +131,7 @@ function ZoneDetailBody({ ctx, t, navigate }) {
                                         onClick={() => navigate(`/zones/${encodeURIComponent(s.name)}/${encodeURIComponent(zoneId)}`)}
                                         className="text-xs px-2 py-0.5 rounded-full bg-success/10 border border-success/30 text-success hover:bg-success/20 transition-colors"
                                     >
-                                        {t('zoneDetail.switchToServer', { server: s.name, defaultValue: 'Wechsel zu {{server}}' })}
+                                        {t('zoneDetail.switchToServer', { server: s.name })}
                                     </button>
                                 ))}
                             </div>

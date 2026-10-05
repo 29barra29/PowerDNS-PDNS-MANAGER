@@ -1,13 +1,22 @@
 /**
  * Gemeinsame Validatoren, RECORD_TYPES und Vorlagen für die Zonendetail-Ansicht.
+ *
+ * Validatoren: FIELD_VALIDATORS[typ][feld](wert, set) -> '' | Warn-String | { error }. `set` ist das ganze Wert-Set
+ * des Formulars (z. B. fuer Felder, deren Pruefung von einem anderen Feld abhaengt, F15 LUA).
+ * Record-Definitionen: immer ueber getRecordDef(typ) nachschlagen – unbekannte Typen (z. B. CERT/URI aus einem
+ * Import) bekommen einen RDATA-Texteditor (F8-F04). Felder koennen `default` (Startwert, defaultFieldSet) und
+ * `select` (Auswahl) haben.
  */
 import i18n from '../i18n'
+import { IPV4_RE, isValidIPv6 } from '../lib/ip.js'
+import {
+    CAA_COMMON_TAGS, CAA_TAGS, buildCaa, classifyHostname, defaultFieldSet, parseCaa,
+} from '../lib/recordContent.js'
+
+export { defaultFieldSet }
 
 const _t = (key, vars) => i18n.t(key, vars)
 
-const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
-const IPV6_RE = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|::)$/
-const FQDN_RE = /^(?=.{1,253}\.?$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\.?$/i
 const HEX_RE = /^[0-9a-fA-F]+$/
 
 function validateIPv4(v) {
@@ -20,17 +29,20 @@ function validateIPv4(v) {
 function validateIPv6(v) {
     const s = (v || '').trim()
     if (!s) return { error: _t('zoneDetail.enterIpv6') }
-    if (!IPV6_RE.test(s)) return { error: _t('zoneDetail.invalidIpv6') }
+    if (!isValidIPv6(s)) return { error: _t('zoneDetail.invalidIpv6') }
     return ''
 }
 
-function validateFqdn(v, { allowTrailingDot = true } = {}) {
-    let s = (v || '').trim().replace(/\.$/, '')
-    if (!s) return { error: _t('zoneDetail.enterHostname') }
-    if (!FQDN_RE.test(s + (allowTrailingDot ? '.' : ''))) {
-        return { error: _t('zoneDetail.invalidHostname') }
+// Hostname-Ziel (F8-F10): '.' ist nur mit allowRoot erlaubt (Null-MX/SRV, RFC 7505/2782) und nur ein Hinweis;
+// einlabelige Namen sind eine Warnung, kein Fehler; Punycode-TLDs sind gueltig.
+function validateFqdn(v, { allowRoot = false } = {}) {
+    switch (classifyHostname(v, { allowRoot })) {
+        case 'root': return _t('zoneDetail.nullTargetHint')
+        case 'empty': return { error: _t('zoneDetail.enterHostname') }
+        case 'valid': return ''
+        case 'singleLabel': return _t('zoneDetail.singleLabelHostWarning')
+        default: return { error: _t('zoneDetail.invalidHostname') }
     }
-    return ''
 }
 
 function validateInt(v, { min, max } = {}) {
@@ -38,8 +50,8 @@ function validateInt(v, { min, max } = {}) {
     if (!s) return { error: _t('zoneDetail.enterNumber') }
     if (!/^\d+$/.test(s)) return { error: _t('zoneDetail.onlyDigits') }
     const n = parseInt(s, 10)
-    if (typeof min === 'number' && n < min) return { error: _t('zoneDetail.minValue', { min, defaultValue: `Minimum: ${min}` }) }
-    if (typeof max === 'number' && n > max) return { error: _t('zoneDetail.maxValue', { max, defaultValue: `Maximum: ${max}` }) }
+    if (typeof min === 'number' && n < min) return { error: _t('zoneDetail.minValue', { min }) }
+    if (typeof max === 'number' && n > max) return { error: _t('zoneDetail.maxValue', { max }) }
     return ''
 }
 
@@ -59,9 +71,8 @@ function validateTxt(v) {
 }
 
 function validateCaaTag(v) {
-    const ok = ['issue', 'issuewild', 'iodef', 'contactemail', 'contactphone']
     if (!v) return { error: _t('zoneDetail.tagMissing') }
-    if (!ok.includes(v)) return _t('zoneDetail.unusualCaaTag', { tag: v, common: ok.slice(0, 3).join(', ') })
+    if (!CAA_TAGS.includes(v)) return _t('zoneDetail.unusualCaaTag', { tag: v, common: CAA_COMMON_TAGS.join(', ') })
     return ''
 }
 
@@ -73,13 +84,13 @@ export const FIELD_VALIDATORS = {
     PTR: { host: (v) => validateFqdn(v) },
     MX: {
         priority: (v) => validateInt(v, { min: 0, max: 65535 }),
-        mailserver: (v) => validateFqdn(v),
+        mailserver: (v) => validateFqdn(v, { allowRoot: true }),
     },
     SRV: {
         pri: (v) => validateInt(v, { min: 0, max: 65535 }),
         weight: (v) => validateInt(v, { min: 0, max: 65535 }),
         port: (v) => validateInt(v, { min: 1, max: 65535 }),
-        target: (v) => validateFqdn(v),
+        target: (v) => validateFqdn(v, { allowRoot: true }),
     },
     TXT: { text: validateTxt },
     CAA: {
@@ -109,16 +120,16 @@ export const FIELD_VALIDATORS = {
 }
 
 const APEX_FORBIDDEN = {
-    CNAME: () => _t('zoneDetail.apexCnameForbidden', { defaultValue: 'CNAME ist am Apex (Zonen-Wurzel) laut RFC nicht erlaubt. Nutze stattdessen ALIAS oder einen direkten A/AAAA-Record.' }),
-    DS: () => _t('zoneDetail.apexDsForbidden', { defaultValue: 'DS ist am Apex einer eigenen Zone nicht erlaubt – DS-Records gehören in die ELTERN-Zone (also bei deinem Domain-Registrar). Hier kannst du DNSKEY-Einträge anlegen.' }),
-    DNAME: () => _t('zoneDetail.apexDnameWarning', { defaultValue: 'DNAME am Apex ist meist falsch – nutze CNAME für Subdomains oder ALIAS am Apex.' }),
+    CNAME: () => _t('zoneDetail.apexCnameForbidden'),
+    DS: () => _t('zoneDetail.apexDsForbidden'),
+    DNAME: () => _t('zoneDetail.apexDnameWarning'),
 }
 
 export function getApexWarning(name, type) {
     if (name !== '@') return null
     const msg = APEX_FORBIDDEN[type]
     if (msg) return { kind: 'error', text: msg() }
-    if (type === 'PTR') return { kind: 'warn', text: _t('zoneDetail.apexPtrWarning', { defaultValue: 'PTR am Apex passt meist nur in Reverse-Zonen (in-addr.arpa).' }) }
+    if (type === 'PTR') return { kind: 'warn', text: _t('zoneDetail.apexPtrWarning') }
     return null
 }
 
@@ -126,43 +137,43 @@ export function buildQuickTemplates(zoneName) {
     return [
         {
             id: 'spf',
-            label: _t('zoneDetail.quickSpfLabel', { defaultValue: 'SPF (Mail-Spoof-Schutz)' }),
+            label: _t('zoneDetail.quickSpfLabel'),
             type: 'TXT',
             name: '@',
             ttl: '3600',
             fields: { text: 'v=spf1 mx -all' },
-            note: _t('zoneDetail.quickSpfNote', { defaultValue: 'Trag bei mx oder include die zum Mailversand berechtigten Hosts ein.' }),
+            note: _t('zoneDetail.quickSpfNote'),
         },
         {
             id: 'dmarc',
-            label: _t('zoneDetail.quickDmarcLabel', { defaultValue: 'DMARC (Reporting / Policy)' }),
+            label: _t('zoneDetail.quickDmarcLabel'),
             type: 'TXT',
             name: '_dmarc',
             ttl: '3600',
             fields: { text: `v=DMARC1; p=quarantine; rua=mailto:postmaster@${zoneName}` },
-            note: _t('zoneDetail.quickDmarcNote', { defaultValue: 'Mit p=none startest du im Monitor-Modus.' }),
+            note: _t('zoneDetail.quickDmarcNote'),
         },
         {
             id: 'dkim',
-            label: _t('zoneDetail.quickDkimLabel', { defaultValue: 'DKIM (Selector default._domainkey)' }),
+            label: _t('zoneDetail.quickDkimLabel'),
             type: 'TXT',
             name: 'default._domainkey',
             ttl: '3600',
             fields: { text: 'v=DKIM1; k=rsa; p=DEIN_BASE64_PUBLIC_KEY' },
-            note: _t('zoneDetail.quickDkimNote', { defaultValue: 'Den öffentlichen Schlüssel stellt dein Mailserver bereit.' }),
+            note: _t('zoneDetail.quickDkimNote'),
         },
         {
             id: 'mta-sts',
-            label: _t('zoneDetail.quickMtaStsLabel', { defaultValue: 'MTA-STS (Mail-Transport-Sicherheit)' }),
+            label: _t('zoneDetail.quickMtaStsLabel'),
             type: 'TXT',
             name: '_mta-sts',
             ttl: '3600',
             fields: { text: 'v=STSv1; id=20240101000000Z' },
-            note: _t('zoneDetail.quickMtaStsNote', { defaultValue: 'Erfordert zusätzlich /.well-known/mta-sts.txt unter mta-sts.<deine-domain>.' }),
+            note: _t('zoneDetail.quickMtaStsNote'),
         },
         {
             id: 'tls-rpt',
-            label: _t('zoneDetail.quickTlsRptLabel', { defaultValue: 'TLS-RPT (TLS-Reports per Mail)' }),
+            label: _t('zoneDetail.quickTlsRptLabel'),
             type: 'TXT',
             name: '_smtp._tls',
             ttl: '3600',
@@ -171,7 +182,7 @@ export function buildQuickTemplates(zoneName) {
         },
         {
             id: 'caa',
-            label: _t('zoneDetail.quickCaaLabel', { defaultValue: 'CAA (nur Let’s Encrypt darf Zertifikate ausstellen)' }),
+            label: _t('zoneDetail.quickCaaLabel'),
             type: 'CAA',
             name: '@',
             ttl: '3600',
@@ -180,17 +191,18 @@ export function buildQuickTemplates(zoneName) {
         },
         {
             id: 'tlsa-mail',
-            label: _t('zoneDetail.quickTlsaMailLabel', { defaultValue: 'TLSA für SMTP (Port 25)' }),
+            label: _t('zoneDetail.quickTlsaMailLabel'),
             type: 'TLSA',
             name: '_25._tcp.mail',
             ttl: '3600',
             fields: { usage: '3', sel: '1', match: '1', hash: 'DEIN_SHA256_FINGERPRINT' },
-            note: _t('zoneDetail.quickTlsaMailNote', { defaultValue: 'usage=3, sel=1, match=1 = DANE-EE / SPKI / SHA-256' }),
+            note: _t('zoneDetail.quickTlsaMailNote'),
         },
     ]
 }
 
 function rdataRecord(typeKey, labelKey) {
+    // placeholderKey ist dynamisch (zoneDetail.rdataPh<TYP>); gerendert mit defaultValue '' (F8-F04)
     return {
         labelKey,
         rdataTypeKey: typeKey,
@@ -243,11 +255,13 @@ export const RECORD_TYPES = {
     },
     CAA: {
         labelKey: 'zoneDetail.recordCAA', label: 'CAA – Zertifikat', fields: [
-            { id: 'flag', labelKey: 'zoneDetail.fieldFlag', label: 'Flag', placeholder: '0', type: 'number' },
-            { id: 'tag', labelKey: 'zoneDetail.fieldTag', label: 'Tag', placeholder: 'issue', select: ['issue', 'issuewild', 'iodef'] },
+            { id: 'flag', labelKey: 'zoneDetail.fieldFlag', label: 'Flag', placeholder: '0', type: 'number', default: '0' },
+            { id: 'tag', labelKey: 'zoneDetail.fieldTag', label: 'Tag', placeholder: 'issue', select: [...CAA_TAGS], default: 'issue' },
             { id: 'val', labelKey: 'zoneDetail.fieldVal', label: 'Wert', placeholder: 'letsencrypt.org' },
-        ], build: f => `${f.flag} ${f.tag} "${f.val}"`,
-        parse: c => { const s = c.split(' '); return { flag: s[0], tag: s[1], val: s.slice(2).join(' ').replace(/"/g, '') } }
+        ],
+        // Wert in Anfuehrungszeichen, " und \ escaped; parse ist das Gegenstueck (F8-F03, N19)
+        build: f => buildCaa(f),
+        parse: c => parseCaa(c),
     },
     PTR: { labelKey: 'zoneDetail.recordPTR', label: 'PTR – Reverse', fields: [{ id: 'host', labelKey: 'zoneDetail.fieldHost', label: 'Hostname', placeholder: 'host.example.com.' }], build: f => f.host.endsWith('.') ? f.host : f.host + '.', parse: c => ({ host: c }) },
     TLSA: {
@@ -284,3 +298,22 @@ export const RECORD_TYPES = {
 }
 
 export const MULTI_VALUE_OK = new Set(['A', 'AAAA', 'NS', 'TXT', 'MX', 'CAA', 'SRV'])
+
+/**
+ * Editor fuer Typen ohne eigenen Eintrag in RECORD_TYPES (z. B. CERT, URI, SMIMEA aus einem Import): RDATA als Text.
+ * `unknown: true` -> Hinweis im Dialog, kein Klonen (das Backend nimmt beim Anlegen nur die Allowlist an).
+ */
+export function genericRecordDef(type) {
+    const base = rdataRecord(type, null)
+    return {
+        ...base,
+        label: type,
+        unknown: true,
+        fields: [{ id: 'raw', labelKey: 'zoneDetail.fieldRdata', textarea: true }],
+    }
+}
+
+/** Record-Definition fuer einen Typ; nie undefined (unbekannte Typen -> genericRecordDef). */
+export function getRecordDef(type) {
+    return RECORD_TYPES[type] || genericRecordDef(String(type || ''))
+}

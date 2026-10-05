@@ -5,6 +5,7 @@ import {
     Globe, Plus, Trash2, Loader2, Shield, AlertCircle, CheckCircle, X, FileUp
 } from 'lucide-react'
 import api from '../api'
+import ModalErrorBanner from '../components/ModalErrorBanner'
 
 /* ============================================================================
  *  Helpers für die Zone-Erstellung
@@ -24,7 +25,8 @@ function cleanupDomainInput(input) {
     return s
 }
 
-const DOMAIN_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
+// Labels mit Unterstrich, Punycode-TLDs (xn--p1ai) erlaubt (F8-G01); Pruefung immer auf kleingeschriebenem Namen
+const DOMAIN_RE = /^([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})$/i
 const REVERSE_SUFFIX_RE = /\.(in-addr|ip6)\.arpa$/i
 
 /** Liefert {error, hint, reverse} für eine eingegebene Domain. `t` ist die i18next-Translate-Funktion. */
@@ -60,9 +62,17 @@ function parseCidrToArpa(input) {
 /** Validiert einen einzelnen Nameserver-Eintrag. `t` ist die i18next-Translate-Funktion. */
 function validateNameserver(ns, t) {
     if (!ns) return ''
-    const s = ns.trim().replace(/\.$/, '')
+    const s = ns.trim().toLowerCase().replace(/\.$/, '')
     if (!DOMAIN_RE.test(s)) return t('zones.invalidNameserver')
     return ''
+}
+
+/** Nameserver fuer die API: getrimmt, klein, mit Punkt am Ende; leere Eintraege entfallen (F8-G01). */
+function normalizeNameservers(list) {
+    return (list || [])
+        .map(n => String(n || '').trim().toLowerCase())
+        .filter(Boolean)
+        .map(n => n.endsWith('.') ? n : `${n}.`)
 }
 
 /* ============================================================================
@@ -99,6 +109,9 @@ export default function ZonesPage() {
     const [imContent, setImContent] = useState('')
     const [imPreview, setImPreview] = useState(null)
     const [imBusy, setImBusy] = useState(false)
+    // Fehler der Dialoge erscheinen im Dialog, nicht hinter dem Overlay (F8-C03/C05, N1)
+    const [imError, setImError] = useState('')
+    const [createError, setCreateError] = useState('')
 
     useEffect(() => {
         const u = api.getUser()
@@ -142,7 +155,7 @@ export default function ZonesPage() {
                 setSelectedTemplateId(String(def.id))
                 applyTemplate(def)
             }
-        } catch { /* ignore */ }
+        } catch { /* optional: ohne Vorlagen bleibt die Auswahl leer, Zonen lassen sich trotzdem anlegen */ }
     }
 
     function applyTemplate(tpl) {
@@ -229,7 +242,7 @@ export default function ZonesPage() {
         e.preventDefault()
         if (creating) return
         setCreating(true)
-        setError('')
+        setCreateError('')
         setCreateResult(null)
 
         const rawInput = createForm.name.trim()
@@ -237,26 +250,23 @@ export default function ZonesPage() {
         const cleaned = reverseFromCidr || cleanupDomainInput(rawInput)
 
         if (!cleaned) {
-            setError(t('zones.enterDomainName'))
+            setCreateError(t('zones.enterDomainName'))
             setCreating(false)
             return
         }
         if (!REVERSE_SUFFIX_RE.test(cleaned) && !DOMAIN_RE.test(cleaned)) {
-            setError(t('zones.invalidDomainName', { name: rawInput }))
+            setCreateError(t('zones.invalidDomainName', { name: rawInput }))
             setCreating(false)
             return
         }
 
-        // Nameserver: leere ignorieren, Trailing-Dot anhängen
-        const nsArray = nameservers
-            .map(n => n.trim())
-            .filter(Boolean)
-            .map(n => n.endsWith('.') ? n : `${n}.`)
+        // Nameserver: leere ignorieren, klein schreiben, Trailing-Dot anhängen
+        const nsArray = normalizeNameservers(nameservers)
 
         // Validiere jeden NS einzeln
         for (const ns of nsArray) {
             if (validateNameserver(ns, t)) {
-                setError(t('zones.invalidNameserverNamed', { name: ns }))
+                setCreateError(t('zones.invalidNameserverNamed', { name: ns }))
                 setCreating(false)
                 return
             }
@@ -266,7 +276,7 @@ export default function ZonesPage() {
             const res = await api.createZone({
                 ...createForm,
                 name: cleaned,
-                nameservers: nsArray.length ? nsArray : defaultNS,
+                nameservers: nsArray.length ? nsArray : normalizeNameservers(defaultNS),
             })
             setCreateResult(res || {})
 
@@ -276,7 +286,7 @@ export default function ZonesPage() {
                 const errParts = Object.entries(details)
                     .filter(([, v]) => String(v).startsWith('error:'))
                     .map(([srv, v]) => `${srv}: ${String(v).replace(/^error:\s*/, '')}`)
-                setError(errParts.length ? errParts.join(' · ') : t('zones.serverReportedError'))
+                setCreateError(errParts.length ? errParts.join(' · ') : t('zones.serverReportedError'))
             }
 
             // Template-Records (nur ohne Server-Fehler)
@@ -306,6 +316,7 @@ export default function ZonesPage() {
                     }
                 }
                 if (failedTemplateRecords.length) {
+                    // Der Dialog schliesst gleich (Zone ist angelegt) - deshalb Seiten-Banner
                     setError(`${t('zones.serverReportedError')}: ${failedTemplateRecords.join(', ')}`)
                 }
             }
@@ -325,7 +336,7 @@ export default function ZonesPage() {
                 loadZones()
             }
         } catch (err) {
-            setError(err.message)
+            setCreateError(err.message)
         } finally {
             setCreating(false)
         }
@@ -333,12 +344,13 @@ export default function ZonesPage() {
 
     function closeCreateModal() {
         setShowCreate(false)
-        setError('')
+        setCreateError('')
         setCreateResult(null)
     }
 
     function openCreateModal() {
         setError('')
+        setCreateError('')
         setCreateResult(null)
         const def = templates.find(tt => tt.is_default)
         setCreateForm({
@@ -355,7 +367,7 @@ export default function ZonesPage() {
     function _importPayload() {
         const name = (imName || '').trim().toLowerCase()
         const content = (imContent || '').trim()
-        const nameservers = (imNs || '').split(/[\n,]+/).map((s) => s.trim().replace(/\.$/, '')).filter(Boolean)
+        const nameservers = (imNs || '').split(/[\n,]+/).map((s) => s.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean)
         if (!name) throw new Error(t('zones.enterDomainName'))
         if (!content) throw new Error(t('zones.importContentMissing'))
         return { name, kind: imKind, nameservers, content }
@@ -364,19 +376,33 @@ export default function ZonesPage() {
     async function runImportPreview() {
         setImBusy(true)
         setImPreview(null)
-        setError('')
+        setImError('')
         try {
             const p = _importPayload()
             const d = await api.previewZoneImport(p)
             setImPreview(d)
         } catch (e) {
-            setError(e.message)
+            setImError(e.message)
         } finally { setImBusy(false) }
+    }
+
+    function openImportModal() {
+        setShowImport(true)
+        setImPreview(null)
+        setImError('')
+        setError('')
+    }
+
+    function closeImportModal() {
+        if (imBusy) return
+        setShowImport(false)
+        setImPreview(null)
+        setImError('')
     }
 
     async function runImportExecute() {
         setImBusy(true)
-        setError('')
+        setImError('')
         try {
             const p = _importPayload()
             const res = await api.importZone(p)
@@ -387,7 +413,7 @@ export default function ZonesPage() {
             setSuccess(res.message || t('zones.importRun'))
             loadZones()
         } catch (e) {
-            setError(e.message)
+            setImError(e.message)
         } finally { setImBusy(false) }
     }
 
@@ -428,7 +454,7 @@ export default function ZonesPage() {
                     <div className="flex flex-wrap gap-2 self-start sm:self-auto">
                         <button
                             type="button"
-                            onClick={() => { setShowImport(true); setImPreview(null); setError('') }}
+                            onClick={openImportModal}
                             className="flex items-center gap-2 px-4 py-2.5 border border-border bg-bg-secondary hover:bg-bg-hover text-text-primary rounded-lg font-medium text-sm transition-all"
                         >
                             <FileUp className="w-4 h-4" /> {t('zones.importZone')}
@@ -445,10 +471,10 @@ export default function ZonesPage() {
             </div>
 
             {error && (
-                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3">
+                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3" role="alert">
                     <AlertCircle className="w-5 h-5 shrink-0" />
-                    <p className="text-sm">{error}</p>
-                    <button onClick={() => setError('')} className="ml-auto text-xs hover:underline">{t('zones.close')}</button>
+                    <p className="text-sm break-words min-w-0">{error}</p>
+                    <button onClick={() => setError('')} className="ml-auto text-xs hover:underline" aria-label={t('common.closeMessage')}>{t('zones.close')}</button>
                 </div>
             )}
 
@@ -554,16 +580,7 @@ export default function ZonesPage() {
                             </button>
                         </div>
 
-                        {error && (
-                            <div className="mb-4 p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-start gap-3">
-                                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium">{t('zones.createError')}</p>
-                                    <p className="text-sm mt-1">{error}</p>
-                                </div>
-                                <button type="button" onClick={() => setError('')} className="text-xs hover:underline shrink-0" aria-label="Meldung schließen">{t('zones.close')}</button>
-                            </div>
-                        )}
+                        <ModalErrorBanner message={createError} title={t('zones.createError')} onClose={() => setCreateError('')} />
 
                         {createResult?.details && Object.keys(createResult.details).length > 0 && (
                             <div className="mb-4 p-4 rounded-xl bg-bg-hover/50 border border-border">
@@ -604,7 +621,7 @@ export default function ZonesPage() {
                                         <option value="">{t('zones.noTemplate')}</option>
                                         {templates.map(tt => (
                                             <option key={tt.id} value={tt.id}>
-                                                {tt.name} {tt.is_default ? '⭐' : ''} {(tt.records || []).length > 0 ? `(${(tt.records || []).length} Records)` : ''}
+                                                {tt.name} {tt.is_default ? '⭐' : ''} {(tt.records || []).length > 0 ? t('zones.templateRecordCount', { count: (tt.records || []).length }) : ''}
                                             </option>
                                         ))}
                                     </select>
@@ -646,7 +663,7 @@ export default function ZonesPage() {
                                             setCreateForm(prev => ({ ...prev, name: cleaned }))
                                         }
                                     }}
-                                    placeholder="example.com  oder  192.168.1.0/24"
+                                    placeholder={t('zones.domainPlaceholder')}
                                     className="w-full px-3 py-2 text-sm"
                                     required
                                     autoFocus
@@ -796,13 +813,14 @@ export default function ZonesPage() {
             {showImport && isAdmin && (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-                    onClick={() => { if (!imBusy) { setShowImport(false); setImPreview(null) } }}
+                    onClick={closeImportModal}
                 >
                     <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-start justify-between mb-4">
                             <h2 className="text-lg font-bold text-text-primary">{t('zones.importTitle')}</h2>
-                            <button type="button" onClick={() => { if (!imBusy) { setShowImport(false); setImPreview(null) } }} className="p-1 rounded hover:bg-bg-hover"><X className="w-5 h-5" /></button>
+                            <button type="button" onClick={closeImportModal} className="p-1 rounded hover:bg-bg-hover" title={t('common.close')} aria-label={t('common.close')}><X className="w-5 h-5" /></button>
                         </div>
+                        <ModalErrorBanner message={imError} onClose={() => setImError('')} />
                         <div className="space-y-3 text-sm">
                             <div>
                                 <label className="block text-text-muted text-xs mb-1">{t('zones.importName')}</label>
@@ -830,8 +848,8 @@ export default function ZonesPage() {
                                     {imPreview.parse_error && (
                                         <p className="text-danger">{t('zones.importParseError', { err: imPreview.parse_error })}</p>
                                     )}
-                                    <p><strong>zone_exists:</strong> {imPreview.zone_exists ? 'yes' : 'no'}</p>
-                                    <p><strong>would_add:</strong> {imPreview.would_add_total ?? 0} &nbsp; <strong>would_remove:</strong> {imPreview.would_remove_total ?? 0}</p>
+                                    <p>{t('zones.importPreviewExists', { answer: imPreview.zone_exists ? t('common.yes') : t('common.no') })}</p>
+                                    <p>{t('zones.importPreviewCounts', { add: imPreview.would_add_total ?? 0, remove: imPreview.would_remove_total ?? 0 })}</p>
                                 </div>
                             )}
                             <div className="flex flex-wrap justify-end gap-2 pt-2">

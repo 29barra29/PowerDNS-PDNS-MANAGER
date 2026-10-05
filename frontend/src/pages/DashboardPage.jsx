@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
-import { Server, Globe, Activity, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
+import { Server, Globe, Activity, AlertCircle, Loader2, CheckCircle2, HelpCircle } from 'lucide-react'
 import api from '../api'
+
+// Dashboard (F8-H01): ohne Server keine "alles online"-Meldung, Ladefehler auch im Nutzer-Dashboard sichtbar.
 
 export default function DashboardPage() {
     const { t } = useTranslation()
@@ -33,7 +35,7 @@ export default function DashboardPage() {
                     try {
                         const z = await api.listZones(s.name)
                         return (z.zones || []).map(zone => zone.name)
-                    } catch { return [] }
+                    } catch { return [] } // optionaler Zaehler: einzelner Server ohne Zonenliste zaehlt nicht mit
                 }))
                 const unique = new Set(lists.flat())
                 setUniqueZones(unique.size)
@@ -47,14 +49,15 @@ export default function DashboardPage() {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
+            <div className="flex items-center justify-center h-64" role="status" aria-label={t('pageSpinner.loading')}>
                 <Loader2 className="w-8 h-8 text-accent animate-spin" />
             </div>
         )
     }
 
     const isAdmin = user?.role === 'admin'
-    const allOnline = servers.every(s => s.is_reachable)
+    const noServers = servers.length === 0 && !error
+    const allOnline = servers.length > 0 && servers.every(s => s.is_reachable)
     const onlineCount = servers.filter(s => s.is_reachable).length
     const totalZones = uniqueZones != null
         ? uniqueZones
@@ -73,28 +76,54 @@ export default function DashboardPage() {
                     <p className="text-text-muted text-sm mt-1">{t('dashboard.subtitle')}</p>
                 </div>
 
+                {error && (
+                    <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3" role="alert">
+                        <AlertCircle className="w-5 h-5 shrink-0" />
+                        <p className="text-sm break-words min-w-0">{error}</p>
+                    </div>
+                )}
+
                 {/* Serverstatus - einfach */}
                 <div className="glass-card p-6">
-                    <div className="flex items-center gap-4">
-                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${allOnline ? 'bg-success/20' : 'bg-warning/20'
-                            }`}>
-                            {allOnline
-                                ? <CheckCircle2 className="w-7 h-7 text-success" />
-                                : <AlertCircle className="w-7 h-7 text-warning" />
-                            }
+                    {error ? (
+                        <div className="flex items-center gap-4">
+                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center bg-bg-hover">
+                                <HelpCircle className="w-7 h-7 text-text-muted" />
+                            </div>
+                            <h2 className="text-lg font-semibold text-text-primary">{t('dashboard.statusUnknown')}</h2>
                         </div>
-                        <div>
-                            <h2 className="text-lg font-semibold text-text-primary">
-                                {allOnline ? t('dashboard.allRunning') : t('dashboard.limitedOperation')}
-                            </h2>
-                            <p className="text-sm text-text-muted">
+                    ) : noServers ? (
+                        <div className="flex items-center gap-4">
+                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center bg-bg-hover">
+                                <Server className="w-7 h-7 text-text-muted" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">{t('dashboard.noServersTitle')}</h2>
+                                <p className="text-sm text-text-muted">{t('dashboard.noServersBody')}</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-4">
+                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${allOnline ? 'bg-success/20' : 'bg-warning/20'
+                                }`}>
                                 {allOnline
-                                    ? t('dashboard.allServersOnline')
-                                    : t('dashboard.serversReachable', { count: onlineCount, total: servers.length })
+                                    ? <CheckCircle2 className="w-7 h-7 text-success" />
+                                    : <AlertCircle className="w-7 h-7 text-warning" />
                                 }
-                            </p>
+                            </div>
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">
+                                    {allOnline ? t('dashboard.allRunning') : t('dashboard.limitedOperation')}
+                                </h2>
+                                <p className="text-sm text-text-muted">
+                                    {allOnline
+                                        ? t('dashboard.allServersOnline')
+                                        : t('dashboard.serversReachable', { count: onlineCount, total: servers.length })
+                                    }
+                                </p>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 {/* Schnellzugriff */}
@@ -140,9 +169,21 @@ export default function DashboardPage() {
             </div>
 
             {error && (
-                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3">
+                <div className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger flex items-center gap-3" role="alert">
                     <AlertCircle className="w-5 h-5 shrink-0" />
-                    <p className="text-sm">{error}</p>
+                    <p className="text-sm break-words min-w-0">{error}</p>
+                </div>
+            )}
+
+            {noServers && (
+                <div className="glass-card p-6 flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-bg-hover shrink-0">
+                        <Server className="w-6 h-6 text-text-muted" />
+                    </div>
+                    <div>
+                        <h2 className="text-lg font-semibold text-text-primary">{t('dashboard.noServersTitle')}</h2>
+                        <p className="text-sm text-text-muted">{t('dashboard.noServersBody')}</p>
+                    </div>
                 </div>
             )}
 
@@ -218,7 +259,7 @@ export default function DashboardPage() {
                                 </div>
                                 <div>
                                     <p className="text-text-muted text-xs">{t('dashboard.url')}</p>
-                                    <p className="text-text-primary text-xs truncate">{s.url}</p>
+                                    <p className="text-text-primary text-xs truncate">{s.url || '-'}</p>
                                 </div>
                             </div>
                         </div>
