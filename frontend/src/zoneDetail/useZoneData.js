@@ -107,11 +107,14 @@ export default function useZoneData(server, zoneId) {
     /** Abonnenten werden nach dem Rendern des neuen Stands benachrichtigt (Kind-Effekte laufen vorher). */
     useEffect(() => {
         if (!loadEvent) return
+        const report = (err) => console.error('subscribeZoneLoaded: Abonnent hat geworfen', err)
         for (const cb of Array.from(listenersRef.current)) {
             try {
-                cb(loadEvent)
+                const ret = cb(loadEvent)
+                // asynchrone Abonnenten: Ablehnung nicht unbehandelt lassen
+                if (ret && typeof ret.catch === 'function') ret.catch(report)
             } catch (err) {
-                console.error('subscribeZoneLoaded: Abonnent hat geworfen', err)
+                report(err)
             }
         }
     }, [loadEvent])
