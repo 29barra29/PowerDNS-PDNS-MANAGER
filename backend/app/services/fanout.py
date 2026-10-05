@@ -184,7 +184,7 @@ def zone_not_found_for(exc: PowerDNSAPIError) -> bool:
     der Zone, CNAME-Konflikt ...). Nur wenn der Text eindeutig eine fehlende Zone nennt, wird
     uebersprungen – sonst muss der Fehler beim Nutzer ankommen. Transportfehler (502) -> False.
     """
-    detail = (exc.detail or "").lower() if isinstance(exc.detail, str) else str(exc.detail or "").lower()
+    detail = str(exc.detail or "").lower()
     if exc.status_code == 404:
         return True
     if exc.status_code >= 500:
