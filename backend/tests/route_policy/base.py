@@ -122,25 +122,10 @@ ROUTE_POLICY = {
     ("GET", f"{A}/dnssec/{ZP}/ds"): "zone",
 }
 
-# Platzhalter: Route entsteht erst in W0-INT-BE2b (main.py, F13)
-PLANNED = {
-    ("GET", "/metrics"),
-}
-
 # Zonenbezogene Admin-Routen: zusaetzlich assert_token_scope( im Endpunkt (F14 5.6)
 TOKEN_SCOPE_REQUIRED = {
     ("POST", f"{A}/zones"),
     ("DELETE", f"{A}/zones/{ZP}"),
     ("POST", f"{A}/zones/import/preview"),
     ("POST", f"{A}/zones/import"),
-}
-
-# Bekannte Luecken bis W0-INT-BE2b (zones.py und main.py gehoeren in 0b-3 BE2b). Nach deren Umbau meldet
-# test_route_policy eine Warnung; dann diese Eintraege entfernen (Integrator am Wellenende 0b).
-TRANSITIONAL = {
-    ("GET", f"{A}/metrics"): "W0-INT-BE2b: main.py stellt auf Depends(get_admin_user) um (B.13)",
-    ("POST", f"{A}/zones"): "W0-INT-BE2b: assert_token_scope(zone_data.name, write=True) in create_zone",
-    ("DELETE", f"{A}/zones/{ZP}"): "W0-INT-BE2b: assert_token_scope(zone_id, write=True) in delete_zone",
-    ("POST", f"{A}/zones/import/preview"): "W0-INT-BE2b: assert_token_scope(import_data.name) in import_zone_preview",
-    ("POST", f"{A}/zones/import"): "W0-INT-BE2b: assert_token_scope(import_data.name, write=True) in import_zone",
 }
