@@ -62,6 +62,12 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
 
+      # Verschluesselung gespeicherter Geheimnisse (ab 3.0). Leer = Schluesseldatei
+      # /app/data/.secret_key im Volume backend_data (wird beim ersten Start erzeugt).
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:-}
+      SECRET_ENCRYPTION_KEY_PREVIOUS: ${SECRET_ENCRYPTION_KEY_PREVIOUS:-}
+      SECRET_ENCRYPTION_KEY_FILE: ${SECRET_ENCRYPTION_KEY_FILE:-}
+
       # Auth-Cookies (HTTPS / SameSite / Lebensdauer)
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
@@ -71,6 +77,12 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       DOCS_ENABLED: ${DOCS_ENABLED:-false}
       WEBHOOK_ALLOW_PRIVATE_URLS: ${WEBHOOK_ALLOW_PRIVATE_URLS:-false}
+      # Hintergrund-Aufgaben (Webhook-Zustellung, Audit-Bereinigung). false = Webhooks werden nur gesammelt.
+      BACKGROUND_WORKERS_ENABLED: ${BACKGROUND_WORKERS_ENABLED:-true}
+      # Prometheus-Scrape-Token (optional, mind. 24 Zeichen). Gesetzt = /metrics aktiv, Panel-Einstellung gesperrt.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # SSO (OIDC/LDAP): unverschluesselte Verbindungen zum Anmeldedienst erlauben – NUR fuer Tests.
+      SSO_ALLOW_INSECURE: ${SSO_ALLOW_INSECURE:-false}
       # Echte Client-IP hinter Reverse-Proxy (X-Forwarded-For/X-Real-IP) auswerten.
       # Nur aktivieren, wenn das Backend ausschliesslich ueber den Proxy erreichbar ist.
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
@@ -88,7 +100,7 @@ services:
     volumes:
       # Logo und andere Uploads bleiben bei Updates erhalten
       - backend_uploads:/app/app/static_new/uploads
-      # Interne Daten (z. B. automatisch erzeugter JWT-Schluessel) – nie oeffentlich ausgeliefert
+      # Interne Daten (automatisch erzeugter JWT- und Geheimnis-Schluessel) – nie oeffentlich ausgeliefert, mitsichern!
       - backend_data:/app/data
     depends_on:
       mariadb:
@@ -99,10 +111,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    # DNS für Auflösung externer Hosts (z. B. SMTP-Server wie smtp.gmail.com)
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
+    # DNS: der Container nutzt den Resolver des Docker-Hosts (interne Namen von SMTP-, PowerDNS- und
+    # Anmeldeservern bleiben aufloesbar). Eigene Resolver nur per compose.override.yaml, siehe INSTALL.md.
     networks:
       - dns-manager-net
 
