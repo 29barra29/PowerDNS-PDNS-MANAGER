@@ -17,8 +17,8 @@ Abweichungen von der Spec (Plan hat Vorrang):
   server_urls/bind_dn/security/ca_cert) [S3] und meldet ``changed_sensitive`` fuer den Step-up [S8].
 - Der LDAP-Benutzerfilter-Default enthaelt ``(objectCategory=person)``.
 
-Fehler der Konsistenzpruefung: ``SsoSettingsError(status_code, detail)`` – der Router (WS-F10-APP-BE) wandelt sie in
-``HTTPException``. ``SecretReentryRequired`` (ValueError) behandelt die App global als 400.
+Fehler der Konsistenzpruefung: ``SsoSettingsError(status_code, detail)`` (eine ``HTTPException`` – FastAPI antwortet
+direkt). ``SecretReentryRequired`` (ValueError) behandelt die App global als 400.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass, field, fields, replace
 from typing import Any, Literal, Optional, Union
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -239,13 +240,18 @@ class SsoConfig:
     base_url: str = ""          # oeffentliche Basis-URL ohne "/" am Ende, "" wenn keine
 
 
-class SsoSettingsError(Exception):
-    """Abgelehnte SSO-Einstellung (400 Konsistenz, 422 Sicherheitsbestaetigung fehlt)."""
+class SsoSettingsError(HTTPException):
+    """Abgelehnte SSO-Einstellung (400 Konsistenz, 422 Sicherheitsbestaetigung fehlt).
+
+    Unterklasse von ``HTTPException``: ein Router muss sie nicht umsetzen, FastAPI antwortet direkt mit
+    ``status_code`` und ``{"detail": <deutscher Text>}``.
+    """
 
     def __init__(self, status_code: int, detail: str):
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
+        super().__init__(status_code=status_code, detail=detail)
+
+    def __str__(self) -> str:
+        return str(self.detail)
 
 
 @dataclass

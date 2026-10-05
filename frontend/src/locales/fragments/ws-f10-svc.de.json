@@ -1,0 +1,8 @@
+{
+  "set": {
+    "audit.actions.USER_ROLE_SYNC": "Rolle aus Gruppen übernommen",
+    "settings.sso.allowedGroupsHint": "Vollständiger Gruppen-DN, z. B. CN=pdns-admins,OU=Groups,DC=example,DC=com",
+    "settings.sso.allowedGroupsHintOidc": "Gruppenname oder Keycloak-Pfad, z. B. pdns-admins oder /pdns-admins"
+  },
+  "remove": []
+}

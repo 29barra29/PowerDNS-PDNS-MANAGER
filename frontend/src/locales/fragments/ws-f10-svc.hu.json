@@ -1,0 +1,8 @@
+{
+  "set": {
+    "audit.actions.USER_ROLE_SYNC": "Szerepkör átvéve a csoportokból",
+    "settings.sso.allowedGroupsHint": "Teljes csoport-DN, pl. CN=pdns-admins,OU=Groups,DC=example,DC=com",
+    "settings.sso.allowedGroupsHintOidc": "Csoportnév vagy Keycloak-útvonal, pl. pdns-admins vagy /pdns-admins"
+  },
+  "remove": []
+}

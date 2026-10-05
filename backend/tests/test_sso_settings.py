@@ -580,6 +580,19 @@ def test_oidc_ready_without_secret_for_method_none(db):
     assert ss.oidc_ready(load(db))
 
 
+def test_secret_keys_are_f5_secret_settings():
+    assert ss.SECRET_KEYS <= secret_store.SECRET_SETTING_KEYS
+    assert set(ss.ALL_KEYS) >= ss.SECRET_KEYS
+
+
+def test_settings_error_is_http_exception():
+    from fastapi import HTTPException
+
+    err = SsoSettingsError(422, "Text")
+    assert isinstance(err, HTTPException) and err.status_code == 422 and err.detail == "Text"
+    assert str(err) == "Text"
+
+
 def test_policy_from(db):
     put(db, **BASE)
     upd(db, oidc={"allowed_groups": ["a"], "allowed_email_domains": ["example.com"], "role_mode": "promote",
