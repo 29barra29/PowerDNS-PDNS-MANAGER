@@ -843,8 +843,9 @@ def test_user_delete_removes_deliveries():
 # --------------------------------------------------------------------------- Welle-1-Integration (F2F3)
 @pytest.mark.wave_integration
 async def test_access_revocation_cancels_and_worker_accepts(transport):
-    """[S9] ``access_revocation.revoke_all`` (WS-F2F3) deaktiviert die Webhooks und setzt ``queued`` -> ``cancelled``;
-    der Worker sendet nichts mehr, ``failed`` wird beim naechsten Versuch als ``webhook_inactive`` verworfen."""
+    """[S9] ``access_revocation.revoke_all`` (WS-F2F3) deaktiviert die Webhooks und setzt ``queued`` und ``failed``
+    -> ``cancelled`` (Abweichung 3 von WS-F2F3: ``failed`` wartet nur auf Wiederholung); der Worker fasst
+    ``cancelled`` nicht mehr an und sendet nichts."""
     from app.core.database import async_session
     from app.models.models import Webhook
     from app.services import access_revocation
@@ -858,8 +859,8 @@ async def test_access_revocation_cancels_and_worker_accepts(transport):
         await access_revocation.revoke_all(s, uid, reason="test")
         await s.commit()
     assert (await _get(Webhook, hid)).is_active is False
-    assert await WebhookWorker().run_once() == 1  # nur die failed-Zeile
+    assert await WebhookWorker().run_once() == 0  # nichts mehr offen
     rows = {r.id: r for r in await _rows(webhook_id=hid)}
-    assert rows[queued].status == "cancelled"
-    assert (rows[failed].status, rows[failed].last_error_code) == ("dead", "webhook_inactive")
+    for rid in (queued, failed):
+        assert (rows[rid].status, rows[rid].last_error_code) == ("cancelled", "webhook_inactive")
     assert transport["requests"] == []
