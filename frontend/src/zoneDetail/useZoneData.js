@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import api from '../api'
+import { normalizeRecordName } from '../lib/dnsName.js'
 import { fanoutSummary, formatFanoutErrors, formatFanoutWarnings } from '../lib/fanout.js'
+import { rrsetValueCount, truncateValue } from '../lib/recordContent.js'
 
-// Daten und Handler der Zonenansicht (Plan B.14). Verhalten wie 2.4.1 (ZoneDetailPage), mit drei Aenderungen:
+// Daten und Handler der Zonenansicht (Plan B.14). Verhalten wie 2.4.1 (ZoneDetailPage), mit diesen Aenderungen:
 //  - loadZone laedt Records und Zonen-Metadaten parallel (F8-F08); DNSSEC-Daten laedt der DNSSEC-Abschnitt selbst
 //    ueber subscribeZoneLoaded (F4-B ersetzt ihn, ohne Shell oder Hook anzufassen).
-//  - handleDelete(record, extra?) wertet das Fan-out-Ergebnis aus (lib/fanout.js), wie Anlegen/Aendern.
-//  - nicht geladene Server ('skipped (not loaded: ...)') erscheinen als gelbe Warnung [D4].
+//  - handleDelete(record, extra?) fragt mit dem konkreten Wert nach (letzter Wert des RRsets = ganzer Eintrag) und
+//    wertet das Fan-out-Ergebnis aus (lib/fanout.js), wie Anlegen/Aendern (F8-F09).
+//  - Peer-Fehler erscheinen rot als zoneDetail.fanoutPartialError, nicht geladene Server
+//    ('skipped (not loaded: ...)') als gelbe Warnung [D4].
+//  - resolveName normalisiert wie der Record-Dialog (lib/dnsName.js, F8-F05).
+// TTL (F01) und disabled (F07) setzt der Record-Dialog (RecordFormModal) aus dem Record der Anfrage.
 // Die Schnittstelle ist in zoneDetailContext.js beschrieben.
 export default function useZoneData(server, zoneId) {
     const { t } = useTranslation()
@@ -137,21 +143,15 @@ export default function useZoneData(server, zoneId) {
     const reportFanout = useCallback((details) => {
         const summary = fanoutSummary(details)
         // Wie 2.4.1: Teilfehler auf Peer-Servern nicht verschlucken (Primary war ok, Peer nicht).
-        if (summary.hasErrors) setError(formatFanoutErrors(summary.errors))
+        if (summary.hasErrors) setError(t('zoneDetail.fanoutPartialError', { errors: formatFanoutErrors(summary.errors) }))
         setWarning(summary.hasWarnings
             ? t('zoneDetail.fanoutNotLoaded', { servers: formatFanoutWarnings(summary.warnings) })
             : '')
         return summary
     }, [t])
 
-    const resolveName = useCallback((name) => {
-        let fqdn
-        if (name === '@') fqdn = zoneName
-        else if (!name.includes(zoneName)) fqdn = `${name}.${zoneName}`
-        else fqdn = name
-        if (!fqdn.endsWith('.')) fqdn = fqdn + '.'
-        return fqdn
-    }, [zoneName])
+    /** Relativer oder absoluter Name -> FQDN mit Punkt (klein); ungueltige Eingaben -> '' (Fehlertext: Dialog). */
+    const resolveName = useCallback((name) => normalizeRecordName(name, zoneName).fqdn || '', [zoneName])
 
     const relativeName = useCallback((fqdn) => {
         let name = String(fqdn || '').replace(/\.$/, '')
@@ -178,7 +178,14 @@ export default function useZoneData(server, zoneId) {
      */
     const handleDelete = useCallback(async (record, extra = null) => {
         const { name, type, content } = record
-        if (!window.confirm(t('zoneDetail.deleteRecordConfirm', { name, type }))) return null
+        // Letzter Wert des RRsets -> der ganze Eintrag verschwindet; die Rueckfrage sagt das ausdruecklich (F8-F09)
+        const isLast = rrsetValueCount(records, name, type) <= 1
+        const question = t(isLast ? 'zoneDetail.deleteLastValueConfirm' : 'zoneDetail.deleteValueConfirm', {
+            value: truncateValue(content, 80),
+            name: String(name || '').replace(/\.$/, ''),
+            type,
+        })
+        if (!window.confirm(question)) return null
         try {
             const res = await api.deleteRecord(server, zoneId, { ...(extra || {}), name, type, content })
             reportFanout(res?.details)
@@ -189,7 +196,7 @@ export default function useZoneData(server, zoneId) {
             setError(err.message)
             return null
         }
-    }, [t, server, zoneId, reportFanout, loadZone])
+    }, [t, server, zoneId, records, reportFanout, loadZone])
 
     return {
         server, zoneId, zoneName, zoneKey,

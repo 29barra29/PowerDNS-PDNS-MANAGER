@@ -2,7 +2,9 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Pencil, Copy, Globe } from 'lucide-react'
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
 import { slotApplies } from '../lib/slots.js'
+import { formatTtl } from '../lib/ttl.js'
 import { useZoneDetail } from './zoneDetailContext'
+import { RECORD_TYPES } from './zoneDetailModel'
 
 // Record-Liste der Zonenansicht (2.4.1: eine Karte je Typ, Sortierung nach ALL_RECORD_TYPE_KEYS) mit Leer-Zustand.
 // Slots (Plan B.14):
@@ -10,6 +12,8 @@ import { useZoneDetail } from './zoneDetailContext'
 //                    Default-Komponente ({ record, ctx }); der erste passende ersetzt die Wert-Zelle.
 //   - Zeilen-Aktionen row-actions/NN-*.action.jsx (README dort); werden hinter Stift/Klon/Papierkorb gerendert.
 // Die Slot-Listen kommen ueber ctx.slots (keine Import-Schleife ueber ZoneDetailSlots.js).
+// F8: Badge fuer deaktivierte Records (F07), Klonen nur fuer Typen mit eigenem Editor (F04), Loeschschutz nur fuer
+// SOA und Apex-NS – Delegations-NS sind loeschbar (F06).
 
 // Breite der Aktionsspalte: 2.4.1 w-28 fuer drei Icons, je weiterer Aktion etwas mehr.
 function actionColumnWidth(extraCount) {
@@ -21,7 +25,7 @@ function actionColumnWidth(extraCount) {
 export default function RecordsTable() {
     const { t } = useTranslation()
     const ctx = useZoneDetail()
-    const { records, canEdit, openAdd, openEdit, openClone, handleDelete, slots } = ctx
+    const { records, canEdit, openAdd, openEdit, openClone, handleDelete, slots, zoneKey } = ctx
     const rowActions = slots?.rowActions || []
     const valueRenderers = slots?.valueRenderers || []
 
@@ -56,6 +60,13 @@ export default function RecordsTable() {
     })
     const actionsWidth = actionColumnWidth(rowActions.length)
 
+    // SOA und Apex-NS sind nicht loeschbar; Delegationen (sub NS) schon
+    function canDeleteRecord(r) {
+        if (r.type === 'SOA') return false
+        if (r.type === 'NS' && String(r.name || '').toLowerCase() === zoneKey) return false
+        return true
+    }
+
     function renderValue(r) {
         const renderer = valueRenderers.find((entry) => slotApplies(entry, [r, ctx]))
         if (!renderer) return r.content
@@ -83,10 +94,17 @@ export default function RecordsTable() {
                         </thead>
                         <tbody>
                             {grouped[type].map((r) => (
-                                <tr key={`${r.name}:${r.type}:${r.content}`} className="border-b border-border/30 hover:bg-bg-hover/30 transition-colors">
-                                    <td className="p-3 font-mono text-xs text-text-primary">{r.name.replace(/\.$/, '')}</td>
+                                <tr key={`${r.name}:${r.type}:${r.content}`} className={`border-b border-border/30 hover:bg-bg-hover/30 transition-colors ${r.disabled ? 'opacity-60' : ''}`}>
+                                    <td className="p-3 font-mono text-xs text-text-primary">
+                                        <span className="break-all">{r.name.replace(/\.$/, '')}</span>
+                                        {r.disabled && (
+                                            <span className="ml-2 inline-block align-middle font-sans text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">
+                                                {t('zoneDetail.disabledBadge')}
+                                            </span>
+                                        )}
+                                    </td>
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{renderValue(r)}</td>
-                                    <td className="p-3 text-text-muted text-xs">{r.ttl}</td>
+                                    <td className="p-3 text-text-muted text-xs" title={Number.isFinite(Number(r.ttl)) ? formatTtl(Number(r.ttl), t) : undefined}>{r.ttl}</td>
                                     <td className="p-3 text-right whitespace-nowrap">
                                         <button
                                             onClick={() => openEdit(r)}
@@ -96,7 +114,7 @@ export default function RecordsTable() {
                                         >
                                             <Pencil className="w-3.5 h-3.5" />
                                         </button>
-                                        {type !== 'SOA' && (
+                                        {type !== 'SOA' && RECORD_TYPES[type] && (
                                             <button
                                                 onClick={() => openClone(r)}
                                                 disabled={!canEdit}
@@ -106,7 +124,7 @@ export default function RecordsTable() {
                                                 <Copy className="w-3.5 h-3.5" />
                                             </button>
                                         )}
-                                        {type !== 'SOA' && type !== 'NS' && (
+                                        {canDeleteRecord(r) && (
                                             <button
                                                 onClick={() => handleDelete(r)}
                                                 disabled={!canEdit}

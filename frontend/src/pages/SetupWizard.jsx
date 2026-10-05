@@ -11,8 +11,11 @@ import {
   Shield,
   Loader2
 } from 'lucide-react';
-import api from '../api';
+import api, { extractErrorMessage } from '../api';
 import LanguageDropdown from '../components/LanguageDropdown';
+
+// Erlaubte Zeichen im Benutzernamen (wie RegisterPublic/Setup im Backend: ^[A-Za-z0-9._-]+$)
+const USERNAME_RE = /^[A-Za-z0-9._-]+$/;
 
 export default function SetupWizard() {
   const { t } = useTranslation();
@@ -107,8 +110,9 @@ export default function SetupWizard() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || t('setup.registerFailed'));
+        // 422-Antworten liefern detail als Liste - extractErrorMessage macht daraus lesbaren Text (F8-J01)
+        const payload = await res.json().catch(() => null);
+        throw new Error(extractErrorMessage(payload, res.statusText, res.status, t('setup.registerFailed')));
       }
 
       const data = await res.json();
@@ -121,13 +125,17 @@ export default function SetupWizard() {
       // Hier nur eine Notiz im UI – wir reichen die Eingaben nicht weiter, weil der Setup-Endpoint sie nicht persistiert hätte.
       if (emailConfig.enabled) {
         try {
+          // Feldnamen wie PUT /settings/smtp (SmtpSettings); 2.4.1 schickte smtp_*-Felder, die das Backend
+          // ignorierte - die Eingaben gingen verloren.
+          const port = Number(emailConfig.smtp_port) || 587;
           await api.updateSmtpSettings({
-            smtp_host: emailConfig.smtp_host,
-            smtp_port: emailConfig.smtp_port,
-            smtp_user: emailConfig.smtp_user,
-            smtp_password: emailConfig.smtp_password,
-            smtp_from: emailConfig.smtp_from || emailConfig.smtp_user,
-            smtp_use_tls: true,
+            host: emailConfig.smtp_host,
+            port,
+            username: emailConfig.smtp_user,
+            password: emailConfig.smtp_password,
+            from_email: emailConfig.smtp_from || emailConfig.smtp_user,
+            encryption: port === 465 ? 'ssl' : 'starttls',
+            enabled: true,
           });
         } catch (smtpErr) {
           // SMTP-Setup-Fehler ist nicht kritisch – Admin kann das später manuell korrigieren.
@@ -171,7 +179,7 @@ export default function SetupWizard() {
                 <Shield className="w-8 h-8 text-white" />
               </div>
             ) : (
-              <img src={appInfo.app_logo_url} alt="App logo" className="w-16 h-16 rounded-2xl object-contain bg-bg-secondary mx-auto mb-4 shadow-lg shadow-accent/20" />
+              <img src={appInfo.app_logo_url} alt={t('common.appLogoAlt')} className="w-16 h-16 rounded-2xl object-contain bg-bg-secondary mx-auto mb-4 shadow-lg shadow-accent/20" />
             )}
             <h1 className="text-3xl font-bold text-text-primary mb-2">
               {appInfo.app_name || t('setup.welcomeTitle')}
@@ -224,6 +232,9 @@ export default function SetupWizard() {
                       value={userData.username}
                       onChange={(e) => setUserData({...userData, username: e.target.value})}
                       placeholder="admin"
+                      pattern="[A-Za-z0-9._\-]+"
+                      title={t('setup.usernamePatternHint')}
+                      autoComplete="username"
                       required
                     />
                   </div>
@@ -278,7 +289,15 @@ export default function SetupWizard() {
 
                 <div className="mt-8 flex justify-end">
                   <button
-                    onClick={() => setStep(2)}
+                    onClick={() => {
+                      // Benutzername frueh pruefen statt erst beim Absenden in Schritt 3 (F8-J01)
+                      if (!USERNAME_RE.test(userData.username.trim())) {
+                        setError(t('setup.usernamePatternHint'));
+                        return;
+                      }
+                      setError('');
+                      setStep(2);
+                    }}
                     disabled={!userData.username || !userData.email || !userData.password}
                     className="px-6 py-2.5 bg-gradient-to-r from-accent to-purple-600 hover:from-accent-hover hover:to-purple-700 text-white rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
