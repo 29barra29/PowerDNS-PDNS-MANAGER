@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Key, Loader2, Shield, User, Globe, X, Check, AlertCircle } from 'lucide-react'
 import api from '../api'
+import UserBadges from '../components/users/UserBadges'
 
 export default function UsersPage() {
     const { t } = useTranslation()
@@ -250,6 +251,7 @@ export default function UsersPage() {
                                     {!u.is_active && (
                                         <span className="text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/30">{t('users.deactivated')}</span>
                                     )}
+                                    <UserBadges user={u} />
                                 </div>
                                 <p className="text-sm text-text-muted">@{u.username}</p>
 

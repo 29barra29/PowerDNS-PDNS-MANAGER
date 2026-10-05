@@ -1,0 +1,18 @@
+{
+  "reason": "W0-INT-FE2: Fachbegriffe/Abkuerzungen, die in der jeweiligen Sprache wie im Englischen lauten - DNSSEC und ACME (Protokollnamen), 'Records' (Tab, Wert laut F7 §6.6), 'Zone', 'Record', 'Server' im Deutschen, 'Server' (bs/sr) und 'ACME token' (bs/hr/sr) wie in den bestehenden Uebersetzungen (audit.server, settings.integrations.panelTokens)",
+  "global": [
+    "audit.resourceTypes.dnssec_key",
+    "audit.resourceTypes.acme"
+  ],
+  "perLanguage": {
+    "de": [
+      "zoneDetail.tabRecords",
+      "audit.resourceTypes.zone",
+      "audit.resourceTypes.record",
+      "audit.resourceTypes.server_config"
+    ],
+    "bs": ["audit.resourceTypes.server_config", "audit.resourceTypes.acme_token"],
+    "sr": ["audit.resourceTypes.server_config", "audit.resourceTypes.acme_token"],
+    "hr": ["audit.resourceTypes.acme_token"]
+  }
+}
