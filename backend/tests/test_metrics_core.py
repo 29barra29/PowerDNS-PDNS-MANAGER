@@ -216,3 +216,184 @@ async def test_metrics_failure_never_breaks_request(mock_transport, monkeypatch)
     monkeypatch.setattr(prom.PDNS_API_REQUESTS, "labels", broken)
     c = PowerDNSClient("s3", "http://pdns.invalid:8081", "k")
     assert await c.list_zones() == []
+
+
+# =============================================================== metrics_runtime (F13 5.5)
+import logging  # noqa: E402
+
+from app.services import metrics_runtime as mr  # noqa: E402
+from app.services.metrics_runtime import MetricsConfig  # noqa: E402
+from fakes.pdns import FakePowerDNSClient, make_zone  # noqa: E402
+
+
+@pytest.fixture
+def rt(monkeypatch):
+    mr.reset_for_tests()
+    state = {"env": None, "raw_env": None, "vals": {}, "db_error": None, "reads": 0, "t": 1000.0,
+             "db_probe": (True, 3)}
+
+    async def read_db():
+        state["reads"] += 1
+        if state["db_error"]:
+            raise state["db_error"]
+        return dict(state["vals"])
+
+    async def db_probe():
+        return state["db_probe"]
+
+    monkeypatch.setattr(mr, "_env_token", lambda: state["env"])
+    monkeypatch.setattr(mr, "_raw_env_token", lambda: state["raw_env"])
+    monkeypatch.setattr(mr, "_read_db_settings", read_db)
+    monkeypatch.setattr(mr, "_db_probe", db_probe)
+    monkeypatch.setattr(mr, "_now", lambda: state["t"])
+    yield state
+    mr.reset_for_tests()
+
+
+async def test_config_disabled_by_default(rt):
+    cfg = await mr.get_metrics_config()
+    assert cfg == MetricsConfig(False, None, None, False, True)
+
+
+async def test_config_db_enabled_with_token(rt):
+    rt["vals"] = {"metrics_enabled": "true", "metrics_token": " t" * 1 + "x" * 40, "metrics_pdns_probe": "false"}
+    cfg = await mr.get_metrics_config()
+    assert cfg.effective_enabled and cfg.source == "db" and cfg.token == ("t" + "x" * 40) and cfg.pdns_probe is False
+
+
+async def test_config_enabled_without_token_stays_off(rt):
+    rt["vals"] = {"metrics_enabled": "true", "metrics_token": None}
+    cfg = await mr.get_metrics_config()
+    assert cfg.effective_enabled is False and cfg.db_enabled is True
+
+
+async def test_env_token_overrides_db(rt):
+    """M5: Env-Token aktiviert /metrics auch ohne DB."""
+    rt["env"] = "e" * 30
+    rt["vals"] = {"metrics_enabled": "false"}
+    cfg = await mr.get_metrics_config()
+    assert cfg.effective_enabled and cfg.source == "env" and cfg.token == "e" * 30
+    mr.invalidate_config_cache()
+    rt["db_error"] = RuntimeError("db weg")
+    cfg = await mr.get_metrics_config()
+    assert cfg == MetricsConfig(True, "e" * 30, "env", False, True)
+
+
+async def test_config_cache_and_stale_and_unavailable(rt):
+    rt["vals"] = {"metrics_enabled": "true", "metrics_token": "k" * 40}
+    first = await mr.get_metrics_config()
+    rt["t"] += 5
+    assert await mr.get_metrics_config() is first and rt["reads"] == 1
+    rt["t"] += 6
+    rt["db_error"] = RuntimeError("db weg")
+    assert await mr.get_metrics_config() is first  # Altwert bei DB-Fehler
+    mr.invalidate_config_cache()
+    with pytest.raises(mr.ConfigUnavailable):
+        await mr.get_metrics_config()
+    rt["db_error"] = None
+    await mr.get_metrics_config(force=True)
+    assert rt["reads"] == 4
+
+
+async def test_unreadable_token_logs_once(rt, monkeypatch, caplog):
+    class Unreadable(str):
+        pass
+
+    monkeypatch.setattr(mr, "_is_unreadable", lambda v: isinstance(v, Unreadable))
+    rt["vals"] = {"metrics_enabled": "true", "metrics_token": Unreadable("")}
+    with caplog.at_level(logging.ERROR, logger=mr.logger.name):
+        assert (await mr.get_metrics_config()).effective_enabled is False
+        await mr.get_metrics_config(force=True)
+    assert len([r for r in caplog.records if "nicht entschluesselbar" in r.getMessage()]) == 1
+
+
+@pytest.mark.parametrize("header,ok", [
+    (None, False), ("", False), ("Bearer falsch", False), ("Basic dGVzdA==", False),
+    ("Bearer " + "t" * 40, True), ("bearer " + "t" * 40 + "  ", True),
+])
+def test_check_bearer(header, ok):
+    cfg = MetricsConfig(True, "t" * 40, "db", True, True)
+    assert mr.check_bearer(header, cfg) is ok
+    assert mr.check_bearer("Bearer x", MetricsConfig(False, None, None, False, True)) is False
+
+
+def test_log_auth_failure_rate_limited_and_bounded(rt, caplog, monkeypatch):
+    with caplog.at_level(logging.WARNING, logger=mr.logger.name):
+        mr.log_auth_failure("192.0.2.1")
+        mr.log_auth_failure("192.0.2.1")
+        rt["t"] += 61
+        mr.log_auth_failure("192.0.2.1")
+    assert len([r for r in caplog.records if "192.0.2.1" in r.getMessage()]) == 2
+    monkeypatch.setattr(mr, "AUTH_FAIL_MAX_IPS", 3)
+    for i in range(10):
+        mr.log_auth_failure(f"198.51.100.{i}")
+    assert len(mr._auth_fail_log) <= 3  # noqa: SLF001
+
+
+def test_log_env_token_state(rt, caplog):
+    rt["raw_env"] = "kurz"
+    with caplog.at_level(logging.WARNING, logger=mr.logger.name):
+        mr.log_env_token_state()
+        mr.log_env_token_state()
+    msgs = [r.getMessage() for r in caplog.records if "METRICS_TOKEN" in r.getMessage()]
+    assert msgs == ["METRICS_TOKEN ist kürzer als 24 Zeichen und wird ignoriert – /metrics bleibt über das Panel steuerbar."]
+    mr.reset_for_tests()
+    caplog.clear()
+    rt["raw_env"] = "x" * 30
+    mr.log_env_token_state()
+    assert not [r for r in caplog.records if "METRICS_TOKEN" in r.getMessage()]
+
+
+@pytest.fixture
+def gauge_servers(monkeypatch):
+    up = FakePowerDNSClient("g-up", [make_zone("a.example."), make_zone("b.example.")])
+    down = FakePowerDNSClient("g-down")
+
+    async def broken(*a, **k):
+        raise PowerDNSAPIError(503, "Cannot connect", "g-down")
+
+    down.get_server_info = broken
+    monkeypatch.setattr(pdns_client.pdns_manager, "clients", {"g-up": up, "g-down": down})
+    return up, down
+
+
+async def test_refresh_runtime_gauges(rt, gauge_servers):
+    up, down = gauge_servers
+    cfg = MetricsConfig(True, "t" * 40, "db", True, True)
+    await mr.refresh_runtime_gauges(cfg)
+    g = prom.REGISTRY.get_sample_value
+    assert g("pdnsmgr_pdns_servers_configured") == 2
+    assert g("pdnsmgr_database_up") == 1
+    assert g("pdnsmgr_webhook_deliveries_pending") == 3
+    assert g("pdnsmgr_pdns_server_up", {"server": "g-up"}) == 1
+    assert g("pdnsmgr_pdns_server_up", {"server": "g-down"}) == 0
+    assert g("pdnsmgr_pdns_zones", {"server": "g-up"}) == 2
+    assert g("pdnsmgr_pdns_zones", {"server": "g-down"}) is None
+    assert [c[4] for c in up.calls if c[1] == ""] == [mr.PROBE_TIMEOUT]
+    assert [c[4] for c in up.calls if c[1] == "/zones"] == [mr.ZONES_TIMEOUT]
+
+    # innerhalb der TTLs keine neuen PowerDNS-Abfragen, DB-Werte aber frisch
+    rt["db_probe"] = (False, None)
+    rt["t"] += 30
+    await mr.refresh_runtime_gauges(cfg)
+    assert up.count("GET", "") == 2  # 1x server info + 1x zones
+    assert g("pdnsmgr_database_up") == 0
+    assert g("pdnsmgr_webhook_deliveries_pending") == 3  # unveraendert, Tabelle nicht lesbar
+    rt["t"] += 31  # UP_TTL abgelaufen, ZONES_TTL nicht
+    await mr.refresh_runtime_gauges(cfg)
+    assert [c[1] for c in up.calls].count("") == 2 and [c[1] for c in up.calls].count("/zones") == 1
+
+
+async def test_refresh_without_probe(rt, gauge_servers):
+    up, _ = gauge_servers
+    await mr.refresh_runtime_gauges(MetricsConfig(True, "t", "db", True, False))
+    assert up.calls == []
+    assert prom.REGISTRY.get_sample_value("pdnsmgr_pdns_servers_configured") == 2
+
+
+async def test_refresh_never_raises(rt, monkeypatch):
+    def boom():
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(pdns_client.pdns_manager, "get_all_clients", boom)
+    await mr.refresh_runtime_gauges(MetricsConfig(True, "t", "db", True, True))
