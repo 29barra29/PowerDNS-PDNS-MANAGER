@@ -9,7 +9,7 @@ const MIN_LENGTH = 8
 /*
  * Erzwungener Passwortwechsel (F3 §2.6/§6.3). Wird von ProtectedRoute statt des Layouts gerendert, solange
  * `must_change_password` gesetzt ist – es laufen keine Seiten-Requests. Nach Erfolg: getMe() und onDone(user).
- * Minimal lauffaehige Fassung aus Welle 0b; F2F3 verfeinert.
+ * Fehler erkennt der Dialog am Maschinencode der Antwort (`current_password_wrong`, `password_unchanged`).
  */
 export default function ForcePasswordChange({ onDone }) {
     const { t } = useTranslation()
@@ -34,9 +34,13 @@ export default function ForcePasswordChange({ onDone }) {
             api.setUser(user)
             onDone?.(user)
         } catch (err) {
-            setError(err?.message || t('apiErrors.requestFailed'))
+            if (err?.name === 'AbortError') return
+            // Backend-Codes (routers/auth.py change_password): Text uebersetzt anzeigen, nicht per Regex raten
+            if (err?.code === 'password_unchanged') setError(t('forcePassword.mustDiffer'))
+            else if (err?.code === 'current_password_wrong') setError(t('forcePassword.currentWrong'))
+            else setError(err?.message || t('apiErrors.requestFailed'))
             // Falsches aktuelles Passwort: nur dieses Feld leeren (F3 §2.6 Nr. 5)
-            if (err?.status === 400 && /aktuell|current/i.test(err?.message || '')) setCurrent('')
+            if (err?.code === 'current_password_wrong') setCurrent('')
         } finally {
             setBusy(false)
         }

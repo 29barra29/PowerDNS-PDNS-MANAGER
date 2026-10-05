@@ -4,8 +4,13 @@ Zonen anlegen/loeschen/importieren sind Admin-Funktionen (``get_admin_user``, To
 und pruefen zusaetzlich den Zonen-Scope eines Panel-Tokens (``assert_token_scope``, F14 5.6). Erfolgs-Audits
 laufen in der Request-Session (``DbWrite``: Commit vor der Antwort), Webhook-Ereignisse ueber die Outbox
 (``await enqueue_event``), danach wird der Zonen-Index fuer DynDNS/PTR verworfen (``zone_index.invalidate``).
+
+NOTIFY und Export (F2) werden auditiert (``ZONE_NOTIFY``, ``ZONE_EXPORT``); PowerDNS-Fehler kommen als lesbare,
+deutsche Texte zurueck. Nach dem Anlegen setzt ``_update_zone_soa_and_dnssec`` nur mname/rname des SOA (F0, [D13]).
 """
 import logging
+import re
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -23,7 +28,7 @@ from app.core.auth import (
     is_effective_admin,
 )
 from app.core.database import DbRead, DbWrite
-from app.services import zone_index
+from app.services import fanout, zone_index
 from app.services.audit import write_audit
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
 from app.schemas.dns import (
@@ -115,25 +120,58 @@ async def get_zone(
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
+# Fallback-Timer, falls der gelesene SOA nicht parsebar ist (Werte wie 2.4.1 / PowerDNS-Default)
+_SOA_DEFAULT_TIMERS = ("10800", "3600", "604800", "3600")
+
+
+def _abs_name(name: str) -> str:
+    n = (name or "").strip()
+    return n if n.endswith(".") else n + "."
+
+
+def build_created_zone_soa(current_content: Optional[str], zone_name: str, nameservers, *, today=None) -> Optional[str]:
+    """SOA-Inhalt nach dem Anlegen einer Zone (F0, Bauplan [D13]).
+
+    - mname = erster Nameserver, rname = ``hostmaster.<zone>.`` (2.4.1 setzte bei >= 2 Nameservern faelschlich
+      den zweiten Nameserver als Hostmaster-Mailbox).
+    - Serial des gelesenen SOA bleibt erhalten (PowerDNS hat ihn per SOA-EDIT-API ggf. schon gesetzt); nur ein
+      Serial ``0`` (oder ein unlesbarer SOA) wird zu ``YYYYMMDD01``.
+    - Refresh/Retry/Expire/Minimum bleiben wie gelesen.
+    ``None``, wenn keine Nameserver angegeben sind (dann bleibt der SOA von PowerDNS unveraendert).
+    """
+    ns = [n for n in (nameservers or []) if str(n or "").strip()]
+    if not ns:
+        return None
+    mname = _abs_name(str(ns[0]))
+    rname = f"hostmaster.{zone_name.strip().rstrip('.').lower()}."
+    parts = (current_content or "").split()
+    serial = 0
+    timers = _SOA_DEFAULT_TIMERS
+    if len(parts) >= 7:
+        try:
+            serial = int(parts[2])
+        except ValueError:
+            serial = 0
+        timers = tuple(parts[3:7])
+    if serial <= 0:
+        serial = int((today or datetime.now()).strftime("%Y%m%d") + "01")
+    return f"{mname} {rname} {serial} {' '.join(timers)}"
+
+
 async def _update_zone_soa_and_dnssec(client, server_name: str, zone_name: str, zone_data: ZoneCreate):
-    """Update SOA and optionally enable DNSSEC after zone creation. Logs warnings on failure."""
-    from datetime import datetime as dt
+    """Update SOA (mname/rname, F0) and optionally enable DNSSEC after zone creation. Logs warnings on failure."""
     try:
         zone_details = await client.get_zone(zone_name)
-        soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr["type"] == "SOA"), None)
-        if soa_rrset and len(zone_data.nameservers) > 0:
-            primary_ns = zone_data.nameservers[0]
-            if not primary_ns.endswith('.'):
-                primary_ns = primary_ns + '.'
-            if len(zone_data.nameservers) > 1:
-                rname = zone_data.nameservers[1]
-                if not rname.endswith('.'):
-                    rname = rname + '.'
-            else:
-                rname = f"hostmaster.{zone_name.rstrip('.')}."
-            serial = dt.now().strftime("%Y%m%d") + "01"
-            new_soa_content = f"{primary_ns} {rname} {serial} 10800 3600 604800 3600"
-            await client.add_record(zone_id=zone_name, name=zone_name, record_type="SOA", content=[new_soa_content], ttl=3600)
+        soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr.get("type") == "SOA"), None)
+        if soa_rrset:
+            records = soa_rrset.get("records") or []
+            current = records[0].get("content") if records else None
+            new_soa_content = build_created_zone_soa(current, zone_name, zone_data.nameservers)
+            if new_soa_content and new_soa_content != current:
+                await client.add_record(
+                    zone_id=zone_name, name=soa_rrset.get("name") or zone_name, record_type="SOA",
+                    content=[new_soa_content], ttl=int(soa_rrset.get("ttl") or 3600),
+                )
     except Exception as e:
         logger.warning(f"Failed to update SOA for {zone_name} on {server_name}: {e}")
     if zone_data.enable_dnssec:
@@ -156,8 +194,25 @@ async def create_zone(
 ):
     """Create a new zone (Admin only). Only servers with allow_writes=True are used."""
     assert_token_scope(zone_data.name, write=True)
+    results = {}
     if zone_data.servers:
-        target_servers = zone_data.servers
+        # F0: auch explizit gewaehlte Server muessen Schreiben erlauben ("Auf diesem Server speichern")
+        aw = await fanout.allow_writes_map(db)
+        requested = list(dict.fromkeys(zone_data.servers))
+        target_servers = [name for name in requested if aw.get(name, True)]
+        read_only = [name for name in requested if not aw.get(name, True)]
+        if read_only and not target_servers:
+            if len(read_only) == 1:
+                raise fanout.read_only_error(read_only[0])
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Die gewählten Server ({', '.join(read_only)}) sind auf „Speichern: Nein“ gesetzt. "
+                    "In Einstellungen → DNS-Server „Auf diesem Server speichern“ aktivieren."
+                ),
+            )
+        for name in read_only:
+            results[name] = "skipped (read-only)"
     else:
         col = _allow_writes_column()
         if col is not None:
@@ -170,7 +225,6 @@ async def create_zone(
             status_code=400,
             detail="Kein DNS-Server mit Schreibrechten. In Einstellungen → DNS-Server bei mindestens einem Server „Auf diesem Server speichern“ aktivieren."
         )
-    results = {}
     zone_name = zone_data.name
     payload = {
         "name": zone_name,
@@ -351,6 +405,29 @@ async def delete_zone(
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
+# Gleicher Text wie main.pdns_error_handler (keine PowerDNS-Interna bei 5xx)
+_PDNS_UNAVAILABLE = "PowerDNS-Server ist derzeit nicht erreichbar. Bitte Server-Konfiguration und Erreichbarkeit prüfen."
+_NOTIFY_HINT = (
+    "NOTIFY funktioniert nur für Zonen vom Typ Master oder Producer (Slave nur mit secondary-do-renotify) "
+    "und wenn auf dem PowerDNS-Server primary=yes gesetzt ist."
+)
+
+
+def _export_filename(zone_norm: str) -> str:
+    """Dateiname fuer den Zonen-Export: ``<zone ohne Punkt>.txt``, nur ``[a-z0-9._-]`` (Rest -> ``_``)."""
+    base = (zone_norm or "").rstrip(".") or "zone"
+    return re.sub(r"[^a-z0-9._-]", "_", base.lower()) + ".txt"
+
+
+def _export_content(raw) -> str:
+    """PowerDNS liefert den Export als Text; aeltere/abweichende Versionen als ``{"zone": "..."}``."""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict) and isinstance(raw.get("zone"), str):
+        return raw["zone"]
+    return ""
+
+
 @router.post("/{server_name}/{zone_id:path}/notify", response_model=MessageResponse)
 async def notify_zone(
     server_name: str,
@@ -358,40 +435,77 @@ async def notify_zone(
     db: DbWrite,
     current_user: User = Depends(get_current_user),
 ):
-    """Send NOTIFY to all slaves for a zone (Auth + Zone-ACL)."""
+    """DNS NOTIFY fuer die Zone vom angegebenen Server aus (Auth + Zone-ACL mit Schreibrecht, F2 3.1.1).
+
+    Kein Fan-out (F3 E3) und keine allow_writes-Pruefung (E4: NOTIFY aendert keine Daten). Auditiert als
+    ``ZONE_NOTIFY`` (Fehler detached mit ``status_code``).
+    """
     await assert_zone_access(db, current_user, zone_id, write=True)
+    zone_norm = _normalize_zone_name(zone_id)
     try:
         client = pdns_manager.get_client(server_name)
-        await client.notify_zone(zone_id)
-        return MessageResponse(message=f"NOTIFY sent for zone '{zone_id}' on '{server_name}'")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    try:
+        await client.notify_zone(zone_id)
     except PowerDNSAPIError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail)
+        msg = e.pdns_message
+        await _log_action(
+            db, "ZONE_NOTIFY", zone_norm, server_name,
+            details={"server": server_name, "status_code": e.status_code},
+            status="error", error_message=msg[:500], user_id=current_user.id,
+        )
+        if e.status_code in (400, 422):
+            raise HTTPException(status_code=422, detail=f"NOTIFY fehlgeschlagen: {msg}. {_NOTIFY_HINT}")
+        if e.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Zone '{zone_norm}' existiert auf '{server_name}' nicht")
+        if e.status_code >= 500:
+            raise HTTPException(status_code=e.status_code, detail=_PDNS_UNAVAILABLE)
+        raise HTTPException(status_code=e.status_code, detail=msg)
+    await _log_action(db, "ZONE_NOTIFY", zone_norm, server_name, details={"server": server_name},
+                      user_id=current_user.id)
+    return MessageResponse(
+        message=f"NOTIFY für Zone '{zone_norm}' auf '{server_name}' ausgelöst",
+        details={"server": server_name},
+    )
 
 
 @router.get("/{server_name}/{zone_id:path}/export")
 async def export_zone(
     server_name: str,
     zone_id: str,
-    db: DbRead,
+    db: DbWrite,
     current_user: User = Depends(get_current_user),
 ):
-    """Export a zone in BIND/AXFR format (Auth + Zone-ACL)."""
+    """Zone als BIND-Zonendatei (Auth + Zone-ACL, Leserecht genuegt; F2 3.1.2).
+
+    Antwort wie 2.4.1 plus ``filename``. Ein erfolgreicher Export ist ein vollstaendiger Datenabzug und wird als
+    ``ZONE_EXPORT`` auditiert (nur Groesse/Zeilen). ``DbWrite``, damit der Audit-Eintrag vor der Antwort committet ist.
+    """
     await assert_zone_access(db, current_user, zone_id)
+    zone_norm = _normalize_zone_name(zone_id)
     try:
         client = pdns_manager.get_client(server_name)
-        zonefile = await client.get_zone_axfr(zone_id)
-        return {
-            "zone": zone_id,
-            "server": server_name,
-            "format": "bind",
-            "content": zonefile,
-        }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    try:
+        content = _export_content(await client.get_zone_axfr(zone_id))
     except PowerDNSAPIError as e:
+        if e.status_code >= 500:
+            raise HTTPException(status_code=e.status_code, detail=_PDNS_UNAVAILABLE)
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+    await _log_action(
+        db, "ZONE_EXPORT", zone_norm, server_name,
+        details={"server": server_name, "bytes": len(content.encode("utf-8")), "lines": content.count("\n")},
+        user_id=current_user.id,
+    )
+    return {
+        "zone": zone_id,
+        "server": server_name,
+        "format": "bind",
+        "content": content,
+        "filename": _export_filename(zone_norm),
+    }
 
 
 @router.post("/import/preview")

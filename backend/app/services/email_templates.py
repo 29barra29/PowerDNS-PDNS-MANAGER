@@ -29,34 +29,88 @@ def pick_language(preferred: Optional[str], app_default: Optional[str]) -> str:
     return _DEFAULT_FALLBACK
 
 
-def password_reset(lang: str, display_name: str, reset_url: str) -> Tuple[str, str, str]:
-    """Liefert ``(subject, body_html, body_text)`` fuer die Passwort-Reset-Mail."""
+def _validity_de(valid_hours: int) -> str:
+    return "1 Stunde" if valid_hours == 1 else f"{valid_hours} Stunden"
+
+
+def _validity_en(valid_hours: int) -> str:
+    return "1 hour" if valid_hours == 1 else f"{valid_hours} hours"
+
+
+def password_reset(
+    lang: str,
+    display_name: str,
+    reset_url: str,
+    *,
+    valid_hours: int = 1,
+    admin_initiated: bool = False,
+) -> Tuple[str, str, str]:
+    """Liefert ``(subject, body_html, body_text)`` fuer die Passwort-Reset-Mail.
+
+    ``valid_hours``: Gueltigkeit des Links (Self-Service 1 h, Admin-Reset-Link 24 h, F3 E9).
+    ``admin_initiated``: Ein Administrator hat den Link angefordert (andere Einleitung, Hinweis an den Admin
+    statt "einfach ignorieren"). Der Default-Aufruf liefert exakt den Text von 2.4.1.
+    """
     name = html.escape(display_name or "")
     safe_url = html.escape(reset_url, quote=True)
+    valid_hours = max(1, int(valid_hours or 1))
+    default_call = valid_hours == 1 and not admin_initiated
     if lang == "de":
         subject = "Passwort zuruecksetzen - PDNS Manager"
+        validity = _validity_de(valid_hours)
+        if admin_initiated:
+            intro = "ein Administrator hat fuer dein Konto das Zuruecksetzen des Passworts angefordert."
+            ignore = "Wenn du damit nicht gerechnet hast, wende dich an deinen Administrator."
+        else:
+            intro = "du hast eine Zuruecksetzung deines Passworts angefordert."
+            ignore = "Falls du das nicht warst, kannst du diese E-Mail einfach ignorieren."
         body_html = (
             f"<p>Hallo {name},</p>"
-            f"<p>du hast eine Zuruecksetzung deines Passworts angefordert.</p>"
+            f"<p>{intro}</p>"
             f"<p>Klicke auf den folgenden Link, um ein neues Passwort zu setzen "
-            f"(der Link ist 1 Stunde gueltig):</p>"
+            f"(der Link ist {validity} gueltig):</p>"
             f'<p><a href="{safe_url}">{safe_url}</a></p>'
-            f"<p>Falls du das nicht warst, kannst du diese E-Mail einfach ignorieren.</p>"
+            f"<p>{ignore}</p>"
         )
-        body_text = f"Passwort zuruecksetzen: {reset_url}"
+        if default_call:
+            body_text = f"Passwort zuruecksetzen: {reset_url}"
+        else:
+            body_text = (
+                f"Hallo {display_name or ''},\n\n"
+                f"{intro}\n\n"
+                f"Passwort zuruecksetzen (der Link ist {validity} gueltig und nur einmal verwendbar):\n"
+                f"{reset_url}\n\n"
+                f"{ignore}"
+            )
         return subject, body_html, body_text
 
     # Fallback / en
     subject = "Reset your password - PDNS Manager"
+    validity = _validity_en(valid_hours)
+    if admin_initiated:
+        intro = "an administrator requested a password reset for your account."
+        ignore = "If you did not expect this, please contact your administrator."
+    else:
+        intro = "You requested a password reset."
+        ignore = "If this wasn't you, you can simply ignore this email."
     body_html = (
         f"<p>Hi {name},</p>"
-        f"<p>You requested a password reset.</p>"
+        f"<p>{intro[0].upper() + intro[1:]}</p>"
         f"<p>Click the following link to set a new password "
-        f"(the link is valid for 1 hour):</p>"
+        f"(the link is valid for {validity}):</p>"
         f'<p><a href="{safe_url}">{safe_url}</a></p>'
-        f"<p>If this wasn't you, you can simply ignore this email.</p>"
+        f"<p>{ignore}</p>"
     )
-    body_text = f"Reset your password: {reset_url}"
+    if default_call:
+        body_text = f"Reset your password: {reset_url}"
+    else:
+        body_text = (
+            f"Hi {display_name or ''},\n\n"
+            f"{intro[0].upper() + intro[1:]}\n\n"
+            f"Reset your password (the link is valid for {validity} and can be used once):\n"
+            f"{reset_url}\n\n"
+            f"{ignore}"
+        )
     return subject, body_html, body_text
 
 
