@@ -15,8 +15,10 @@ normal (eigenes SOA-EDIT-API je Datenbank). Dann entscheidet bei Peers mit abwei
 Inhalts-Fingerprint (``rrsets.zone_fingerprint``, ohne SOA/DNSSEC-Typen), die Serial ist nur Info (Notiz
 ``separate_backend``). DNS-Zeilen gelten als ``match``, wenn ihr SOA-Serial der Serial (``edited_serial`` oder
 ``serial``) irgendeines Panel-Servers mit der Zone entspricht; bei Record-Checks entscheidet dort ``record_match``.
-Strenger Serial-Vergleich bleibt fuer Peers mit gleicher Serial (gemeinsame DB), fuer Secondaries (``kind`` Slave)
-und wenn die Zone nur auf einem schreibbaren Server liegt.
+Strenger Serial-Vergleich bleibt fuer Peers mit gleicher Serial (gemeinsame DB), fuer Secondaries (``kind`` Slave
+oder Consumer) und wenn die Zone nur auf einem schreibbaren Server liegt. Secondaries zaehlen nie als getrenntes
+Backend (auch wenn ihr Server schreibbar ist) und ihre Serial gilt nicht als gueltige Panel-Serial fuer DNS-Zeilen:
+ein AXFR-Secondary, der hinterherhinkt, darf einen ebenso veralteten Nameserver nicht als ``match`` erscheinen lassen.
 
 Zeitbudget [D14]: Gesamtbudget ``TOTAL_TIMEOUT`` (8 s) je Check. Die Referenzzone wird per
 ``asyncio.wait_for`` hoechstens ``REFERENCE_TIMEOUT`` (4 s) abgewartet und laesst dabei mindestens
@@ -681,11 +683,19 @@ async def _wait(tasks: Iterable[asyncio.Task], run: _Run) -> None:
         await asyncio.wait(pending, timeout=run.left())
 
 
+# Zonenarten, deren Inhalt per AXFR von einem Primary kommt (Katalog-Mitglieder: Consumer) [D9]
+SECONDARY_KINDS = frozenset({"Slave", "Consumer"})
+
+
+def is_secondary_kind(kind: Any) -> bool:
+    return (kind or "") in SECONDARY_KINDS
+
+
 def _peer_needs_full(peer: _Peer, expected: int, separate: bool, content_flag: bool) -> bool:
     if content_flag or not separate or peer.data is None:
         return False
     serial, _raw = _peer_serials(peer.data)
-    return serial is not None and serial != expected and (peer.data.get("kind") or "") != "Slave"
+    return serial is not None and serial != expected and not is_secondary_kind(peer.data.get("kind"))
 
 
 def _collect_first(p: _Peer) -> None:
@@ -797,10 +807,13 @@ async def _run_check(run: _Run) -> PropagationResponse:
     for p in peers:
         _collect_first(p)
 
+    # Getrennte Backends = mehrere schreibbare Primaries mit eigener DB; Secondaries (Slave/Consumer) zaehlen nicht,
+    # auch wenn ihr Server schreibbar ist (ueblicher Aufbau Master auf ns1 + AXFR-Secondary auf ns2) [D9]
     writable = run.writable
-    ref_writable = writable is None or run.server_name in writable
+    ref_writable = (writable is None or run.server_name in writable) and not is_secondary_kind(ref["kind"])
     writable_with_zone = (1 if ref_writable else 0) + sum(
-        1 for p in peers if p.data is not None and (writable is None or p.name in writable)
+        1 for p in peers
+        if p.data is not None and (writable is None or p.name in writable) and not is_secondary_kind(p.data.get("kind"))
     )
     separate = writable_with_zone > 1
 
@@ -840,9 +853,12 @@ async def _run_check(run: _Run) -> PropagationResponse:
             if p.full is None:
                 p.full_error = "api_error"
 
-    # Serials aller Panel-Server mit der Zone (fuer DNS-Zeilen bei getrennten Backends)
+    # Serials aller Panel-Server mit der Zone (fuer DNS-Zeilen bei getrennten Backends); Secondaries nicht, sonst
+    # liesse ein hinterherhinkender Secondary einen ebenso veralteten Nameserver als ``match`` erscheinen [D9]
     panel_serials = {expected, ref["serial_raw"]}
     for p in peers:
+        if p.data is None or is_secondary_kind(p.data.get("kind")):
+            continue
         s, raw = _peer_serials(p.data)
         if s is not None:
             panel_serials.update({s, raw})
@@ -946,14 +962,14 @@ def _peer_row(run: _Run, p: _Peer, expected: int, expected_vals: Optional[list[s
         row.status = "ok" if row.content_match and rec_ok else "mismatch"
         if not match and row.content_match:
             row.notes.append("content_same_serial_differs")
-        if not match and separate and kind != "Slave":
+        if not match and separate and not is_secondary_kind(kind):
             row.notes.append("separate_backend")
         return row
     if match:
         row.status = "ok" if rec_ok else "mismatch"
         return row
-    if kind == "Slave":
-        # Secondary: strenger Serial-Vergleich (NOTIFY/AXFR noch nicht angekommen)
+    if is_secondary_kind(kind):
+        # Secondary (Slave/Consumer): strenger Serial-Vergleich (NOTIFY/AXFR noch nicht angekommen)
         row.status = "mismatch"
         if row.serial_relation == "behind":
             row.notes.append("secondary_lagging")
