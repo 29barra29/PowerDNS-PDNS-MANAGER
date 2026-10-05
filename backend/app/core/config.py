@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     # (siehe _jwt_expiry_follows_cookie). compose.yaml reicht JWT_EXPIRE_MINUTES nicht durch.
     JWT_EXPIRE_MINUTES: int = 1440  # 24 Stunden – nur Fallback, s. o.
 
+    # Verschluesselung gespeicherter Geheimnisse (ab 3.0, siehe app/core/secrets.py).
+    # Fernet-Schluessel (44 Zeichen urlsafe-Base64). Leer = Schluesseldatei (siehe unten).
+    SECRET_ENCRYPTION_KEY: str = ""
+    # Alte Schluessel (Komma-Liste), nur zum Entschluesseln waehrend einer Rotation.
+    SECRET_ENCRYPTION_KEY_PREVIOUS: str = ""
+    # Pfad zur Schluesseldatei. Leer = <backend>/data/.secret_key (/app/data/.secret_key im Container,
+    # wird beim ersten Start erzeugt). Explizit gesetzt = Datei MUSS existieren.
+    # Keine Validierung hier – die saubere Meldung kommt aus init_secrets.
+    SECRET_ENCRYPTION_KEY_FILE: str = ""
+
     # Auth-Cookie (sicherer als localStorage; HttpOnly, kein Zugriff per JavaScript)
     AUTH_COOKIE_NAME: str = "dns_manager_token"
     AUTH_COOKIE_MAX_AGE: int = 86400  # Sekunden, 24h; JWT_EXPIRE_MINUTES folgt diesem Wert
@@ -91,6 +101,17 @@ class Settings(BaseSettings):
     DOCS_ENABLED: bool = False
     # Webhooks sind serverseitige HTTP-Requests. Private Ziele nur bewusst erlauben.
     WEBHOOK_ALLOW_PRIVATE_URLS: bool = False
+    # Hintergrund-Aufgaben (Webhook-Zustellung, stuendliche Audit-Bereinigung). false = Ereignisse
+    # werden nur in der Datenbank gesammelt und NICHT gesendet (z. B. Wartung, zweiter Container).
+    # Tests setzen false (conftest).
+    BACKGROUND_WORKERS_ENABLED: bool = True
+    # SSO (OIDC/LDAP): unverschluesselte Verbindungen erlauben (http://-Issuer, LDAP ohne TLS bzw. ohne
+    # Zertifikatspruefung). Nur fuer Testumgebungen.
+    SSO_ALLOW_INSECURE: bool = False
+    # Prometheus-Scrape-Token (optional). Gesetzt (mind. 24 Zeichen) => /metrics ist aktiv und
+    # akzeptiert nur diesen Token; die Metrik-Einstellungen im Panel sind dann gesperrt.
+    # Leer => Steuerung im Panel (Einstellungen -> Monitoring).
+    METRICS_TOKEN: Optional[str] = None
     # Hinter einem Reverse-Proxy: X-Forwarded-For/X-Real-IP für die echte Client-IP
     # auswerten (Login-Rate-Limit, Audit-Log). NUR aktivieren, wenn das Backend
     # ausschließlich über den vertrauenswürdigen Proxy erreichbar ist – sonst sind
@@ -105,21 +126,21 @@ class Settings(BaseSettings):
     # Event-Loop hat; Default 10 fuer den Betrieb.
     DB_POOL_SIZE: int = 10
     # Content-Security-Policy-Header. Leer = Header wird nicht gesetzt.
-    # Standard deckt die SPA (gleicher Origin), Google Fonts, die Captcha-Provider
-    # (Turnstile/hCaptcha/reCAPTCHA) und den GitHub-Versionscheck ab. Bei reCAPTCHA-
-    # Problemen ggf. "'unsafe-eval'" zu script-src ergänzen.
+    # Standard deckt die SPA (gleicher Origin, Schrift lokal gebuendelt), die Captcha-Provider
+    # (Turnstile/hCaptcha/reCAPTCHA) und den GitHub-Versionscheck (nur Admins) ab. Bei
+    # reCAPTCHA-Problemen ggf. "'unsafe-eval'" zu script-src ergänzen.
     CONTENT_SECURITY_POLICY: str = (
         "default-src 'self'; "
         "base-uri 'self'; "
         "object-src 'none'; "
         "frame-ancestors 'none'; "
         "img-src 'self' data: blob: https:; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; "
         "script-src 'self' https://challenges.cloudflare.com https://js.hcaptcha.com "
         "https://*.hcaptcha.com https://www.google.com https://www.gstatic.com https://www.recaptcha.net; "
         "connect-src 'self' https://api.github.com https://challenges.cloudflare.com "
-        "https://*.hcaptcha.com; "
+        "https://*.hcaptcha.com https://www.google.com https://www.recaptcha.net; "
         "frame-src https://challenges.cloudflare.com https://*.hcaptcha.com https://www.google.com https://www.recaptcha.net https://recaptcha.google.com"
     )
 
@@ -160,6 +181,19 @@ class Settings(BaseSettings):
                     "api_key": parts[2].strip(),
                 })
         return servers
+
+    def get_metrics_env_token(self) -> Optional[str]:
+        """Gueltiger Scrape-Token aus METRICS_TOKEN (mind. 24 Zeichen) oder None.
+
+        Zu kurze Werte gelten als nicht gesetzt; die Warnung loggt metrics_runtime einmalig beim
+        Start (config.py laeuft vor dem Logging-Setup).
+        """
+        tok = (self.METRICS_TOKEN or "").strip()
+        if not tok:
+            return None
+        if len(tok) < 24:
+            return None
+        return tok
 
     def get_allowed_origins(self) -> list[str]:
         """ALLOWED_ORIGINS aus Env in Liste – '*' wird ignoriert (mit Cookies inkompatibel)."""
