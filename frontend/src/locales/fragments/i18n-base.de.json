@@ -1,0 +1,27 @@
+{
+  "set": {
+    "setup.step1Title": "Administrator-Konto",
+    "setup.smtpServer": "SMTP-Server",
+    "zoneDetail.dnssecRegistrarIntro": "Damit DNSSEC in der Elternzone (beim Registrar) greift, musst du dort DS-Einträge veröffentlichen. Die werden aus den Schlüsseln auf diesem Nameserver berechnet – du trägst sie nicht hier unter „Eintrag hinzufügen“ ein.",
+    "zoneDetail.dnssecManualRecordHint": "Das Formular „Eintrag hinzufügen“ für Typen wie DNSKEY/DS/RRSIG ist nur für fortgeschrittene manuelle Fälle gedacht. Normal: DNSSEC für die Zone aktivieren – dann die DS-Zeilen aus der Liste unten kopieren und im DNSSEC-Formular deines Registrars einfügen.",
+    "zoneDetail.dnssecNotActiveBody": "Ohne DNSSEC gibt es keinen DS zum Eintragen. Du kannst DNSSEC jetzt aktivieren (PowerDNS legt Schlüssel und DS-Werte an), oder beim Anlegen einer neuen Zone die Option „DNSSEC sofort aktivieren“ nutzen.",
+    "zones.dnssecRegistrarBody": "Es werden KSK + ZSK (oder ein CSK) erzeugt. Den DS-Datensatz musst du bei deinem Domain-Registrar eintragen. Öffne danach die Zonendetails dieser Domain – die DS-Zeilen stehen ganz oben in der gelben Box „DS-Datensätze für deinen Domain-Registrar“ (nicht im Formular „Eintrag hinzufügen“).",
+    "zoneDetail.recordsCount_one": "Server: {{server}} • {{count}} Eintrag",
+    "zoneDetail.recordsCount_other": "Server: {{server}} • {{count}} Einträge",
+    "users.usersCount_one": "{{count}} Benutzer",
+    "users.usersCount_other": "{{count}} Benutzer",
+    "users.zonesSelected_one": "{{count}} Zone ausgewählt",
+    "users.zonesSelected_other": "{{count}} Zonen ausgewählt",
+    "zones.zonesCount_one": "{{count}} Zone",
+    "zones.zonesCount_other": "{{count}} Zonen",
+    "zoneDetail.txtTooLong_one": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt.",
+    "zoneDetail.txtTooLong_other": "Lang ({{count}} Zeichen) – wird im DNS in 255-Zeichen-Stücke zerlegt."
+  },
+  "remove": [
+    "zoneDetail.recordsCount",
+    "users.usersCount",
+    "users.zonesSelected",
+    "zones.zonesCount",
+    "zoneDetail.txtTooLong"
+  ]
+}
