@@ -256,8 +256,13 @@ def test_ciphertext_sizes_fit_columns():
 def test_configure_for_tests_and_reset():
     secret_store.configure_for_tests(KEY_A, [KEY_B])
     assert secret_store._STATE.box.decrypt_only_count == 1
+    assert secret_store.current_mode() == "encrypted"
+    assert secret_store.startup_report().fingerprint == secret_store.key_fingerprint(KEY_A)
+    secret_store.configure_for_tests(mode="plaintext_fallback")
+    assert secret_store.current_mode() == "plaintext_fallback"
     secret_store.reset_for_tests()
     assert secret_store._STATE.mode == "uninitialized" and secret_store._STATE.box is None
+    assert secret_store.current_mode() == "uninitialized" and secret_store.startup_report() is None
     with pytest.raises(ValueError):
         secret_store.configure_for_tests(mode="unbekannt")
 

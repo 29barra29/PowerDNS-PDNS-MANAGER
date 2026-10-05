@@ -1176,6 +1176,16 @@ async def collect_status(db: "AsyncSession") -> dict[str, Any]:
     return build_status(values)
 
 
+def current_mode() -> Literal["uninitialized", "encrypted", "plaintext_fallback"]:
+    """Aktueller Modus (fuer /health: plaintext_fallback -> status "degraded")."""
+    return _STATE.mode
+
+
+def startup_report() -> Optional[StartupReport]:
+    """Bericht des letzten init_secrets (None vor dem Start bzw. in Tests/CLI ohne Start)."""
+    return _STATE.report
+
+
 def runtime_unreadable_counts() -> dict[str, int]:
     """Anzahl unlesbarer Lesezugriffe je Feld seit Prozessstart (fuer F13-Metriken)."""
     return dict(_STATE.unreadable_counts)
