@@ -3,8 +3,8 @@
 Neuinstallation:
 - Zone mit zwei Nameservern anlegen: SOA-rname ist ``hostmaster.<zone>`` (nicht der zweite NS), Serial != 0;
   ``POST /zones`` mit explizitem ``servers`` respektiert "Speichern: Nein" (403 bzw. ``skipped (read-only)``).
-- Export (Dateiname, Inhalt, Audit ``ZONE_EXPORT``), NOTIFY (Native -> 422 mit Erklaerung, Master -> 200,
-  Audit ``ZONE_NOTIFY``), Leserecht: Export ja, NOTIFY nein.
+- Export (Dateiname, Inhalt, Audit ``ZONE_EXPORT``), NOTIFY (Master -> 200 + Audit ``ZONE_NOTIFY``; Native je
+  nach PowerDNS 200 oder 422 mit Erklaerung), Leserecht: Export ja, NOTIFY nein.
 - Benutzer mit erzwungenem Passwortwechsel anlegen, Gate (403 + Header), Wechsel, Admin-Zufallspasswort,
   Reset-Link ohne SMTP (400), 2FA-Reset ohne 2FA, ``access-summary`` und ``revoke-access`` (Token -> 401).
 Upgrade:
@@ -161,12 +161,17 @@ def check_fresh(ctx) -> None:
         ctx.check("SOA" in res["content"], "Export ohne SOA")
         ctx.check(_audit_count(ctx, "ZONE_EXPORT", zone) >= 1, "Audit ZONE_EXPORT fehlt")
 
-    with ctx.step("NOTIFY: Native -> 422 mit Erklaerung, Master -> 200, Audit"):
-        r = ctx.api("POST", f"zones/ns1/{_z(zone)}/notify", json={}, expect=422)
-        ctx.check(_detail(r).startswith(NOTIFY_FAILED), f"422-Text: {_detail(r)}")
-        ctx.check(int(ctx.db_value(
-            "SELECT COUNT(*) FROM audit_logs WHERE action='ZONE_NOTIFY' AND resource_name=%s AND status='error'",
-            (zone,)) or 0) >= 1, "Fehler-Audit ZONE_NOTIFY fehlt")
+    with ctx.step("NOTIFY: Master -> 200 + Audit; Native je nach PowerDNS 200 oder 422 mit Erklaerung"):
+        # pdns-auth 4.9 mit primary=yes reiht NOTIFY auch fuer Native-Zonen ein (200); aeltere Versionen bzw.
+        # primary=no antworten 422 – dann muss der erklaerende Text samt Fehler-Audit kommen.
+        r = ctx.api("POST", f"zones/ns1/{_z(zone)}/notify", json={}, expect=(200, 422))
+        if r.status == 422:
+            ctx.check(_detail(r).startswith(NOTIFY_FAILED), f"422-Text: {_detail(r)}")
+            ctx.check(int(ctx.db_value(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='ZONE_NOTIFY' AND resource_name=%s AND status='error'",
+                (zone,)) or 0) >= 1, "Fehler-Audit ZONE_NOTIFY fehlt")
+        # Unbekannter Server -> 404 ohne PowerDNS-Aufruf
+        ctx.api("POST", f"zones/gibtsnicht/{_z(zone)}/notify", json={}, expect=404)
         ctx.admin_session.post("zones", json={"name": master, "kind": "Master", "nameservers": ns}, expect=200)
         r = ctx.api("POST", f"zones/ns1/{_z(master)}/notify", json={}, expect=200)
         ctx.check("NOTIFY" in r.json().get("message", ""), "Erfolgsmeldung")
