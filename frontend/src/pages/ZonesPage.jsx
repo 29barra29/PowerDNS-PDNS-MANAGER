@@ -2,10 +2,15 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-    Globe, Plus, Trash2, Loader2, Shield, AlertCircle, CheckCircle, X, FileUp
+    Globe, Plus, Trash2, Loader2, Shield, AlertCircle, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, X, FileUp
 } from 'lucide-react'
 import api from '../api'
 import ModalErrorBanner from '../components/ModalErrorBanner'
+import DnssecOptionsFields from '../components/dnssec/DnssecOptionsFields'
+import {
+    DEFAULT_DNSSEC_OPTIONS, NSEC3_MAX_ITERATIONS, buildDnssecPayload, dnssecServerOf, hasDnssecWarning,
+    parseCreateResult, validateDnssecOptions,
+} from '../zoneDetail/dnssecModel.js'
 
 /* ============================================================================
  *  Helpers für die Zone-Erstellung
@@ -98,6 +103,9 @@ export default function ZonesPage() {
     })
     /** Nameserver als Array – jede Zeile ein Eintrag. */
     const [nameservers, setNameservers] = useState(defaultNS.slice())
+    // DNSSEC-Optionen beim Anlegen (F4 §2.10): zugeklappt = Standardwerte werden gesendet
+    const [dnssecOpts, setDnssecOpts] = useState(() => ({ ...DEFAULT_DNSSEC_OPTIONS }))
+    const [showDnssecOpts, setShowDnssecOpts] = useState(false)
     const [creating, setCreating] = useState(false)
     const [user, setUser] = useState(() => api.getUser())
     const isAdmin = user?.role === 'admin'
@@ -272,16 +280,31 @@ export default function ZonesPage() {
             }
         }
 
+        if (createForm.enable_dnssec) {
+            const dnssecErrors = validateDnssecOptions(dnssecOpts)
+            const firstDnssecError = dnssecErrors.nsec3_iterations || dnssecErrors.nsec3_salt
+            if (firstDnssecError) {
+                setShowDnssecOpts(true)
+                setCreateError(t(firstDnssecError, { max: NSEC3_MAX_ITERATIONS }))
+                setCreating(false)
+                return
+            }
+        }
+
         try {
-            const res = await api.createZone({
+            const payload = {
                 ...createForm,
                 name: cleaned,
                 nameservers: nsArray.length ? nsArray : normalizeNameservers(defaultNS),
-            })
+            }
+            if (createForm.enable_dnssec) payload.dnssec_options = buildDnssecPayload(dnssecOpts)
+            const res = await api.createZone(payload)
             setCreateResult(res || {})
 
             const details = (res && res.details) ? res.details : {}
             const hasError = Object.values(details).some(v => String(v).startsWith('error:'))
+            // DNSSEC-Warnung (created; dnssec-error|dnssec-skipped): Dialog bleibt offen, damit sie sichtbar ist
+            const dnssecWarning = hasDnssecWarning(details)
             if (hasError) {
                 const errParts = Object.entries(details)
                     .filter(([, v]) => String(v).startsWith('error:'))
@@ -322,7 +345,7 @@ export default function ZonesPage() {
             }
 
             if (!hasError) {
-                setShowCreate(false)
+                if (!dnssecWarning) setShowCreate(false)
                 const defTemplate = templates.find(tpl => tpl.is_default)
                 setCreateForm({
                     name: '',
@@ -331,7 +354,9 @@ export default function ZonesPage() {
                     enable_dnssec: false,
                 })
                 setNameservers(defTemplate?.nameservers?.length ? defTemplate.nameservers.slice() : defaultNS.slice())
-                setCreateResult(null)
+                setDnssecOpts({ ...DEFAULT_DNSSEC_OPTIONS })
+                setShowDnssecOpts(false)
+                if (!dnssecWarning) setCreateResult(null)
                 setSuccess(t('zones.createdSuccess', { zone: cleaned }))
                 loadZones()
             }
@@ -361,6 +386,8 @@ export default function ZonesPage() {
         })
         setNameservers(def?.nameservers?.length ? def.nameservers.slice() : defaultNS.slice())
         setSelectedTemplateId(def ? String(def.id) : '')
+        setDnssecOpts({ ...DEFAULT_DNSSEC_OPTIONS })
+        setShowDnssecOpts(false)
         setShowCreate(true)
     }
 
@@ -587,18 +614,29 @@ export default function ZonesPage() {
                                 <p className="text-sm font-medium text-text-primary mb-2">{t('zones.resultPerServer')}</p>
                                 <ul className="space-y-1.5 text-sm">
                                     {Object.entries(createResult.details).map(([srv, status]) => {
-                                        const isError = String(status).startsWith('error:')
-                                        const msg = String(status).replace(/^error:\s*/, '')
+                                        const result = parseCreateResult(status)
+                                        const isError = result.kind === 'error'
+                                        const isWarning = result.kind === 'dnssecError' || result.kind === 'dnssecSkipped'
+                                        let text = String(status)
+                                        if (result.kind === 'error') text = result.detail
+                                        else if (result.kind === 'created') text = t('zones.created')
+                                        else if (result.kind === 'synced') text = t('zones.synced')
+                                        else if (result.kind === 'dnssecError') text = t('zones.dnssecFailedOnServer', { detail: result.detail })
+                                        else if (result.kind === 'dnssecSkipped') {
+                                            text = t('zones.dnssecSkippedOnServer', { server: dnssecServerOf(createResult.details) || '—' })
+                                        }
                                         return (
-                                            <li key={srv} className="flex items-center gap-2">
+                                            <li key={srv} className="flex items-start gap-2">
                                                 {isError ? (
-                                                    <AlertCircle className="w-4 h-4 text-danger shrink-0" />
+                                                    <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                                                ) : isWarning ? (
+                                                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
                                                 ) : (
-                                                    <CheckCircle className="w-4 h-4 text-success shrink-0" />
+                                                    <CheckCircle className="w-4 h-4 text-success shrink-0 mt-0.5" />
                                                 )}
-                                                <span className="text-text-secondary">{srv}:</span>
-                                                <span className={isError ? 'text-danger' : 'text-text-primary'}>
-                                                    {isError ? msg : (status === 'created' ? t('zones.created') : status === 'synced' ? t('zones.synced') : status)}
+                                                <span className="text-text-secondary shrink-0">{srv}:</span>
+                                                <span className={`min-w-0 break-words ${isError ? 'text-danger' : isWarning ? 'text-warning' : 'text-text-primary'}`}>
+                                                    {text}
                                                 </span>
                                             </li>
                                         )
@@ -776,17 +814,35 @@ export default function ZonesPage() {
                                     />
                                     <div>
                                         <span className="text-sm text-text-secondary">{t('zones.enableDnssec')}</span>
-                                        {createForm.enable_dnssec && (
-                                            <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-                                                <p className="font-medium mb-1 flex items-center gap-1.5">
-                                                    <Shield className="w-3.5 h-3.5" />
-                                                    {t('zones.dnssecRegistrarTitle')}
-                                                </p>
-                                                <p className="text-amber-100/90 leading-snug">{t('zones.dnssecRegistrarBody')}</p>
-                                            </div>
-                                        )}
                                     </div>
                                 </label>
+                                {createForm.enable_dnssec && (
+                                    <div className="mt-2 ml-6 space-y-2">
+                                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                                            <p className="font-medium mb-1 flex items-center gap-1.5">
+                                                <Shield className="w-3.5 h-3.5" />
+                                                {t('zones.dnssecRegistrarTitle')}
+                                            </p>
+                                            <p className="text-amber-100/90 leading-snug">{t('zones.dnssecRegistrarBody')}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border bg-bg-secondary/30">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowDnssecOpts(v => !v)}
+                                                aria-expanded={showDnssecOpts}
+                                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
+                                            >
+                                                {showDnssecOpts ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                {t('zones.dnssecOptions')}
+                                            </button>
+                                            {showDnssecOpts && (
+                                                <div className="px-3 pb-3">
+                                                    <DnssecOptionsFields value={dnssecOpts} onChange={setDnssecOpts} disabled={creating} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">

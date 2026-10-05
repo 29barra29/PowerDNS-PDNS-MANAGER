@@ -1,0 +1,19 @@
+{
+  "reason": "WS-F4-B (DNSSEC-Oberflaeche): DNS-Fachbegriffe und Protokollnamen sind in allen Sprachen gleich (DNSSEC, NSEC/NSEC3, Opt-out und Narrow als NSEC3-Optionsnamen aus RFC 5155/PowerDNS, Salt (hex), ID, Produktname PowerDNS mit Versionsplatzhalter); 'Server' lautet in de/bs/sr wie im Englischen (vgl. audit.server, search.server)",
+  "global": [
+    "dnssec.cardTitle",
+    "dnssec.denialNsec",
+    "dnssec.nsecTitle",
+    "dnssec.badgeNarrow",
+    "dnssec.badgeOptOut",
+    "dnssec.fieldOptOut",
+    "dnssec.fieldSalt",
+    "dnssec.colId",
+    "dnssec.serverVersion"
+  ],
+  "perLanguage": {
+    "de": ["dnssec.summaryServer"],
+    "bs": ["dnssec.summaryServer"],
+    "sr": ["dnssec.summaryServer"]
+  }
+}
