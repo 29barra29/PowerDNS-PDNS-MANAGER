@@ -4,9 +4,10 @@
   aktiviert ``/metrics``; sonst Panel-Einstellungen (``metrics_enabled`` + verschluesselter
   ``metrics_token``). 10 s Cache; DB-Fehler -> letzter Stand bzw. nur Env bzw.
   ``ConfigUnavailable`` (Endpoint antwortet dann 503).
-- ``refresh_runtime_gauges``: beim Scrape (kein Hintergrund-Task) Server-Anzahl,
-  DB-Erreichbarkeit, offene Webhook-Zustellungen (``queued``/``failed``/``in_progress``),
-  PowerDNS-Erreichbarkeit (60 s Cache) und Zonenanzahl (300 s Cache).
+- ``refresh_runtime_gauges``: beim Scrape (kein Hintergrund-Task) Server-Anzahl (geladen + konfiguriert,
+  aber nicht geladen), DB-Erreichbarkeit, offene Webhook-Zustellungen (``queued``/``failed``/``in_progress``),
+  Laufzeitstatus (Migrationsfehler, Hintergrund-Aufgaben, unlesbare Geheimnisse), PowerDNS-Erreichbarkeit
+  (60 s Cache; nicht geladene Server = 0) und Zonenanzahl (300 s Cache).
 
 ``services.system_settings`` (F5) wird lazy importiert; ``settings.get_metrics_env_token()``
 liefert ``core/config.py`` (Welle 0b).
@@ -192,13 +193,40 @@ async def _db_probe() -> tuple[bool, Optional[int]]:
         return False, None
 
 
+def _unloaded_servers(clients: dict) -> list[str]:
+    """Konfigurierte, aber nicht geladene Server (z. B. API-Key nicht entschluesselbar)."""
+    unloaded = getattr(pdns_manager, "unloaded", None) or {}
+    return sorted(n for n in unloaded if n not in clients)
+
+
+def _refresh_status_gauges() -> None:
+    """Migrationsfehler, Hintergrund-Aufgaben und unlesbare Geheimnisse (prozesslokal, ohne I/O)."""
+    from app.core import secrets as secret_store
+    from app.core.database import MIGRATION_ERRORS
+    from app.services import background
+
+    prom.MIGRATION_ERRORS.set(len(MIGRATION_ERRORS))
+    state = background.state()
+    prom.BACKGROUND_TASK_RUNNING.clear()
+    for name, info in (state.get("tasks") or {}).items():
+        prom.BACKGROUND_TASK_RUNNING.labels(str(name)).set(1 if info.get("running") else 0)
+    prom.SECRETS_UNREADABLE_READS.clear()
+    for fld, count in sorted(secret_store.runtime_unreadable_counts().items()):
+        prom.SECRETS_UNREADABLE_READS.labels(str(fld)).set(int(count or 0))
+
+
 async def refresh_runtime_gauges(cfg: MetricsConfig) -> None:
     """Gauges beim Scrape aktualisieren (Caches siehe Modul-Docstring). Wirft nie."""
     global _last_up_refresh, _last_zones_refresh
     async with _lock():
         try:
             clients = dict(pdns_manager.get_all_clients())
-            prom.PDNS_SERVERS.set(len(clients))
+            not_loaded = _unloaded_servers(clients)
+            prom.PDNS_SERVERS.set(len(clients) + len(not_loaded))
+            try:
+                _refresh_status_gauges()
+            except Exception as exc:  # noqa: BLE001 - Statuswerte sind optional
+                logger.debug("Status-Gauges nicht aktualisiert: %s", type(exc).__name__)
             db_up, pending = await _db_probe()
             prom.DATABASE_UP.set(1 if db_up else 0)
             if pending is not None:
@@ -217,6 +245,9 @@ async def refresh_runtime_gauges(cfg: MetricsConfig) -> None:
                     up = 0 if isinstance(r, BaseException) else 1
                     _up_state[n] = up
                     prom.PDNS_SERVER_UP.labels(n).set(up)
+                for n in not_loaded:
+                    _up_state[n] = 0
+                    prom.PDNS_SERVER_UP.labels(n).set(0)
                 _last_up_refresh = now
             if now - _last_zones_refresh >= ZONES_TTL:
                 names = [n for n in clients if _up_state.get(n) == 1]

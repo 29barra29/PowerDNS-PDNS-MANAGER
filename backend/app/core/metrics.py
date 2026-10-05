@@ -60,6 +60,17 @@ DYNDNS_UPDATES = Counter("dyndns_updates", "DynDNS-Updates nach Ergebnis", ["res
 LOGIN_ATTEMPTS = Counter("login_attempts", "Anmeldeversuche", ["method", "result"], namespace=NS, registry=REGISTRY)
 PROPAGATION_CHECKS = Counter("propagation_checks", "Propagations-Pruefungen", ["result"], namespace=NS, registry=REGISTRY)
 METRICS_AUTH_FAILURES = Counter("metrics_auth_failures", "Abgelehnte /metrics-Abrufe", namespace=NS, registry=REGISTRY)
+# Laufzeitstatus (WS-F12F13-BE, beim Scrape gesetzt; dieselben Werte zeigt GET /settings/monitoring/status)
+MIGRATION_ERRORS = Gauge(
+    "migration_errors", "Fehlgeschlagene Schema-/Datenmigrationen beim letzten Start", namespace=NS, registry=REGISTRY,
+)
+BACKGROUND_TASK_RUNNING = Gauge(
+    "background_task_running", "Hintergrund-Aufgabe laeuft (1/0)", ["task"], namespace=NS, registry=REGISTRY,
+)
+SECRETS_UNREADABLE_READS = Gauge(
+    "secrets_unreadable_reads", "Nicht entschluesselbare Geheimnis-Lesezugriffe seit dem Start", ["field"],
+    namespace=NS, registry=REGISTRY,
+)
 
 LOGIN_METHODS = ("password", "totp", "passkey", "oidc", "ldap")
 LOGIN_RESULTS = ("success", "failure", "rate_limited", "denied", "2fa_required")
