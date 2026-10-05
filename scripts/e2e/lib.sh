@@ -113,14 +113,22 @@ e2e_workdir() {
 }
 
 # Entfernt Container, Netz und Volumes des E2E-Projekts (Images bleiben erhalten).
+# Auch im Modus --down nach einem --keep-Lauf: dort fehlen E2E_JWT_SECRET/E2E_ADMIN_PASSWORD; compose braucht sie
+# nur fuer die Interpolation von compose.e2e.yaml – ohne Platzhalter scheiterte "down -v" still und die Volumes
+# (u. a. backend_data mit .secret_key) blieben stehen.
 e2e_down() {
-  e2e_compose --profile tools down -v --remove-orphans --timeout 10 >/dev/null 2>&1 || true
+  E2E_JWT_SECRET="${E2E_JWT_SECRET:-down}" E2E_ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-down}" \
+    e2e_compose --profile tools down -v --remove-orphans --timeout 10 >/dev/null 2>&1 || true
   # Reste ohne compose-Labels (abgebrochene Laeufe) gezielt nach Namen entfernen.
-  local c
+  local c v
   for c in $(docker ps -aq --filter "name=^pdnsmgr-e2e-" 2>/dev/null); do
     docker rm -f "$c" >/dev/null 2>&1 || true
   done
   docker network rm pdnsmgr-e2e-net >/dev/null 2>&1 || true
+  # Volumes nur dieses Projekts (compose-Label), falls compose sie nicht erwischt hat.
+  for v in $(docker volume ls -q --filter "label=com.docker.compose.project=$E2E_PROJECT" 2>/dev/null); do
+    docker volume rm "$v" >/dev/null 2>&1 || e2e_log "Volume $v konnte nicht entfernt werden"
+  done
 }
 
 # Startet die angegebenen Dienste und wartet auf "healthy".
