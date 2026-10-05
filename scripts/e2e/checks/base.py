@@ -118,6 +118,10 @@ def check_fresh(ctx) -> None:
     with ctx.step("Zonen-Export (BIND)"):
         exp = ctx.api("GET", f"zones/ns1/{_z(zone)}/export", expect=200).json()
         content = exp.get("content") or ""
+        if isinstance(content, dict):
+            # 2.4.1 reicht die JSON-Antwort von PowerDNS 4.9 durch: {"zone": "<Zonendatei>"}
+            content = content.get("zone") or ""
+        ctx.check(isinstance(content, str), f"Export-Inhalt hat unerwarteten Typ: {type(content).__name__}")
         ctx.check(www in content and "192.0.2.12" in content, f"Export ohne www-Record: {content[:300]}")
         ctx.check("SOA" in content, "Export ohne SOA")
 

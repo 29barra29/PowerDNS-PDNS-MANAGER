@@ -90,7 +90,7 @@ e2e_build_image() {
     -f "$E2E_REPO_ROOT/backend/Dockerfile" "$E2E_REPO_ROOT" >/dev/null \
     || e2e_die "docker build fehlgeschlagen"
   docker image inspect "$E2E_IMAGE" >/dev/null 2>&1 || e2e_die "Image $E2E_IMAGE fehlt nach dem Build"
-  docker run --rm --entrypoint python "$E2E_IMAGE" -c "import app.main" >/dev/null \
+  docker run --rm -e JWT_SECRET_KEY=e2e-smoke --entrypoint python "$E2E_IMAGE" -c "import app.main" >/dev/null \
     || e2e_die "Image-Smoke 'import app.main' fehlgeschlagen"
   e2e_log "Image $E2E_IMAGE bereit"
 }

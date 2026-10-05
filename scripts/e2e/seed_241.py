@@ -34,7 +34,7 @@ import secrets
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 SEED_DOMAIN = "e2e-seed.test."
 ZONES = {
@@ -129,7 +129,8 @@ async def seed(out_path: str, expect_version: str | None) -> dict:
             _create_pdns_zone(name, srv, zone)
     _log(f"Zonen angelegt: {', '.join(ZONES.values())} auf {', '.join(pdns)}")
 
-    now = datetime.utcnow().replace(microsecond=0)
+    # naive UTC wie in den 2.4.1-Spalten (DateTime ohne Zeitzone)
+    now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
     out: dict = {
         "source_version": version,
         "created_at": now.isoformat() + "Z",

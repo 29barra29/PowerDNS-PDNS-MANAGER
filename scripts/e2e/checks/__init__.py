@@ -553,13 +553,15 @@ def _load_state(ctx: Ctx) -> None:
     if ctx.mode == "upgrade-restart" and os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             ctx.state = json.load(fh)
+    # Benutzte TOTP-Zeitfenster gelten ueber Runner-Laeufe hinweg (Replay-Schutz im Backend).
+    ctx._totp_used = dict(ctx.state.pop("__totp_used", {}) or {})
 
 
 def _save(ctx: Ctx, report: dict) -> None:
     if not os.path.isdir(STATE_DIR) or not os.access(STATE_DIR, os.W_OK):
         return
     with open(os.path.join(STATE_DIR, "ctx-state.json"), "w", encoding="utf-8") as fh:
-        json.dump(ctx.state, fh, indent=1, default=str)
+        json.dump({**ctx.state, "__totp_used": ctx._totp_used}, fh, indent=1, default=str)
     with open(os.path.join(STATE_DIR, f"report-{ctx.mode}.json"), "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=1, default=str)
 
