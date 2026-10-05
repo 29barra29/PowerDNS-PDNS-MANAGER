@@ -1,0 +1,11 @@
+{
+  "common": {
+    "save": "Save",
+    "greet": "Hallo {{name}}",
+    "brand": "PDNS Manager"
+  },
+  "items": {
+    "count_one": "{{count}} Eintrag",
+    "count_other": "{{count}} Einträge"
+  }
+}

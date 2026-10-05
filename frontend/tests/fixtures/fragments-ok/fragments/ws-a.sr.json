@@ -1,0 +1,11 @@
+{
+  "set": {
+    "common.prev": "Prethodna",
+    "zones.count_one": "{{count}} zona",
+    "zones.count_few": "{{count}} zone",
+    "zones.count_other": "{{count}} zona"
+  },
+  "remove": [
+    "common.old"
+  ]
+}
