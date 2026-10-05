@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 6
 _WAKEUP_KEY = "webhook_wakeup"
+_LISTENER_KEY = "webhook_wakeup_listener"
 
 ERROR_SECRET_UNREADABLE = "secret_unreadable"
 ERROR_URL_UNREADABLE = "url_unreadable"
@@ -114,7 +115,9 @@ async def select_recipients(
 
 
 def _wakeup_after_commit(session) -> None:
-    session.info.pop(_WAKEUP_KEY, None)
+    """``after_commit``-Listener: weckt den Worker, wenn in dieser Transaktion Zustellungen entstanden sind."""
+    if not session.info.pop(_WAKEUP_KEY, None):
+        return
     try:
         from app.services import webhook_worker
 
@@ -124,16 +127,17 @@ def _wakeup_after_commit(session) -> None:
 
 
 def _register_wakeup_after_commit(db: AsyncSession) -> None:
-    """Weckt den Worker nach dem naechsten Commit der Session (einmal je Session-Transaktion).
+    """Weckt den Worker nach dem naechsten Commit der Session (einmal je Commit, nicht je Ereignis).
 
-    Bei Rollback kein Weckruf noetig – der Worker findet faellige Zeilen auch per Poll.
+    Der Listener wird je Session nur einmal registriert und reagiert nur, wenn seit dem letzten Commit
+    Zustellungen eingereiht wurden. Bei Rollback ist kein Weckruf noetig – der Worker pollt ohnehin.
     """
     try:
         sync_session = db.sync_session
-        if sync_session.info.get(_WAKEUP_KEY):
-            return
         sync_session.info[_WAKEUP_KEY] = True
-        sa_event.listen(sync_session, "after_commit", _wakeup_after_commit, once=True)
+        if not sync_session.info.get(_LISTENER_KEY):
+            sa_event.listen(sync_session, "after_commit", _wakeup_after_commit)
+            sync_session.info[_LISTENER_KEY] = True
     except Exception as exc:  # noqa: BLE001 - z. B. Test-Session ohne sync_session
         logger.debug("Weckruf nach Commit nicht registriert: %s", exc)
 
