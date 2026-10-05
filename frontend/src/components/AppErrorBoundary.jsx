@@ -1,5 +1,8 @@
 import { Component } from 'react'
 import { AlertCircle } from 'lucide-react'
+import i18n from '../i18n'
+
+// Klassenkomponente (Error Boundary) -> kein useTranslation; Texte direkt ueber i18n.t (F8-A11).
 
 export default class AppErrorBoundary extends Component {
     constructor(props) {
@@ -24,10 +27,8 @@ export default class AppErrorBoundary extends Component {
                     <div className="flex items-start gap-3">
                         <AlertCircle className="w-6 h-6 text-danger shrink-0 mt-0.5" />
                         <div>
-                            <h1 className="text-xl font-bold">Die Oberfläche konnte nicht geladen werden</h1>
-                            <p className="text-sm text-text-muted mt-2">
-                                Bitte lade die Seite neu. Wenn der Fehler erneut erscheint, prüfe die Browser-Konsole und die Backend-Logs.
-                            </p>
+                            <h1 className="text-xl font-bold">{i18n.t('errorBoundary.title')}</h1>
+                            <p className="text-sm text-text-muted mt-2">{i18n.t('errorBoundary.body')}</p>
                         </div>
                     </div>
                     <button
@@ -35,7 +36,7 @@ export default class AppErrorBoundary extends Component {
                         onClick={() => window.location.reload()}
                         className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium"
                     >
-                        Seite neu laden
+                        {i18n.t('common.reloadPage')}
                     </button>
                 </div>
             </div>

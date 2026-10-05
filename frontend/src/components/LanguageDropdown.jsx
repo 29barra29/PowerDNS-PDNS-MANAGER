@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Globe, Check, ChevronDown } from 'lucide-react'
-import { LANGUAGES } from '../i18n'
+import { LANGUAGES, applyLanguage, currentLanguage } from '../i18n'
 
 /**
  * Sprachauswahl als Dropdown mit Flaggen.
@@ -9,15 +9,20 @@ import { LANGUAGES } from '../i18n'
  * - `compact` (default): nur Flagge + ChevronDown (gut fuer Mobile-Header / Auth-Seiten)
  * - `compact={false}`: Flagge + Sprachname + Chevron (Settings, Sidebar)
  * - `align`: 'left' | 'right' – auf welcher Seite das Panel ausklappt (Default 'right')
- * - `onChange`: optionaler Callback nach Sprachwechsel (z.B. Settings: API persistieren)
+ * - `onChange(code, prev)`: optionaler Callback nach erfolgreichem Wechsel (z. B. Layout: in der DB speichern);
+ *   `prev` ist die vorherige Sprache fuer einen Rollback.
+ *
+ * Der Wechsel laeuft ueber applyLanguage (F8-A06): Sprachdatei wird vorher geladen, die Wahl im Browser
+ * gemerkt. Schlaegt das Laden fehl, bleibt die alte Sprache aktiv (nur Konsolen-Warnung).
  */
 export default function LanguageDropdown({ compact = true, align = 'right', onChange }) {
     const { i18n, t } = useTranslation()
     const [open, setOpen] = useState(false)
+    const [busy, setBusy] = useState(false)
     const ref = useRef(null)
 
-    const current = LANGUAGES.find((l) => l.code === i18n.language)
-        || LANGUAGES.find((l) => l.code === i18n.language?.split('-')[0])
+    const activeCode = i18n.resolvedLanguage || i18n.language?.split('-')[0]
+    const current = LANGUAGES.find((l) => l.code === activeCode)
         || LANGUAGES.find((l) => l.code === 'en')
         || LANGUAGES[0]
 
@@ -33,10 +38,20 @@ export default function LanguageDropdown({ compact = true, align = 'right', onCh
         }
     }, [open])
 
-    const choose = (code) => {
-        if (code !== i18n.language) i18n.changeLanguage(code)
+    const choose = async (code) => {
         setOpen(false)
-        if (typeof onChange === 'function') onChange(code)
+        const prev = currentLanguage()
+        if (code === prev || busy) return
+        setBusy(true)
+        try {
+            await applyLanguage(code)
+        } catch (err) {
+            console.warn('Sprachdatei konnte nicht geladen werden:', err)
+            return
+        } finally {
+            setBusy(false)
+        }
+        if (typeof onChange === 'function') onChange(code, prev)
     }
 
     return (
@@ -46,6 +61,7 @@ export default function LanguageDropdown({ compact = true, align = 'right', onCh
                 onClick={() => setOpen((v) => !v)}
                 aria-haspopup="listbox"
                 aria-expanded={open}
+                aria-busy={busy}
                 aria-label={t('settings.language')}
                 title={current.label}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm bg-bg-tertiary hover:bg-bg-hover border border-border text-text-primary transition-colors"
@@ -63,7 +79,7 @@ export default function LanguageDropdown({ compact = true, align = 'right', onCh
                         ${align === 'left' ? 'left-0' : 'right-0'}`}
                 >
                     {LANGUAGES.map((lng) => {
-                        const active = lng.code === i18n.language
+                        const active = lng.code === current.code
                         return (
                             <li key={lng.code}>
                                 <button
