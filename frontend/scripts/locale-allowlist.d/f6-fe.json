@@ -1,0 +1,14 @@
+{
+  "reason": "WS-F6-FE: Protokoll-/Produktnamen DNSSEC und DynDNS (alle Sprachen gleich); 'Status' ist in de/bs/hr/sr das uebliche Wort (wie audit-/Tabellen-Spalten); im Deutschen 'Record' (Fachbegriff wie zoneDetail/audit) und 'Details'. Dynamisch gebildet: webhooks.category.<kategorie> (Kategorien kommen aus der API, event_categories).",
+  "global": [
+    "webhooks.category.dnssec",
+    "webhooks.category.dyndns"
+  ],
+  "perLanguage": {
+    "de": ["webhooks.category.record", "webhooks.details", "webhooks.filterStatus", "webhooks.colStatus"],
+    "bs": ["webhooks.filterStatus", "webhooks.colStatus"],
+    "hr": ["webhooks.filterStatus", "webhooks.colStatus"],
+    "sr": ["webhooks.filterStatus", "webhooks.colStatus"]
+  },
+  "dynamic": ["webhooks.category.*"]
+}
