@@ -5,6 +5,13 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  # Manueller Start (Actions -> "Test and Lint" -> Run workflow); nur dann laeuft auch der E2E-Job.
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: 'E2E-Tests (Neuinstallation + Upgrade 2.4.1 -> aktueller Stand) ausfuehren'
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -45,13 +52,25 @@ jobs:
           pip install -r requirements.lock
           pip install pytest pytest-asyncio pytest-cov
 
+      # Migrations-Gate zuerst und allein: braucht eine frische Datenbank (2.4.1-Schema -> 3.0).
+      - name: Run migration tests (fresh DB)
+        env:
+          DATABASE_URL: mysql+aiomysql://test_user:test_pass@localhost:3306/test_db
+          JWT_SECRET_KEY: test-secret-key
+          RUN_DB_TESTS: '1'
+        run: |
+          cd backend
+          pytest tests/test_migrations_db.py --cov=app --cov-report=
+
+      # Alle uebrigen Tests inkl. wave_integration (-m "" hebt den Standardfilter aus pytest.ini auf).
       - name: Run tests
         env:
           DATABASE_URL: mysql+aiomysql://test_user:test_pass@localhost:3306/test_db
           JWT_SECRET_KEY: test-secret-key
+          RUN_DB_TESTS: '1'
         run: |
           cd backend
-          pytest --cov=app --cov-report=term-missing
+          pytest --ignore=tests/test_migrations_db.py -m "" --cov=app --cov-append --cov-report=term-missing
 
   test-frontend:
     runs-on: ubuntu-latest
@@ -73,6 +92,16 @@ jobs:
         run: |
           cd frontend
           npm run lint
+
+      - name: Check locales (keys, plurals, placeholders, untranslated)
+        run: |
+          cd frontend
+          npm run check:locales -- --strict
+
+      - name: Unit tests (pure modules, locale checker)
+        run: |
+          cd frontend
+          npm test
 
       - name: Build frontend
         run: |
@@ -97,3 +126,24 @@ jobs:
           tags: dns-manager:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # E2E gegen echte MariaDB + 2x PowerDNS + Webhook-Empfaenger (scripts/e2e/README.md).
+  # Nur bei manuellem Start; laeuft isoliert im Projekt pdnsmgr-e2e (keine festen Host-Ports).
+  e2e:
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # Tag v2.4.1 fuer den Upgrade-Pfad
+
+      - name: Static checks
+        run: scripts/e2e/static-checks.sh
+
+      - name: E2E fresh install
+        run: scripts/e2e/run-e2e.sh
+
+      - name: E2E upgrade 2.4.1 -> current
+        run: scripts/e2e/upgrade-241-to-30.sh --no-build
