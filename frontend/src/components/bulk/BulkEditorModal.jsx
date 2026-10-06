@@ -283,6 +283,7 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
                             <textarea
                                 id={`${titleId}-text`}
                                 ref={textareaRef}
+                                autoFocus
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={18}
