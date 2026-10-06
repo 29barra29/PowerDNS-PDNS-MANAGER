@@ -168,10 +168,19 @@ test.describe('Benutzerverwaltung', () => {
       await expect(sec.getByRole('button', { name: t('users.generateButton') })).toHaveCount(0)
 
       // Umwandeln: Rueckfrage -> Step-up (lokaler Admin) -> Einmalpasswort
-      const confirm = acceptNextConfirm(page)
-      await sec.getByRole('button', { name: t('users.convertToLocal') }).click()
-      expect(await confirm).toContain(t('users.convertToLocalHint'))
+      const convertBtn = sec.getByRole('button', { name: t('users.convertToLocal') })
       const stepUp = dialog(page, t('stepUp.title'))
+      // Step-up ueber einem Dialog: ESC schliesst nur den Step-up, der Sicherheitsdialog bleibt
+      const first = acceptNextConfirm(page)
+      await convertBtn.click()
+      await first
+      await expect(stepUp).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(stepUp).toBeHidden()
+      await expect(sec).toBeVisible()
+      const confirm = acceptNextConfirm(page)
+      await convertBtn.click()
+      expect(await confirm).toContain(t('users.convertToLocalHint'))
       await stepUp.getByLabel(t('settings.currentPassword')).fill(ADMIN_PASSWORD)
       await stepUp.getByRole('button', { name: exact(t('stepUp.confirm')) }).click()
       const once = dialog(page, t('users.oneTimePasswordTitle', { name: conv.username }))
