@@ -248,13 +248,33 @@ def test_count_passthrough_skips_any_number_of_ttl_and_class_tokens():
 
 
 def test_lua_gate_lines_linear_time():
+    """Laufzeit waechst linear mit der Eingabe (Schutz gegen ReDoS/quadratische Pfade).
+
+    Gemessen wird das Verhaeltnis zweier Eingaben (Faktor 4), nicht die absolute Zeit: Unter Coverage
+    (CI) laeuft reiner Python-Code rund fuenfmal langsamer, und die Runner sind unterschiedlich schnell.
+    Linear ergibt ein Verhaeltnis um 4; ein quadratischer Pfad (z. B. Backtracking auf den langen
+    Sonderzeilen) liegt bei 16 und mehr.
+    """
     import time
 
-    big = HEADER + ("www 300 IN TXT " + '"' + "a" * 200 + '" ' + "( " * 20 + "\n") * 20_000
-    big += ("x" + " " * 100_000 + "IN\n") + ('"' * 100_000) + "\n" + ("\\" * 100_000) + "\n"
-    t = time.perf_counter()
-    zid.lua_gate_lines(big)
-    assert time.perf_counter() - t < 5.0
+    def build(n: int) -> str:
+        text = HEADER + ("www 300 IN TXT " + '"' + "a" * 200 + '" ' + "( " * 20 + "\n") * n
+        k = 5 * n
+        text += ("x" + " " * k + "IN\n") + ('"' * k) + "\n" + ("\\" * k) + "\n"
+        return text
+
+    def measure(n: int) -> float:
+        text = build(n)
+        t = time.perf_counter()
+        zid.lua_gate_lines(text)
+        return time.perf_counter() - t
+
+    measure(500)  # Aufwaermen (Imports, Caches)
+    small = measure(2_000)
+    large = measure(8_000)
+    # Faktor 8 statt 4 wegen Messrauschen; Untergrenze 0,5 s, damit Timer-Jitter bei winzigen Zeiten nicht zaehlt
+    assert large < max(8 * small, 0.5), (small, large)
+    assert large < 60.0, large
 
 
 def test_generic_type65402_in_preview_counts_as_lua():
