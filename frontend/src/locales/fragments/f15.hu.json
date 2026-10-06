@@ -1,6 +1,0 @@
-{
-  "set": {
-    "lua.import.blockedLines": "Érintett sorok: {{lines}}"
-  },
-  "remove": []
-}

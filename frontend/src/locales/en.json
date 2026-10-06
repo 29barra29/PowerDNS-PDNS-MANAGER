@@ -2547,7 +2547,8 @@
       "enableHint": "They are only served if enable-lua-records is active on the servers.",
       "found": "LUA records in the file: {{count}}",
       "issueLine": "Line {{line}}: {{message}}",
-      "issues": "Issues in LUA lines (PowerDNS validates on import itself):"
+      "issues": "Issues in LUA lines (PowerDNS validates on import itself):",
+      "blockedLines": "Affected lines: {{lines}}"
     },
     "notAllowedAdmin": "Only administrators may create or change LUA records.",
     "notAllowedDisabled": "LUA records are disabled in this panel.",

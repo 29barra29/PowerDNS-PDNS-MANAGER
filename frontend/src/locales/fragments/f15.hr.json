@@ -1,6 +1,0 @@
-{
-  "set": {
-    "lua.import.blockedLines": "Zahvaćeni retci: {{lines}}"
-  },
-  "remove": []
-}

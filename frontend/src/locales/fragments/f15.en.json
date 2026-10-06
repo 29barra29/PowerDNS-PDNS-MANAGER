@@ -1,6 +1,0 @@
-{
-  "set": {
-    "lua.import.blockedLines": "Affected lines: {{lines}}"
-  },
-  "remove": []
-}

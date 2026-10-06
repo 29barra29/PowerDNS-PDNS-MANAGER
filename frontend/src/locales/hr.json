@@ -2568,7 +2568,8 @@
       "enableHint": "Isporučuju se samo ako je enable-lua-records uključen na poslužiteljima.",
       "found": "LUA zapisa u datoteci: {{count}}",
       "issueLine": "Redak {{line}}: {{message}}",
-      "issues": "Problemi u LUA recima (PowerDNS sam provjerava pri uvozu):"
+      "issues": "Problemi u LUA recima (PowerDNS sam provjerava pri uvozu):",
+      "blockedLines": "Zahvaćeni retci: {{lines}}"
     },
     "notAllowedAdmin": "LUA zapise smiju stvarati ili mijenjati samo administratori.",
     "notAllowedDisabled": "LUA zapisi onemogućeni su u ovom panelu.",

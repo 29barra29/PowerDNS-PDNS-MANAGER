@@ -2547,7 +2547,8 @@
       "enableHint": "Csak akkor kerülnek kiszolgálásra, ha az enable-lua-records be van kapcsolva a szervereken.",
       "found": "LUA-rekordok a fájlban: {{count}}",
       "issueLine": "{{line}}. sor: {{message}}",
-      "issues": "Problémák a LUA-sorokban (a PowerDNS importáláskor maga is ellenőriz):"
+      "issues": "Problémák a LUA-sorokban (a PowerDNS importáláskor maga is ellenőriz):",
+      "blockedLines": "Érintett sorok: {{lines}}"
     },
     "notAllowedAdmin": "LUA-rekordokat csak adminisztrátorok hozhatnak létre vagy módosíthatnak.",
     "notAllowedDisabled": "A LUA-rekordok le vannak tiltva ebben a panelben.",
