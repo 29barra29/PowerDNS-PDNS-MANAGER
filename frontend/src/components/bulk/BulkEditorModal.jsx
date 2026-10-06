@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ChevronRight, FileText, Loader2, RefreshCw, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
 import PtrSyncOption from '../PtrSyncOption'
 import TtlInput from '../TtlInput'
-import { getDefault, getManagePtr, setManagePtr } from '../../lib/ptrPreference.js'
+import { getManagePtr, getPtrConfig, setManagePtr, subscribePtrConfig } from '../../lib/ptrPreference.js'
 import BulkPreviewView from './BulkPreviewView'
 import {
-    TEXT_MODES, TTL_MAX, TTL_MIN, applyErrorIssues, buildTextRequest, canApply, isConflictError, isTextEmpty,
-    isValidBulkTtl, issueI18n, lineIssuesOf, lineOffsets, loadAllPrefill, needsLinePrefix, previewChanges,
+    TEXT_MODES, TTL_MAX, TTL_MIN, applyErrorIssues, buildTextRequest, bulkApplyBody, canApply, effectivePtrChoice,
+    isConflictError, isTextEmpty, isValidBulkTtl, issueI18n, lineIssuesOf, lineOffsets, loadAllPrefill, needsLinePrefix, previewChanges,
     refreshRequest, touchesPtrTypes,
 } from '../../zoneDetail/bulkModel.js'
 
@@ -56,8 +56,12 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
     const [applyIssues, setApplyIssues] = useState([])
     const [confirmRemoval, setConfirmRemoval] = useState(false)
     const [conflict, setConflict] = useState(false)
-    // PTR-Pflege (F11): gemerkte Auswahl dieser Zone/dieses Browsers; null = nichts gemerkt -> Admin-Default
+    // PTR-Pflege (F11): gemerkte Auswahl dieser Zone/dieses Browsers; null = nichts gemerkt -> Admin-Default.
+    // Der Admin-Default kommt aus dem abonnierten /ptr/config-Cache; Anzeige und gesendeter Wert sind derselbe
+    // wirksame Wert (ptrChecked), gesendet wird immer explizit true/false (Spec F11 §12 Nr. 14).
     const [ptrChoice, setPtrChoice] = useState(() => getManagePtr(zoneKey))
+    const ptrConfig = useSyncExternalStore(subscribePtrConfig, getPtrConfig, getPtrConfig)
+    const ptrChecked = effectivePtrChoice(ptrChoice, ptrConfig)
 
     const dirty = textFlow && text !== initialText
     const syncAvailable = scope.length > 0
@@ -135,15 +139,14 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
 
     async function apply() {
         if (!applyAllowed) return
-        const body = { ...preview.ops }
-        if (ptrVisible) body.manage_ptr = ptrChoice
+        const body = bulkApplyBody(preview, { ptrVisible, managePtr: ptrChecked })
         setBusy(true)
         setError('')
         setApplyIssues([])
         try {
             const res = await api.bulkRecords(server, zoneId, body)
             setBusy(false)
-            onApplied(res, { managePtr: ptrVisible ? ptrChoice : null })
+            onApplied(res, { managePtr: ptrVisible ? ptrChecked : null })
         } catch (err) {
             setBusy(false)
             if (isConflictError(err)) {
@@ -182,8 +185,6 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
         setPtrChoice(!!v)
         setManagePtr(zoneKey, !!v)
     }
-
-    const ptrChecked = ptrChoice === null ? getDefault() : ptrChoice
 
     return (
         <div
