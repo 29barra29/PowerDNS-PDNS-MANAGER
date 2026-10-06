@@ -1,0 +1,6 @@
+{
+  "set": {
+    "login.ssoError.rateLimited": "Zu viele fehlgeschlagene SSO-Anmeldeversuche. Bitte versuche es in einigen Minuten erneut."
+  },
+  "remove": []
+}

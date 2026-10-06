@@ -47,11 +47,13 @@ LDAP_ON = {"ldap_enabled": True, "ldap_server_urls": '["ldaps://dc1.example.com"
 def _fresh_state():
     lrl.reset_for_tests()
     sso_oidc.reset_for_tests()
+    sso_router.reset_for_tests()
     core_auth._TOTP_USED.clear()
     secret_store.configure_for_tests()
     yield
     lrl.reset_for_tests()
     sso_oidc.reset_for_tests()
+    sso_router.reset_for_tests()
     core_auth._TOTP_USED.clear()
 
 
@@ -103,8 +105,10 @@ class FakeOidc:
         self.profile = profile()
         self.error: Exception | None = None
         self.calls = 0
+        self.discovery_calls = 0
 
     async def get_provider_metadata(self, issuer, **_kw):
+        self.discovery_calls += 1
         if self.discovery_error:
             raise self.discovery_error
         return dict(self.metadata)
@@ -197,6 +201,21 @@ def test_start_discovery_error_audited(env, oidc, detached):
     assert kw["details"]["reason"] == "discovery" and kw["details"]["method"] == "oidc"
 
 
+def test_start_discovery_error_negative_cache_and_dedupe(env, oidc, detached):
+    """Review Welle 2: nicht erreichbarer IdP – kein ausgehender Request und kein Audit je Anfrage."""
+    env.set_settings(**OIDC_ON)
+    oidc.discovery_error = OidcError("discovery", "Timeout")
+    c = env.client(ip="198.51.100.74")
+    for _ in range(5):
+        assert c.get("/api/v1/auth/oidc/start").headers["location"] == "/login?sso_error=discovery"
+    assert oidc.discovery_calls == 1 and len(failed(detached)) == 1
+    # Negativ-Cache abgelaufen, IdP wieder erreichbar -> normaler Start
+    oidc.discovery_error = None
+    for key, (_until, exc) in list(sso_router._discovery_failed.items()):
+        sso_router._discovery_failed[key] = (0.0, exc)
+    assert c.get("/api/v1/auth/oidc/start").status_code == 302 and oidc.discovery_calls == 2
+
+
 @pytest.mark.parametrize("base, secure", [(BASE, True), ("http://dns.local", False)])
 def test_start_redirects_with_state_cookie(env, oidc, base, secure):
     env.set_settings(**{**OIDC_ON, "app_base_url": base})
@@ -230,8 +249,59 @@ def test_callback_without_cookie_mismatch_and_replay(env, oidc, detached):
     assert callback(c, ok).headers["location"] == "/"
     r = callback(c, ok)                                   # Replay desselben States
     assert r.headers["location"] == "/login?sso_error=state"
-    assert [kw["details"]["reason"] for kw in failed(detached)] == ["state", "state", "state"]
+    # vor der State-Pruefung: hoechstens ein Audit je (IP, Code) im Dedupe-Fenster (Review Welle 2)
+    assert [kw["details"]["reason"] for kw in failed(detached)] == ["state"]
     assert oidc.calls == 1
+
+
+def test_callback_oidc_disabled_no_audit_no_metric(env, oidc, detached, monkeypatch):
+    """Review Welle 2: OIDC aus (Standard) – anonyme Callbacks erzeugen weder Audit noch Metrik."""
+    metrics = []
+    monkeypatch.setattr(sso_router.prom, "record_login", lambda *a: metrics.append(a))
+    c = env.client()
+    for i in range(30):
+        r = c.get("/api/v1/auth/oidc/callback", params={"state": f"x{i}", "code": "y"})
+        assert r.status_code == 303 and r.headers["location"] == "/login?sso_error=disabled"
+    assert failed(detached) == [] and metrics == [] and oidc.discovery_calls == 0
+
+
+def test_callback_without_state_audit_deduplicated_per_ip(env, oidc, detached):
+    env.set_settings(**OIDC_ON)
+    a, b = env.client(ip="198.51.100.70"), env.client(ip="2001:db8:1:2::5")
+    for i in range(10):
+        assert callback(a, state=f"x{i}").headers["location"] == "/login?sso_error=state"
+    assert callback(b).headers["location"] == "/login?sso_error=state"
+    assert callback(env.client(ip="2001:db8:1:2::99")).headers["location"] == "/login?sso_error=state"  # gleiches /64
+    kws = failed(detached)
+    assert [kw["details"]["ip"] for kw in kws] == ["198.51.100.70", "2001:db8:1:2::5"]
+    assert oidc.discovery_calls == 0                     # ohne gueltigen State keine Discovery
+
+
+def test_callback_failures_throttled_per_ip(env, oidc, detached):
+    env.set_settings(**OIDC_ON)
+    c = env.client(ip="198.51.100.71")
+    for i in range(sso_router.OIDC_FAIL_MAX):
+        assert callback(c, state=f"x{i}").headers["location"] == "/login?sso_error=state"
+    n_audits = len(failed(detached))
+    # gedrosselt: auch ein gueltiger State fuehrt weder zu Token-Tausch noch zu Audit oder Discovery
+    r = callback(c, state_cookie())
+    assert r.status_code == 303 and r.headers["location"] == "/login?sso_error=rate_limited"
+    assert not has_session_cookie(r) and state_cookie_deleted(r)
+    assert oidc.calls == 0 and oidc.discovery_calls == 0 and len(failed(detached)) == n_audits
+    r = c.get("/api/v1/auth/oidc/start")
+    assert r.headers["location"] == "/login?sso_error=rate_limited" and oidc.discovery_calls == 0
+    # andere IP ist nicht betroffen
+    assert callback(env.client(ip="198.51.100.72"), state_cookie()).headers["location"] == "/"
+
+
+def test_callback_after_valid_state_still_audited(env, oidc, detached):
+    """Nach gueltigem State bleibt jeder Fehler sichtbar (kein Dedupe), z. B. abgelehnte Konten."""
+    env.set_settings(**{**OIDC_ON, "oidc_jit_enabled": False})
+    c = env.client(ip="198.51.100.73")
+    for i in range(3):
+        st = f"st-{i}"
+        assert callback(c, state_cookie(state=st), state=st).headers["location"] == "/login?sso_error=no_account"
+    assert [kw["details"]["reason"] for kw in failed(detached)] == ["no_account"] * 3
 
 
 def test_callback_idp_error_detail_filtered(env, oidc, detached):
@@ -492,6 +562,21 @@ def test_settings_get_masks_secrets(env):
     assert body["ldap"]["bind_password"] == SECRET_MASK and body["oidc"]["linked_accounts"] == 1
     assert body["general"]["redirect_uri"] == BASE + "/api/v1/auth/oidc/callback"
     assert "client-secret-1" not in r.text and "bind-pw-1" not in r.text
+
+
+def test_settings_get_and_put_include_session_max_age(env, mails, monkeypatch):
+    """Review Welle 2 / Plan E-F10-2: der SSO-Tab warnt bei mehr als 86400 s – dazu liefert das Backend den Wert."""
+    from app.schemas.sso import SsoSettingsOut
+
+    monkeypatch.setattr(settings, "AUTH_COOKIE_MAX_AGE", 7 * 86400)
+    admin = env.add_user("root", role="admin")
+    c, h = env.client(), session_headers(admin)
+    body = c.get("/api/v1/settings/sso", headers=h).json()
+    assert body["general"]["session_max_age"] == 7 * 86400
+    assert SsoSettingsOut.model_validate(body).general.session_max_age == 7 * 86400
+    r = c.put("/api/v1/settings/sso", headers=h, json={"oidc": {"display_name": "Firmen-Login"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["general"]["session_max_age"] == 7 * 86400
 
 
 def test_settings_put_secret_keep_and_clear(env, mails):

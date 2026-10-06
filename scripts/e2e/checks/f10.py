@@ -2,8 +2,10 @@
 
 Neuinstallation (``check_fresh``):
 - ``GET /auth/sso/providers`` anonym: lokale Anmeldung an, keine Anbieter, ``Cache-Control: no-store``.
-- ``GET /auth/oidc/start`` (OIDC aus) -> 303 ``/login?sso_error=disabled``; Callback ohne State-Cookie -> ``state``.
-- ``/settings/sso`` nur per Admin-Session (Admin-Token 403, anonym 401); Roundtrip einer unkritischen Aenderung
+- ``GET /auth/oidc/start`` (OIDC aus) -> 303 ``/login?sso_error=disabled``; Callback ohne State-Cookie bei OIDC aus
+  -> ebenfalls ``disabled`` und ohne neuen ``LOGIN_FAILED``-Audit (Review Welle 2: kein anonymer Audit-Spam).
+- ``/settings/sso`` nur per Admin-Session (Admin-Token 403, anonym 401), liefert ``general.session_max_age``
+  (Warnung zur Sitzungsdauer, Plan E-F10-2); Roundtrip einer unkritischen Aenderung
   ohne Step-up; sensible Aenderung (LDAP-Server) ohne Bestaetigung -> 403 ``stepup_required``, mit falschem Passwort
   -> 403 ``stepup_failed``, mit Passwort -> 200 + Audit ``SSO_SETTINGS_UPDATE`` (``step_up: "password"``).
   Alles wird am Ende zurueckgesetzt (LDAP bleibt aus, andere Module merken nichts).
@@ -46,6 +48,11 @@ def _detail_code(resp) -> str | None:
     return detail.get("code") if isinstance(detail, dict) else None
 
 
+def _login_failed_count(ctx) -> int:
+    rows = ctx.db("SELECT COUNT(*) AS n FROM audit_logs WHERE action='LOGIN_FAILED'")
+    return int(rows[0]["n"]) if rows else 0
+
+
 def _last_audit(ctx, action: str) -> dict | None:
     rows = ctx.db("SELECT status, details FROM audit_logs WHERE action=%s ORDER BY id DESC LIMIT 1", (action,))
     if not rows:
@@ -68,9 +75,12 @@ def _public_flows(ctx) -> None:
         status, headers = _raw_get(ctx, "/api/v1/auth/oidc/start")
         ctx.eq(status, 303, "Start-Status")
         ctx.eq(headers.get("location"), "/login?sso_error=disabled", "Start-Redirect")
-        status, headers = _raw_get(ctx, "/api/v1/auth/oidc/callback?code=x&state=y")
-        ctx.eq(status, 303, "Callback-Status")
-        ctx.eq(headers.get("location"), "/login?sso_error=state", "Callback ohne State-Cookie")
+        before = _login_failed_count(ctx)
+        for i in range(3):
+            status, headers = _raw_get(ctx, f"/api/v1/auth/oidc/callback?code=x&state=y{i}")
+            ctx.eq(status, 303, "Callback-Status")
+            ctx.eq(headers.get("location"), "/login?sso_error=disabled", "Callback ohne State-Cookie bei OIDC aus")
+        ctx.eq(_login_failed_count(ctx), before, "kein LOGIN_FAILED-Audit fuer anonyme Callbacks bei OIDC aus")
 
 
 def _settings_roundtrip(ctx) -> None:
@@ -81,6 +91,8 @@ def _settings_roundtrip(ctx) -> None:
         before = sess.get("settings/sso", expect=200).json()
         ctx.eq(before["ldap"]["enabled"], False, "LDAP aus")
         ctx.eq(before["oidc"]["jit_enabled"], False, "OIDC-JIT per Default aus [S5]")
+        ctx.check(isinstance(before["general"].get("session_max_age"), int)
+                  and before["general"]["session_max_age"] > 0, "general.session_max_age (Plan E-F10-2)")
     old_name = before["oidc"]["display_name"]
     old_ldap = {"server_urls": before["ldap"]["server_urls"], "user_base_dn": before["ldap"]["user_base_dn"]}
 

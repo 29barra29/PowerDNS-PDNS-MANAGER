@@ -1,0 +1,6 @@
+{
+  "set": {
+    "login.ssoError.rateLimited": "Túl sok sikertelen SSO-bejelentkezési kísérlet. Kérlek, próbáld újra néhány perc múlva."
+  },
+  "remove": []
+}

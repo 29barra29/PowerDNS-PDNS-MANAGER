@@ -3,7 +3,8 @@
 Alle Endpunkte: Admin mit Browser-Session (``get_admin_session_user``) – ein geleakter Admin-Token darf den Login
 nicht auf einen fremden Anmeldedienst umbiegen.
 
-- ``GET /settings/sso``: Einstellungen, Secrets nur als Maske (+ ``*_set``/``*_unreadable``), Zahl verknuepfter Konten.
+- ``GET /settings/sso``: Einstellungen, Secrets nur als Maske (+ ``*_set``/``*_unreadable``), Zahl verknuepfter Konten,
+  dazu ``general.session_max_age`` (Sekunden, ``AUTH_COOKIE_MAX_AGE``) fuer die Warnung zur Sitzungsdauer (E-F10-2).
 - ``PUT /settings/sso``: Pruefen und Speichern ueber ``services/sso_settings.update``. Aendert der Request sensible
   Felder (``SsoUpdateResult.changed_sensitive``: Anbieter-Ziel, Vertrauensanker, JIT, Gruppen-/Rollenzuordnung,
   lokale Anmeldung …), ist vorher ``verify_step_up`` Pflicht (Body-Feld ``step_up``; lokale Konten Passwort + ggf.
@@ -45,6 +46,13 @@ SAVED_MESSAGE = "SSO-Einstellungen gespeichert"
 TEST_FAILED_MESSAGE = "SSO-Test fehlgeschlagen"
 
 
+def _settings_out(cfg: sso_settings.SsoConfig, *, linked: dict[str, int]) -> dict:
+    """``settings_out`` plus ``general.session_max_age``: der SSO-Tab warnt bei mehr als 86400 s (Plan E-F10-2)."""
+    out = sso_settings.settings_out(cfg, linked=linked)
+    out["general"]["session_max_age"] = int(app_settings.AUTH_COOKIE_MAX_AGE)
+    return out
+
+
 @router.get("/sso")
 async def get_sso_settings(
     db: DbRead,
@@ -52,7 +60,7 @@ async def get_sso_settings(
 ):
     """SSO-Einstellungen (F10 3.3.1 + Plan-Felder); Secrets maskiert."""
     cfg = await sso_settings.load_sso_config(db)
-    return sso_settings.settings_out(cfg, linked=await sso_settings.count_linked_accounts(db))
+    return _settings_out(cfg, linked=await sso_settings.count_linked_accounts(db))
 
 
 @router.put("/sso")
@@ -84,7 +92,7 @@ async def update_sso_settings(
     linked = await sso_settings.count_linked_accounts(db)
     return {
         "message": SAVED_MESSAGE,
-        "settings": sso_settings.settings_out(res.config, linked=linked),
+        "settings": _settings_out(res.config, linked=linked),
         "warnings": res.warnings,
     }
 
