@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Loader2, AlertCircle, X, Sparkles } from 'lucide-react'
 import api from '../api'
@@ -148,20 +148,12 @@ export default function RecordFormModal({ request }) {
         setExtStates(initialExtStates(exts, { record: null, mode: 'template', type: tpl.type, zone: zoneInfo }))
     }
 
-    /** ESC (nicht waehrend des Speicherns), Tab-Falle und Fokus-Rueckgabe macht der Hook */
-    const dialogRef = useDialogFocus({ onClose: closeModal, canClose: !saving, initialFocusRef: typeSelectRef })
-
-    /** Strg/Cmd+Enter speichert */
-    useEffect(() => {
-        function onKey(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault()
-                if (formRef.current && !saving) formRef.current.requestSubmit()
-            }
-        }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-    }, [saving])
+    /** ESC (nicht waehrend des Speicherns), Tab-Falle, Fokus-Rueckgabe und Strg/Cmd+Enter (speichert, nur im
+     * obersten Dialog) macht der Hook */
+    const dialogRef = useDialogFocus({
+        onClose: closeModal, canClose: !saving, initialFocusRef: typeSelectRef,
+        onSubmitShortcut: () => { if (formRef.current && !saving) formRef.current.requestSubmit() },
+    })
 
     /* ----- Name (F8-F05) -----------------------------------------------------*/
     // Bearbeiten: der Name ist fest, gesendet wird genau der bestehende Record-Name. Sonst: getrimmt, klein,

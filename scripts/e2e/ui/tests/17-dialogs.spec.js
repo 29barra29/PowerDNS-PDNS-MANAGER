@@ -131,6 +131,27 @@ test.describe('Dialoge: Lage, Fokus, ESC', () => {
     }
   })
 
+  test('Neue Zone (Zonenliste, seit WS-W3-NACHARBEIT mit role="dialog")', async ({ page }) => {
+    await page.goto('/zones')
+    const opener = page.getByRole('main').getByRole('button', { name: t('zones.newZone') }).first()
+    await checkDialog(page, opener, page.getByRole('dialog', { name: t('zones.createZone') }))
+  })
+
+  test('Mobile Seitenleiste: Dialog mit Fokus-Falle, ESC und Fokus-Rueckgabe', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/')
+    const opener = page.getByRole('button', { name: t('layout.openMenu') })
+    const nav = page.getByRole('dialog', { name: t('layout.menu') })
+    await expect(nav).toHaveCount(0)   // geschlossen: kein Dialog
+    await opener.click()
+    await expect(nav).toBeVisible()
+    await expectFocusInside(nav)
+    await expectFocusTrapped(page, nav, 6)
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog', { name: t('layout.menu') })).toHaveCount(0)
+    await expect(opener).toBeFocused()
+  })
+
   // Aeltere Dialoge ohne role="dialog" (Karte .glass-card mit Ueberschrift): nur die Lage wird geprueft
   test('Aeltere Dialoge (Server, Vorlagen, ACME, Zone, Benutzer, Record) liegen ueber der Seite', async ({ page, adminApi }) => {
     const zone = uniqueZone('ui-dlg-old')

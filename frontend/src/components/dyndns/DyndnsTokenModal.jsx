@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Plus, Router, X } from 'lucide-react'
 import api from '../../api'
@@ -85,20 +85,12 @@ export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawL
     const zoneKnown = zoneNames.includes(stripDot(zoneInput))
     const preview = zoneKnown ? buildHostname(subInput, zoneInput) : ''
 
-    // Fokus (Namensfeld), Tab-Falle, ESC (nicht waehrend des Speicherns) und Fokus-Rueckgabe: lib/useDialogFocus
-    const dialogRef = useDialogFocus({ onClose, canClose: !saving, initialFocusRef: nameRef })
-
-    // Strg/Cmd+Enter speichert
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
-                e.preventDefault()
-                formRef.current?.requestSubmit()
-            }
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [saving])
+    // Fokus (Namensfeld), Tab-Falle, ESC (nicht waehrend des Speicherns), Fokus-Rueckgabe und Strg/Cmd+Enter
+    // (nur im obersten Dialog): lib/useDialogFocus
+    const dialogRef = useDialogFocus({
+        onClose, canClose: !saving, initialFocusRef: nameRef,
+        onSubmitShortcut: () => { if (!saving) formRef.current?.requestSubmit() },
+    })
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))

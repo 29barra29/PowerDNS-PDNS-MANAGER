@@ -6,6 +6,7 @@ import api from '../api'
 import { applyLanguage } from '../i18n'
 import { useUpdateAvailability } from '../hooks/useUpdateAvailability'
 import LanguageDropdown from './LanguageDropdown'
+import { useDialogFocus } from '../lib/useDialogFocus'
 import PageSpinner from './PageSpinner'
 import Banners from './banners/Banners'
 
@@ -67,13 +68,10 @@ export default function Layout() {
     }, [location.pathname])
     /* eslint-enable react-hooks/set-state-in-effect */
 
-    // ESC schliesst die Mobile-Sidebar
-    useEffect(() => {
-        if (!sidebarOpen) return
-        const onKey = (e) => { if (e.key === 'Escape') setSidebarOpen(false) }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-    }, [sidebarOpen])
+    // Geoeffnete Mobile-Sidebar ist ein modaler Dialog (WS-W3-NACHARBEIT, W2-NACHARBEIT 4.3): Fokus hinein,
+    // Tab-Falle, ESC schliesst (nur wenn kein anderer Dialog darueber liegt), Fokus zurueck zum Menue-Knopf.
+    // Auf dem Desktop (md+) ist sie immer sichtbar und kein Dialog (sidebarOpen bleibt dort false).
+    const sidebarRef = useDialogFocus({ active: sidebarOpen, onClose: () => setSidebarOpen(false) })
 
     const handleLogout = () => {
         api.logout()
@@ -109,6 +107,10 @@ export default function Layout() {
 
             {/* Sidebar – Mobile: kollabierbar via translate, Desktop (md+): immer sichtbar */}
             <aside
+                ref={sidebarRef}
+                role={sidebarOpen ? 'dialog' : undefined}
+                aria-modal={sidebarOpen ? 'true' : undefined}
+                aria-label={sidebarOpen ? t('layout.menu') : undefined}
                 className={`bg-bg-secondary border-r border-border flex flex-col shrink-0
                     fixed inset-y-0 left-0 z-40 w-64 transition-transform duration-200 ease-out
                     ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}

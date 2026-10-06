@@ -1,6 +1,6 @@
 // Gemeinsame Fokus-Verwaltung fuer modale Dialoge (role="dialog" + aria-modal="true"), WAI-ARIA Dialog Pattern.
 //
-//   const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef })
+//   const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef, onSubmitShortcut })
 //   <div role="dialog" aria-modal="true" ref={dialogRef} ...>
 //
 // Leistet:
@@ -9,6 +9,10 @@
 //   Fokus schon im Dialog (z. B. per `autoFocus`), bleibt er dort.
 // - Tab-Falle: Tab/Umschalt+Tab wandern nur innerhalb des Dialogs (vom letzten zum ersten Element und umgekehrt).
 // - ESC ruft `onClose()` auf, solange `canClose` wahr ist (z. B. nicht waehrend des Speicherns).
+// - Strg/Cmd+Enter ruft `onSubmitShortcut()` auf (falls angegeben) – nur im obersten Dialog. Frueher hingen diese
+//   Listener global am window/document: lag ein Step-up- oder Einmal-Dialog darueber, sendete Strg+Enter den
+//   darunterliegenden Dialog ab (WS-W2-NACHARBEIT 4.4, behoben in WS-W3-NACHARBEIT). Dialoge haengen deshalb
+//   keine eigenen keydown-Listener mehr an window/document (statische Pruefung tests/a11y-dialogs.test.mjs).
 // - Fokus-Rueckgabe: Beim Schliessen (Unmount bzw. `active` -> false) bekommt das zuvor fokussierte Element den
 //   Fokus zurueck, sofern es noch im Dokument ist und der Fokus nicht inzwischen woanders gesetzt wurde.
 //   Ist der Ausloeser beim Schliessen (noch) deaktiviert – z. B. ein Speichern-Knopf, der waehrend eines Step-ups
@@ -194,17 +198,25 @@ function restoreFocus(previous, node) {
     timer = setTimeout(finish, RESTORE_WAIT_MS)
 }
 
+/** Strg/Cmd+Enter (ohne Alt, nicht waehrend einer IME-Eingabe)? */
+export function isSubmitShortcut(e) {
+    return Boolean(e && (e.key === 'Enter') && (e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing)
+}
+
 /**
  * Fokus-Management fuer einen modalen Dialog. Liefert den Ref fuer das Element mit role="dialog".
- * @param {{ onClose?: () => void, canClose?: boolean, initialFocusRef?: { current: any }, active?: boolean }} [options]
+ * @param {{ onClose?: () => void, canClose?: boolean, initialFocusRef?: { current: any }, active?: boolean,
+ *           onSubmitShortcut?: () => void }} [options]
  */
-export function useDialogFocus({ onClose, canClose = true, initialFocusRef = null, active = true } = {}) {
+export function useDialogFocus({
+    onClose, canClose = true, initialFocusRef = null, active = true, onSubmitShortcut = null,
+} = {}) {
     const dialogRef = useRef(null)
-    const latest = useRef({ onClose, canClose })
+    const latest = useRef({ onClose, canClose, onSubmitShortcut })
 
     // immer die aktuellen Callbacks/Flags verwenden, ohne den Fokus-Effekt neu zu starten
     useEffect(() => {
-        latest.current = { onClose, canClose }
+        latest.current = { onClose, canClose, onSubmitShortcut }
     })
 
     useEffect(() => {
@@ -224,6 +236,13 @@ export function useDialogFocus({ onClose, canClose = true, initialFocusRef = nul
 
         function onKeyDown(e) {
             if (!isTopDialog(token) || belongsToOtherModal(e.target, node)) return
+            if (isSubmitShortcut(e)) {
+                const { onSubmitShortcut: submit } = latest.current
+                if (e.defaultPrevented || typeof submit !== 'function') return
+                e.preventDefault()
+                submit()
+                return
+            }
             if (e.key === 'Escape' || e.key === 'Esc') {
                 if (e.defaultPrevented || e.isComposing) return
                 const { onClose: close, canClose: allowed } = latest.current

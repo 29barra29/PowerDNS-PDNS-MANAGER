@@ -5,6 +5,7 @@
     "dyndns.secretRevokedForeignHint": "Samo vlasnik može generisati novu tajnu.",
     "dyndns.secretRevokedHint": "Tajna je blokirana iz sigurnosnih razloga (token se pojavio u URL-u ili su pristupi opozvani). Generišite novu tajnu i zatim ponovo aktivirajte token – stara tajna ostaje nevažeća.",
     "dyndns.secretRevokedRotate": "Generiši novu tajnu",
+    "layout.menu": "Navigacija",
     "lua.settings.loadError": "LUA postavke nije bilo moguće učitati ({{error}}). Spremanje je moguće tek nakon uspješnog učitavanja."
   },
   "remove": []

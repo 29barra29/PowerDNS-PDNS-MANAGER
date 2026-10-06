@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Check, Copy, Info, X } from 'lucide-react'
 import { useDialogFocus } from '../../lib/useDialogFocus'
@@ -15,25 +15,11 @@ import ModalPortal from '../common/ModalPortal'
 export default function DnssecDialog({ title, icon: Icon, onClose, onSubmit, busy = false, wide = false, children }) {
     const { t } = useTranslation()
     const titleId = useId()
-    const boxRef = useDialogFocus({ onClose, canClose: !busy })
-    const latest = useRef({ onSubmit, busy })
-
-    useEffect(() => {
-        latest.current = { onSubmit, busy }
+    // ESC, Tab-Falle, Fokus und Strg/Cmd+Enter (Primaeraktion, nur im obersten Dialog) uebernimmt der Hook
+    const boxRef = useDialogFocus({
+        onClose, canClose: !busy,
+        onSubmitShortcut: () => { if (onSubmit && !busy) onSubmit() },
     })
-
-    // Strg/Cmd+Enter ruft die Primaeraktion (ESC, Tab-Falle und Fokus uebernimmt der Hook)
-    useEffect(() => {
-        function onKey(e) {
-            const cur = latest.current
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && cur.onSubmit && !cur.busy) {
-                e.preventDefault()
-                cur.onSubmit()
-            }
-        }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-    }, [])
 
     return (
         <ModalPortal>

@@ -79,26 +79,18 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
         onClose()
     }, [busy, dirty, onClose, t])
 
-    // Fokus (Textarea im Text-Schritt), Tab-Falle, ESC (requestClose, nicht waehrend eines Requests) und
-    // Fokus-Rueckgabe: lib/useDialogFocus
-    const dialogRef = useDialogFocus({ onClose: requestClose, canClose: !busy, initialFocusRef: textareaRef })
+    // Fokus (Textarea im Text-Schritt), Tab-Falle, ESC (requestClose, nicht waehrend eines Requests),
+    // Fokus-Rueckgabe und Strg/Cmd+Enter = Vorschau bzw. Anwenden (nur im obersten Dialog): lib/useDialogFocus
+    const dialogRef = useDialogFocus({
+        onClose: requestClose, canClose: !busy, initialFocusRef: textareaRef,
+        onSubmitShortcut: () => { if (primaryRef.current && !primaryRef.current.disabled) primaryRef.current.click() },
+    })
 
     // Zurueck in den Text-Schritt: Fokus wieder in die Textarea (nach dem Hook-Effekt, s. o.)
     useEffect(() => {
         if (step === 'text') textareaRef.current?.focus()
     }, [step])
 
-    // Strg/Cmd+Enter = Vorschau bzw. Anwenden
-    useEffect(() => {
-        function onKey(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault()
-                if (primaryRef.current && !primaryRef.current.disabled) primaryRef.current.click()
-            }
-        }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-    }, [])
 
     async function sendPreview(request) {
         setBusy(true)

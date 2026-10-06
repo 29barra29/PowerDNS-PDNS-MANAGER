@@ -89,19 +89,11 @@ export default function PanelTokenFormModal({ mode, token, isAdmin, zonePermissi
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef: nameRef })
-
-    // Strg/Cmd+Enter sendet ab (Fokus, Tab-Falle, ESC und Fokus-Rueckgabe: lib/useDialogFocus).
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) {
-                e.preventDefault()
-                formRef.current?.requestSubmit()
-            }
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [busy])
+    // Fokus, Tab-Falle, ESC, Fokus-Rueckgabe und Strg/Cmd+Enter (nur im obersten Dialog): lib/useDialogFocus
+    const dialogRef = useDialogFocus({
+        onClose, canClose: !busy, initialFocusRef: nameRef,
+        onSubmitShortcut: () => { if (!busy) formRef.current?.requestSubmit() },
+    })
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))

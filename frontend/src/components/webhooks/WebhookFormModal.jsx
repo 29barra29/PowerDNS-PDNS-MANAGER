@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Webhook, X } from 'lucide-react'
 import api from '../../api'
@@ -29,20 +29,12 @@ export default function WebhookFormModal({ mode, hook, availableEvents, eventCat
     const [modalError, setModalError] = useState('')
     const urlUnreadable = isEdit && hook?.has_url === false
 
-    // Fokus aufs Namensfeld, Tab-Falle, ESC (nicht waehrend des Speicherns), Fokus-Rueckgabe (L11)
-    const dialogRef = useDialogFocus({ onClose, canClose: !saving, initialFocusRef: nameRef })
-
-    // Strg/Cmd+Enter sendet ab.
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
-                e.preventDefault()
-                formRef.current?.requestSubmit()
-            }
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [saving])
+    // Fokus aufs Namensfeld, Tab-Falle, ESC (nicht waehrend des Speicherns), Fokus-Rueckgabe (L11);
+    // Strg/Cmd+Enter sendet ab (nur, wenn dieser Dialog oben liegt)
+    const dialogRef = useDialogFocus({
+        onClose, canClose: !saving, initialFocusRef: nameRef,
+        onSubmitShortcut: () => { if (!saving) formRef.current?.requestSubmit() },
+    })
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))
