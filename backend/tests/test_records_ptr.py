@@ -203,3 +203,24 @@ def test_bulk_entry_level_flag_is_ignored(env):
                                                           "records": [{"content": "192.0.2.20"}], "manage_ptr": True}]})
     assert r.status_code == 200, r.text
     assert "ptr" not in r.json()["details"] and _ptr_values(env, 20) == []
+
+
+def test_ptr_sync_source_names_action_and_zone(env):
+    """L-5 (WS-W3-NACHARBEIT): PTR_SYNC-Audit/-Webhook nennen Schreibart und Forward-Zone (vorher immer BULK_UPDATE
+    ohne Zone), fuer alle vier Einhaengepunkte."""
+    r = env.client.post(BASE, json={"name": "host.example.com.", "type": "A", "records": [{"content": "192.0.2.10"}],
+                                    "manage_ptr": True})
+    assert r.status_code == 200, r.text
+    r = env.client.put(BASE, json={"name": WWW, "type": "A", "ttl": 300, "old_content": "192.0.2.1",
+                                   "new_content": "192.0.2.2", "manage_ptr": True})
+    assert r.status_code == 200, r.text
+    r = env.client.request("DELETE", f"{BASE}/delete", json={"name": "host.example.com.", "type": "A",
+                                                             "manage_ptr": True})
+    assert r.status_code == 200, r.text
+    r = env.client.post(f"{BASE}/bulk", json={"merge": [{"name": WWW, "type": "A", "records": [{"content": "192.0.2.5"}]}],
+                                              "manage_ptr": True})
+    assert r.status_code == 200, r.text
+    sources = [kw["source"] for _a, kw in env.sync_ptrs.calls]
+    assert [(s["action"], s["zone"]) for s in sources] == [
+        ("CREATE", Z), ("UPDATE", Z), ("DELETE", Z), ("BULK_UPDATE", Z)]
+    assert sources[0]["name"] == "host.example.com." and sources[0]["server"] == "ns1"

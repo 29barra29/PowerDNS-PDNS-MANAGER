@@ -105,3 +105,34 @@ def test_delete_semantics_unchanged_for_existing_and_double_deletes():
     ops = BulkRecordUpdate(set_disabled=[{"name": f"www.{Z}", "type": "A", "content": "192.0.2.1", "disabled": True}])
     plan = bulk_service.build_plan(Z, zone, ops, strict=True)
     assert plan.issues == [] and len(plan.changes) == 1
+
+
+# ---------------------------------------------------------------------------------------------
+# L-4: Einzelwert loeschen + merge auf dasselbe RRset behaelt die TTL
+# ---------------------------------------------------------------------------------------------
+def test_delete_last_value_then_merge_keeps_ttl():
+    zone = _zone(rr(f"www.{Z}", "A", "192.0.2.1", ttl=7200))
+    ops = BulkRecordUpdate(
+        delete=[{"name": f"www.{Z}", "type": "A", "content": "192.0.2.1"}],
+        merge=[{"name": f"www.{Z}", "type": "A", "records": [{"content": "192.0.2.9"}]}],
+        default_ttl=300,
+    )
+    plan = bulk_service.build_plan(Z, zone, ops, strict=True)
+    assert plan.issues == []
+    (change,) = plan.changes
+    assert change.after["ttl"] == 7200
+    assert [r["content"] for r in change.after["records"]] == ["192.0.2.9"]
+
+
+def test_merge_into_new_rrset_uses_default_or_given_ttl():
+    zone = _zone(rr(f"www.{Z}", "A", "192.0.2.1", ttl=7200))
+    # neues RRset (anderer Name) -> default_ttl, unveraendertes Verhalten
+    ops = BulkRecordUpdate(merge=[{"name": f"neu.{Z}", "type": "A", "records": [{"content": "192.0.2.9"}]}],
+                           default_ttl=300)
+    (change,) = bulk_service.build_plan(Z, zone, ops, strict=True).changes
+    assert change.after["ttl"] == 300
+    # ausdrueckliche TTL gewinnt immer
+    ops = BulkRecordUpdate(delete=[{"name": f"www.{Z}", "type": "A", "content": "192.0.2.1"}],
+                           merge=[{"name": f"www.{Z}", "type": "A", "ttl": 600, "records": [{"content": "192.0.2.9"}]}])
+    (change,) = bulk_service.build_plan(Z, zone, ops, strict=True).changes
+    assert change.after["ttl"] == 600

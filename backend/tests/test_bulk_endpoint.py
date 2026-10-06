@@ -522,8 +522,10 @@ async def test_ptr_sync_for_changes_called_with_audit_changes(two, fake_db, admi
 
     calls = []
 
-    async def fake_sync(db, user, server_name, changes, *, ttl_default=3600, actor_user_id=None):
-        calls.append({"server": server_name, "changes": changes, "ttl_default": ttl_default, "actor": actor_user_id})
+    async def fake_sync(db, user, server_name, changes, *, ttl_default=3600, actor_user_id=None, action=None,
+                        zone=None):
+        calls.append({"server": server_name, "changes": changes, "ttl_default": ttl_default, "actor": actor_user_id,
+                      "action": action, "zone": zone})
         return [{"ip": "192.0.2.5", "ptr": "5.2.0.192.in-addr.arpa.", "zone": "2.0.192.in-addr.arpa.",
                  "target": "n.example.com.", "op": "set", "action": "set", "reason": None, "existing": [],
                  "classless_zone": None, "fanout": {"ns1": "saved"}, "detail": None}]
@@ -533,6 +535,7 @@ async def test_ptr_sync_for_changes_called_with_audit_changes(two, fake_db, admi
                               "manage_ptr": True, "default_ttl": 600}, fake_db, admin)
     (call,) = calls
     assert call["server"] == "ns1" and call["ttl_default"] == 600 and call["actor"] == 1
+    assert (call["action"], call["zone"]) == ("BULK_UPDATE", Z)   # L-5 (WS-W3-NACHARBEIT)
     assert call["changes"] == audit.last["details"]["changes"]
     assert res.details["ptr"][0]["action"] == "set"
     assert audit.last["details"]["ptr"] == ptr_service.compact(res.details["ptr"])
@@ -554,6 +557,7 @@ async def test_ptr_sync_for_changes_called_with_audit_changes(two, fake_db, admi
                                     fake_db, admin)
     assert r.details["ptr"] and calls[-1]["changes"][0]["after"] is None
     assert "ptr" in events.calls[-1]["data"] and "ptr" in audit.last["details"]
+    assert [(c["action"], c["zone"]) for c in calls] == [("CREATE", Z), ("UPDATE", Z), ("DELETE", Z)]
 
 
 @pytest.mark.wave_integration
@@ -562,7 +566,7 @@ async def test_ptr_admin_default_enables_sync(two, admin, audit, events, monkeyp
 
     calls = []
 
-    async def fake_sync(db, user, server_name, changes, *, ttl_default=3600, actor_user_id=None):
+    async def fake_sync(db, user, server_name, changes, *, ttl_default=3600, actor_user_id=None, **_kw):
         calls.append(changes)
         return []
 

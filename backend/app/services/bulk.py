@@ -336,7 +336,12 @@ def build_plan(
         k = _key(item.name, item.type)
         st = state(k)
         if st is None:
-            st = _RRState(int(item.ttl if item.ttl is not None else ops.default_ttl), {})
+            ttl = item.ttl
+            if ttl is None and k in removed_here and cur.get(k):
+                # RRset wurde in dieser Anfrage per Einzelwert-Loeschung geleert: dessen TTL behalten statt still
+                # auf default_ttl zurueckzusetzen (Review-Fund L-4)
+                ttl = cur[k].get("ttl")
+            st = _RRState(int(ttl if ttl is not None else ops.default_ttl), {})
             work[k] = st
         for r in item.records:
             c = ck(k[1], r.content)
@@ -676,31 +681,30 @@ class PtrOutcome:
 
 
 async def sync_ptr_for_changes(db, user, server_name: str, requested: Optional[bool], changes: list[dict], *,
-                               ttl_default: int = 3600) -> Optional[PtrOutcome]:
+                               ttl_default: int = 3600, action: str = "BULK_UPDATE",
+                               zone: Optional[str] = None) -> Optional[PtrOutcome]:
     """Gemeinsamer PTR-Einhaengepunkt aller vier Record-Schreiber (create/update/delete/bulk; F11 5.12, B.6a).
 
     Laeuft nur nach Primary-Erfolg und nur, wenn A/AAAA-RRsets geaendert wurden und die PTR-Pflege aktiv ist
-    (``requested`` bzw. Admin-Default ``ptr_auto_default`` = ``ptr.resolve_manage_ptr``). ``changes`` im
-    Audit-v2-Format; ``ptr.sync_for_changes`` wirft nie. Rueckgabe ``None`` = keine PTR-Pflege gelaufen.
+    (``requested`` bzw. Admin-Default ``ptr_auto_default`` ueber ``ptr.resolve_manage_ptr`` – keine eigene Kopie,
+    Review-Fund L-10). ``changes`` im Audit-v2-Format; ``ptr.sync_for_changes`` wirft nie. ``action``
+    (``CREATE|UPDATE|DELETE|BULK_UPDATE``) und ``zone`` (Forward-Zone) landen im ``PTR_SYNC``-Audit und -Webhook
+    (Review-Fund L-5; vorher immer ``BULK_UPDATE`` ohne Zone). Rueckgabe ``None`` = keine PTR-Pflege gelaufen.
     """
     if not any(str((c or {}).get("type", "")).upper() in PTR_FORWARD_TYPES for c in changes or []):
         return None
-    if requested is None:
-        try:
-            from app.services.system_settings import get_bool_setting
-
-            manage = await get_bool_setting(db, PTR_AUTO_DEFAULT_KEY, False)
-        except Exception:  # noqa: BLE001 - der Forward-Write ist erfolgt und muss auditiert werden
-            logger.exception("PTR-Pflege: Admin-Default nicht lesbar – PTR-Pflege uebersprungen")
-            return None
-    else:
-        manage = bool(requested)
-    if not manage:
-        return None
     from app.services import ptr as ptr_service  # F9F11-BE (Plan B.6a)
 
+    try:
+        manage = await ptr_service.resolve_manage_ptr(db, requested)
+    except Exception:  # noqa: BLE001 - der Forward-Write ist erfolgt und muss auditiert werden
+        logger.exception("PTR-Pflege: Admin-Default nicht lesbar – PTR-Pflege uebersprungen")
+        return None
+    if not manage:
+        return None
     results = await ptr_service.sync_for_changes(db, user, server_name, changes, ttl_default=ttl_default,
-                                                 actor_user_id=getattr(user, "id", None))
+                                                 actor_user_id=getattr(user, "id", None), action=action,
+                                                 zone=zone)
     results = jsonable_encoder(results or [])
     return PtrOutcome(results=results, compact=jsonable_encoder(ptr_service.compact(results)))
 
@@ -848,7 +852,7 @@ async def apply_bulk(db, user, server_name: str, zone_id: str, ops: BulkRecordUp
 
     audit_changes = plan.audit_changes()
     ptr = await sync_ptr_for_changes(db, user, server_name, ops.manage_ptr, audit_changes,
-                                     ttl_default=ops.default_ttl)
+                                     ttl_default=ops.default_ttl, action="BULK_UPDATE", zone=st.zone_norm)
     after_source = AFTER_REREAD if fan.primary_outcome == "verified_after_timeout" else AFTER_COMPUTED
     details = st.details(fanout_summary=summary, applied=None, after_source=after_source,
                          primary_outcome=fan.primary_outcome)
