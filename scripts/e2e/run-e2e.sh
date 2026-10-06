@@ -37,7 +37,7 @@ while [ "$#" -gt 0 ]; do
     --list) LIST=1 ;;
     --ui) UI=1 ;;
     --ui-only) UI=1; API_CHECKS=0 ;;
-    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekanntes Argument: $1" >&2; exit 2 ;;
   esac
   shift

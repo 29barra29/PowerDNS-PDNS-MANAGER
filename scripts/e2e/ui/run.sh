@@ -38,7 +38,7 @@ while [ "$#" -gt 0 ]; do
     --pending) PENDING=1 ;;
     --no-setup) WITH_SETUP=0 ;;
     --) shift; PW_ARGS=("$@"); break ;;
-    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekanntes Argument: $1 (Playwright-Argumente nach --)" >&2; exit 2 ;;
   esac
   shift
