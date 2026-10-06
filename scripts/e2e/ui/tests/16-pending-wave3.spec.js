@@ -1,18 +1,14 @@
-// Welle-3-UI, die beim Schreiben dieser Specs noch nicht integriert war (Basis: integrierte Welle 2):
+// Welle-3-UI (seit dem Wellenende 3 integriert; urspruenglich als Pending-Specs gegen Welle 2 geschrieben):
 //   WS-F15   LUA-Record anlegen (als Admin) mit Warnbox, Vorlage und Server-Status
 //   WS-F5-FE Secrets-Status-Karte im Reiter "Sicherheit"; unlesbares SMTP-Passwort und 2FA-Geheimnis (per DB)
 //   WS-F4-C  Rollover-Schritt "DNSKEY pruefen" und DS in der Elternzone (Deaktivieren), ohne und mit DNS-Pruefung
-// Standard: SKIP mit TODO. Nach dem Merge der Workstreams mit `scripts/e2e/ui/run.sh --pending` (bzw.
-// E2E_UI_PENDING=1) ausfuehren; Selektoren folgen den Specs (F15 §2.2/§6.5, F5 §6.2, F4 §2.9) und den i18n-Keys dort.
-// Gruen -> skipUnlessPending-Zeile entfernen (dann laufen sie immer mit). Stand 06.10.2026: gegen eine lokale
-// Vorschau (Welle-2-Stand + ws/WS-F15, ws/WS-F5-FE, ws/WS-F4-C, ws/WS-W2-NACHARBEIT, Fragmente gemergt) alle gruen.
+// Selektoren folgen den Specs (F15 §2.2/§6.5, F5 §6.2, F4 §2.9) und den i18n-Keys dort.
 const { test, expect } = require('../fixtures/test')
 const dns = require('node:dns').promises
 const { PanelApi, uniqueZone, pdns } = require('../fixtures/api')
 const { db } = require('../fixtures/db')
 const { t, exact, pattern } = require('../fixtures/i18n')
 const { zonePath, modal, field, dialog, rowWith } = require('../fixtures/ui')
-const { skipUnlessPending } = require('../fixtures/pending')
 
 const bare = (zone) => zone.replace(/\.$/, '')
 
@@ -23,7 +19,6 @@ test.describe('Welle 3 (nach Integration)', () => {
   })
 
   test('WS-F15: LUA-Record als Admin mit Vorlage, Warnbox und Server-Status', async ({ page, adminApi }) => {
-    skipUnlessPending('WS-F15 (LUA-UI: LuaTemplatePicker, LuaWarningBox, LuaValue)')
     const zone = uniqueZone('ui-lua')
     zones.push(zone)
     await adminApi.createZone(zone)
@@ -51,7 +46,6 @@ test.describe('Welle 3 (nach Integration)', () => {
   })
 
   test('WS-F5-FE: Secrets-Status im Reiter "Sicherheit"', async ({ page }) => {
-    skipUnlessPending('WS-F5-FE (SecretsStatusCard im Sicherheits-Reiter)')
     await page.goto('/settings?tab=security')
     await expect(page.getByRole('heading', { name: t('settings.secrets.title') })).toBeVisible()
     // Frischer E2E-Stand: Schluessel angelegt, alle Geheimnisse verschluesselt und lesbar
@@ -60,7 +54,6 @@ test.describe('Welle 3 (nach Integration)', () => {
   })
 
   test('WS-F5-FE: unlesbare Geheimnisse (SMTP-Passwort, 2FA eines Benutzers) in Status-Karte und SMTP-Reiter', async ({ page, adminApi }) => {
-    skipUnlessPending('WS-F5-FE (SecretsStatusCard, smtp.tab password_unreadable)')
     const user = await adminApi.createUser()
     try {
       const userApi = await PanelApi.login(user.username, user.password)
@@ -87,7 +80,6 @@ test.describe('Welle 3 (nach Integration)', () => {
   })
 
   test('WS-F4-C: Rollover-Schritt "DNSKEY pruefen" und Elternzone beim Deaktivieren (externe Abfragen aus)', async ({ page, adminApi }) => {
-    skipUnlessPending('WS-F4-C (Parent-DS-/DNSKEY-Pruefung in DnssecDisableModal/DnssecRolloverModal)')
     const zone = uniqueZone('ui-pds')
     zones.push(zone)
     await adminApi.createZone(zone)
@@ -119,7 +111,6 @@ test.describe('Welle 3 (nach Integration)', () => {
   })
 
   test('WS-F4-C: mit DNS-Pruefung (Resolver = pdns1, Kindzone mit Glue): DNSKEY-Pruefung und Elternzone', async ({ page, adminApi }) => {
-    skipUnlessPending('WS-F4-C (Parent-DS-/DNSKEY-Pruefung, Antrag 3 aus WS-F4-C.md)')
     const { address: ip1 } = await dns.lookup('pdns1', { family: 4 })
     const parent = uniqueZone('ui-f4c')
     const child = `sub.${parent}`

@@ -44,7 +44,7 @@ Test; Trace ansehen mit `npx playwright show-trace <trace.zip>` auf einem Rechne
 `ui/setup-backend.log`.
 
 Typische Laufzeit auf dem Entwicklungs-Host (2 CPUs, warmer Build-Cache): UI-Smoke allein ca. 3 Minuten
-(54 Tests, davon 5 nur mit `--pending`), `run-e2e.sh --ui` gesamt ca. 4 Minuten (Build, Start, 17 API-Check-Module,
+(54 Tests), `run-e2e.sh --ui` gesamt ca. 4 Minuten (Build, Start, 20 API-Check-Module,
 UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen.
 
 ## Sicherheit und Isolation
@@ -70,7 +70,7 @@ UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen
 - Konsole: Jede Seite wird ueberwacht. `console.error`, ungefangene Fehler und HTTP-5xx-Meldungen lassen den Test
   scheitern; 4xx-Netzwerkmeldungen (erwartete 401/403/409) nicht. Erwartete Meldungen: `guard.allow(/…/)`.
 - Zustaende ohne API (externes SSO-Konto, unlesbares Geheimnis, abgelaufener Token) per `fixtures/db.js`.
-- Noch nicht integrierte Welle-3-UI: `skipUnlessPending('WS-…')` bzw. `pendingCheck('WS-…', fn)` – laeuft nur mit
+- Noch nicht integrierte UI paralleler Workstreams: `skipUnlessPending('WS-…')` bzw. `pendingCheck('WS-…', fn)` – laeuft nur mit
   `run.sh --pending` (`E2E_UI_PENDING=1`). Nach dem Merge des Workstreams einschalten und, wenn gruen, die Marker entfernen.
 - Bekannte, gemeldete Fehler: `knownBug('ID', fn)` – erwartet das Scheitern; ist der Fehler behoben, schlaegt der Test
   fehl, damit der Marker verschwindet.
@@ -94,7 +94,7 @@ UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen
 | `13-panel-tokens` | Scope/Lesen, Bearbeiten ohne Aenderung, Pausieren, Widerrufen, abgelaufener Token (F14) |
 | `14-audit-log` | Paginierung, Filter mit URL, Detail-Drawer, CSV mit Filter, Aufbewahrung (F7) |
 | `15-propagation` | Deep-Link, Pruefung mit Record-Vergleich, Zonenwechsel (F12F13-FE) |
-| `16-pending-wave3` | LUA (F15), Secrets-Status (F5-FE), DNSKEY-/Parent-DS-Schritt (F4-C) – nur mit `--pending` |
+| `16-pending-wave3` | LUA (F15), Secrets-Status (F5-FE), DNSKEY-/Parent-DS-Schritt (F4-C) (seit Wellenende 3 immer aktiv) |
 | `17-dialogs` | Lage (Abdeckung, klickbare Knoepfe), Fokus, Tab-Falle, ESC, Fokus-Rueckgabe fuer 10 Dialoge; Lage der aelteren Dialoge (W1-NACHARBEIT 5.6) |
 | `18-dashboard-search` | Uebersicht (beide Server online), Suche mit Link in die Zone, Nicht-Admin nur eigene Zonen (F8b) |
 | `19-templates` | Vorlage mit Record anlegen (TTL-Pruefung), in der Zonenanlage verwenden, loeschen (FE1b, F8b) |

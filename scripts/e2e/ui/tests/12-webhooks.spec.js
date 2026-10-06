@@ -7,7 +7,6 @@ const { test, expect } = require('../fixtures/test')
 const { receiver, unique, uniqueZone } = require('../fixtures/api')
 const { t, exact, pattern } = require('../fixtures/i18n')
 const { dialog, expectFocusInside, expectFocusTrapped } = require('../fixtures/ui')
-const { pendingCheck } = require('../fixtures/pending')
 const { db } = require('../fixtures/db')
 
 test.describe('Webhooks', () => {
@@ -46,7 +45,7 @@ test.describe('Webhooks', () => {
     await page.keyboard.press('Escape')
     await expect(secretDlg).toBeVisible()
     // Fokusfalle: OneTimeSecretModal steht in der a11y-PENDING-Liste (Umstellung durch WS-W2-NACHARBEIT, Welle 3)
-    await pendingCheck('WS-W2-NACHARBEIT (OneTimeSecretModal mit useDialogFocus)', () => expectFocusTrapped(page, secretDlg, 6))
+    await expectFocusTrapped(page, secretDlg, 6)
     await secretDlg.getByRole('button', { name: t('secretModal.done') }).click()
     await expect(secretDlg).toBeHidden()
     await expect(card.getByText(t('webhooks.created'))).toBeVisible()

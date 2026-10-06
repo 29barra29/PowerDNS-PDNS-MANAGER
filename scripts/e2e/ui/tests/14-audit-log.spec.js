@@ -5,10 +5,8 @@ const { test, expect } = require('../fixtures/test')
 const { uniqueZone } = require('../fixtures/api')
 const { t, exact, pattern } = require('../fixtures/i18n')
 const { dialog, expectFocusInside } = require('../fixtures/ui')
-const { pendingCheck } = require('../fixtures/pending')
 
 // L11/a11y-PENDING: Detail-Drawer bekommt useDialogFocus erst durch WS-W2-NACHARBEIT (Welle 3, Punkt 5)
-const DRAWER_OWNER = 'WS-W2-NACHARBEIT (AuditLogPage-Drawer mit useDialogFocus)'
 
 const bare = (zone) => zone.replace(/\.$/, '')
 
@@ -59,11 +57,11 @@ test.describe('Audit-Log', () => {
     await page.keyboard.press('Enter')
     const drawer = dialog(page, pattern('audit.detailTitle'))
     await expect(drawer).toBeVisible()
-    await pendingCheck(DRAWER_OWNER, () => expectFocusInside(drawer))
+    await expectFocusInside(drawer)
     await expect(drawer).toContainText(`b.${bare(zone)}`)
     await page.keyboard.press('Escape')
     await expect(drawer).toBeHidden()
-    await pendingCheck(DRAWER_OWNER, () => expect(row).toBeFocused())
+    await expect(row).toBeFocused()
 
     // CSV-Export mit den aktiven Filtern
     const download = page.waitForEvent('download')

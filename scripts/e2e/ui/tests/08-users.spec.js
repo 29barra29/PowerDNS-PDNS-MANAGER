@@ -8,12 +8,10 @@ const { test, expect } = require('../fixtures/test')
 const { PanelApi, receiver, unique, strongPassword } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
 const { field, modal, dialog, acceptNextConfirm, loginViaUi, expectLoggedIn, expectFocusInside } = require('../fixtures/ui')
-const { pendingCheck } = require('../fixtures/pending')
 const { db } = require('../fixtures/db')
 const { ADMIN_PASSWORD } = require('../fixtures/env')
 
 // L12/a11y-PENDING: UserSecurityModal bekommt useDialogFocus erst durch WS-W2-NACHARBEIT (Welle 3, Punkt 5)
-const FOCUS_OWNER = 'WS-W2-NACHARBEIT (UserSecurityModal mit useDialogFocus)'
 
 /** Zwangsdialog "Passwort aendern" ausfuellen (aktuelles -> neues Passwort). */
 async function completeForcedChange(page, current, next) {
@@ -84,7 +82,7 @@ test.describe('Benutzerverwaltung', () => {
     await openBtn.click()
     const sec = page.getByRole('dialog', { name: t('users.securityTitle') })
     await expect(sec.getByText(t('users.securityFor', { name: seeded.username }))).toBeVisible()
-    await pendingCheck(FOCUS_OWNER, () => expectFocusInside(sec))
+    await expectFocusInside(sec)
 
     // API-Tokens dieses Benutzers: Liste + "Alle widerrufen"
     await expect(sec.getByRole('button', { name: `${t('panelTokens.revoke')}: ui-a` })).toBeVisible()
@@ -105,10 +103,8 @@ test.describe('Benutzerverwaltung', () => {
     await confirm
     await expect(sec.getByText(t('users.revokeAccessDone', { tokens: 0, dyndns: 0, webhooks: 1, deliveries: 0 }))).toBeVisible()
     // L3: Der Widerruf beendet auch laufende Browser-Sitzungen (WS-W2-NACHARBEIT, users.sessions_revoked_at)
-    await pendingCheck('WS-W2-NACHARBEIT (L3: Widerruf beendet Browser-Sitzungen)', async () => {
-      await userSession.goto('/search')
-      await expect(userSession).toHaveURL(/\/login$/)
-    })
+    await userSession.goto('/search')
+    await expect(userSession).toHaveURL(/\/login$/)
 
     // Zufallspasswort mit Zwangswechsel: Einmal-Anzeige, ESC schliesst nicht, Kopieren
     await sec.locator('label').filter({ hasText: t('users.mustChangeOnNextLogin') }).nth(1).locator('input').check()
@@ -128,7 +124,7 @@ test.describe('Benutzerverwaltung', () => {
     await once.getByRole('button', { name: t('users.oneTimeDone') }).click()
     await expect(once).toBeHidden()
     await expect(sec).toBeHidden()
-    await pendingCheck(FOCUS_OWNER, () => expect(openBtn).toBeFocused())
+    await expect(openBtn).toBeFocused()
 
     // Login mit dem Zufallspasswort ohne 2FA -> Zwangswechsel
     const userPage = await openAs(null)
