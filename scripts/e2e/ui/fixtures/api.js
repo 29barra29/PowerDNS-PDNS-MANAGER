@@ -194,6 +194,17 @@ const pdns = {
       await ctx.dispose()
     }
   },
+  /** Paket-Cache eines Servers fuer eine Zone leeren (neue Schluessel/DS sofort sichtbar). */
+  async flush(server, zone) {
+    const cfg = PDNS[server]
+    const ctx = await request.newContext({ baseURL: cfg.url, extraHTTPHeaders: { 'X-API-Key': cfg.key } })
+    try {
+      const res = await ctx.put(`/api/v1/servers/localhost/cache/flush?domain=${enc(zone)}`)
+      if (!res.ok()) throw new Error(`PowerDNS ${server} cache/flush ${zone}: ${res.status()}`)
+    } finally {
+      await ctx.dispose()
+    }
+  },
   /** RRset (name/type) mit Werten setzen. */
   replace(server, zone, name, type, contents, ttl = 300) {
     return pdns.patch(server, zone, [{
