@@ -46,5 +46,7 @@ module.exports = defineConfig({
       args: secureOrigins ? [`--unsafely-treat-insecure-origin-as-secure=${secureOrigins}`] : [],
     },
   },
-  projects: [{ name: 'chromium' }],
+  // channel 'chromium' = volles Chromium im neuen Headless-Modus: nur dort wirkt
+  // --unsafely-treat-insecure-origin-as-secure (die Headless-Shell ignoriert den Schalter).
+  projects: [{ name: 'chromium', use: { channel: 'chromium' } }],
 })
