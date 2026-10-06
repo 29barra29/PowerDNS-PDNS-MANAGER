@@ -5,7 +5,7 @@
 const { test, expect } = require('../fixtures/test')
 const { PanelApi, uniqueZone } = require('../fixtures/api')
 const { t, exact, pattern } = require('../fixtures/i18n')
-const { zonePath, dialog, rowWith, expectFocusInside, expectFocusTrapped, expectDialogOnTop } = require('../fixtures/ui')
+const { zonePath, dialog, modal, rowWith, expectFocusInside, expectFocusTrapped, expectDialogOnTop } = require('../fixtures/ui')
 const { pendingCheck, knownBug } = require('../fixtures/pending')
 
 const W2 = (what) => `WS-W2-NACHARBEIT (${what} mit useDialogFocus)`
@@ -151,5 +151,33 @@ test.describe('Dialoge: Lage, Fokus, ESC', () => {
     } finally {
       await adminApi.del('settings/metrics/token').catch(() => {})
     }
+  })
+
+  // Aeltere Dialoge ohne role="dialog" (Karte .glass-card mit Ueberschrift): nur die Lage wird geprueft
+  test('Aeltere Dialoge (Server, Vorlagen, ACME, Zone, Benutzer, Record) liegen ueber der Seite', async ({ page, adminApi }) => {
+    const zone = uniqueZone('ui-dlg-old')
+    zones.push(zone)
+    await adminApi.createZone(zone)
+    const cases = [
+      ['/settings?tab=servers', 'settingsMore.addServer', 'settingsMore.addNewServer'],
+      ['/settings?tab=templates', 'templates.newTemplate', 'templates.createNewTemplate'],
+      ['/settings?tab=acme', 'settings.acme.newToken', 'settings.acme.newToken'],
+      ['/zones', 'zones.newZone', 'zones.createZone'],
+      ['/users', 'users.newUser', 'users.createUser'],
+      [zonePath(zone), 'zoneDetail.addRecord', 'zoneDetail.addRecord'],
+    ]
+    const problems = []
+    for (const [path, openerKey, titleKey] of cases) {
+      await page.goto(path)
+      await page.getByRole('main').getByRole('button', { name: t(openerKey) }).first().click()
+      const box = modal(page, t(titleKey))
+      await expect(box).toBeVisible()
+      try {
+        await expectDialogOnTop(box)
+      } catch (err) {
+        problems.push(`${path}: ${String(err.message).split('\n').slice(0, 6).join(' ')}`)
+      }
+    }
+    expect(problems, 'Dialoge, die nicht ueber der Seite liegen').toEqual([])
   })
 })
