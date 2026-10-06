@@ -74,6 +74,7 @@ health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}
 # Gleiches Image wie das laufende Backend auch fuer setup-backend
 E2E_IMAGE="$(docker inspect -f '{{.Config.Image}}' pdnsmgr-e2e-api)"
 export E2E_IMAGE
+ui_log "laufender Stack: Backend-Image $E2E_IMAGE"
 
 if [ -z "${E2E_ADMIN_PASSWORD:-}" ] && [ -n "$WORKDIR" ] && [ -r "$WORKDIR/admin_password" ]; then
   E2E_ADMIN_PASSWORD="$(head -n1 "$WORKDIR/admin_password")"
