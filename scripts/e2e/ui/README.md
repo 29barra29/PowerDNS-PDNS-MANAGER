@@ -44,7 +44,7 @@ Test; Trace ansehen mit `npx playwright show-trace <trace.zip>` auf einem Rechne
 `ui/setup-backend.log`.
 
 Typische Laufzeit auf dem Entwicklungs-Host (2 CPUs, warmer Build-Cache): UI-Smoke allein ca. 3 Minuten
-(51 Tests, davon 5 nur mit `--pending`), `run-e2e.sh --ui` gesamt ca. 4 Minuten (Build, Start, 17 API-Check-Module,
+(54 Tests, davon 5 nur mit `--pending`), `run-e2e.sh --ui` gesamt ca. 4 Minuten (Build, Start, 17 API-Check-Module,
 UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen.
 
 ## Sicherheit und Isolation
@@ -95,7 +95,9 @@ UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen
 | `14-audit-log` | Paginierung, Filter mit URL, Detail-Drawer, CSV mit Filter, Aufbewahrung (F7) |
 | `15-propagation` | Deep-Link, Pruefung mit Record-Vergleich, Zonenwechsel (F12F13-FE) |
 | `16-pending-wave3` | LUA (F15), Secrets-Status (F5-FE), DNSKEY-/Parent-DS-Schritt (F4-C) – nur mit `--pending` |
-| `17-dialogs` | Lage (Abdeckung, klickbare Knoepfe), Fokus, Tab-Falle, ESC, Fokus-Rueckgabe fuer 10 Dialoge (W1-NACHARBEIT 5.6) |
+| `17-dialogs` | Lage (Abdeckung, klickbare Knoepfe), Fokus, Tab-Falle, ESC, Fokus-Rueckgabe fuer 10 Dialoge; Lage der aelteren Dialoge (W1-NACHARBEIT 5.6) |
+| `18-dashboard-search` | Uebersicht (beide Server online), Suche mit Link in die Zone, Nicht-Admin nur eigene Zonen (F8b) |
+| `19-templates` | Vorlage mit Record anlegen (TTL-Pruefung), in der Zonenanlage verwenden, loeschen (FE1b, F8b) |
 
 ## CI
 
