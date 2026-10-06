@@ -4,6 +4,7 @@
 // Quellen: WS-F10-APP-FE Abschnitt 7 (Login-Seite, SSO-Tab), 6.3. Keycloak/Authentik/AD: nicht im E2E-Stack.
 const { test, expect, EMPTY_STATE } = require('../fixtures/test')
 const { ADMIN_PASSWORD } = require('../fixtures/env')
+const { PanelApi } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
 const { dialog, expectFocusInside } = require('../fixtures/ui')
 
@@ -15,11 +16,16 @@ const SSO_ERRORS = {
 }
 
 test.describe('SSO', () => {
-  test('SSO-Reiter: Issuer aendern verlangt Step-up (lokales Konto)', async ({ page, adminApi }) => {
+  test('SSO-Reiter: Issuer aendern verlangt Step-up (lokales Konto)', async ({ adminApi, openAs }) => {
     const before = await adminApi.get('settings/sso')
     const oldIssuer = before?.oidc?.issuer || ''
     const newIssuer = `https://idp-${Date.now()}.example.com/realms/e2e`
+    // Eigenes Admin-Konto: der absichtliche Fehlversuch zaehlt in der Login-Drossel (5 je Benutzer/15 min)
+    // nicht gegen den E2E-Admin, mit dem alle anderen Specs arbeiten
+    const admin2 = await adminApi.createUser({ role: 'admin' })
+    const api = await PanelApi.login(admin2.username, admin2.password)
     try {
+      const page = await openAs(api)
       await page.goto('/settings?tab=sso')
       const card = page.locator('.glass-card').filter({ has: page.getByRole('heading', { name: t('settings.sso.oidcTitle') }) })
       await expect(card.getByText(t('settings.sso.stepUpHint'))).toBeVisible()
@@ -37,22 +43,24 @@ test.describe('SSO', () => {
       await expect(page.getByRole('alert')).toHaveCount(0)
       expect((await adminApi.get('settings/sso')).oidc.issuer).toBe(oldIssuer)
 
-      // Falsches Passwort: Fehler im Dialog, Dialog bleibt (genau ein Fehlversuch – Login-Drossel je Benutzer)
+      // Falsches Passwort: Fehler im Dialog, Dialog bleibt
       await save.click()
-      await stepUp.getByLabel(t('settings.currentPassword')).fill(`${ADMIN_PASSWORD}-falsch`)
+      await stepUp.getByLabel(t('settings.currentPassword')).fill(`${admin2.password}-falsch`)
       await stepUp.getByRole('button', { name: exact(t('stepUp.confirm')) }).click()
       await expect(stepUp.getByRole('alert')).toBeVisible()
       await expect(stepUp).toBeVisible()
 
       // Richtiges Passwort: gespeichert
-      await stepUp.getByLabel(t('settings.currentPassword')).fill(ADMIN_PASSWORD)
+      await stepUp.getByLabel(t('settings.currentPassword')).fill(admin2.password)
       await stepUp.getByRole('button', { name: exact(t('stepUp.confirm')) }).click()
       await expect(stepUp).toBeHidden()
       await expect(page.getByRole('status').filter({ hasText: t('settings.sso.saved') })).toBeVisible()
       expect((await adminApi.get('settings/sso')).oidc.issuer).toBe(newIssuer)
     } finally {
+      await api.dispose()
       await adminApi.put('settings/sso', { oidc: { issuer: oldIssuer }, step_up: { current_password: ADMIN_PASSWORD } })
         .catch(() => {})
+      await adminApi.deleteUser(admin2.id)
     }
   })
 
