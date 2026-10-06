@@ -513,6 +513,10 @@ async def _sync_zone(db, zone: str, servers: tuple[str, ...], idxs: list[int], o
 
     keys = [(rr["name"], "PTR") for rr in rrsets]
     before_map = {k: before_snap.get(k[0]) for k in keys}
+    # Bewusst require_primary=True (Default), abweichend von Plan B.5 ("PTR: require_primary=False") – Entscheidung
+    # WS-W3-NACHARBEIT zu Review-Fund L-6: Scheitert der Server der Reverse-Zone, meldet die PTR-Pflege einen Fehler
+    # (Audit PTR_SYNC error, Ergebnis "error") statt die Peers auf einen anderen Stand zu bringen; der Forward-Write ist
+    # davon unberuehrt, die PTRs lassen sich ueber die Zone nachziehen.
     fan = await fanout.apply_rrsets(db, primary, zone, rrsets, timeout=WRITE_TIMEOUT, before_state=before_map)
     resource_name = keys[0][0] if len(keys) == 1 else zone
     extra = {"auto_ptr": True, "source": source, "primary_outcome": fan.primary_outcome}

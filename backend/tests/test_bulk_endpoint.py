@@ -166,6 +166,24 @@ async def test_primary_patch_error_no_peer_write_error_audit(two, fake_db, admin
     assert events.calls == []
 
 
+async def test_primary_unclear_outcome_audit_says_applied_unknown(two, fake_db, admin, audit, events):
+    """L-7 (WS-W3-NACHARBEIT): Transportfehler beim PATCH, Nachpruefung nicht moeglich -> Audit behauptet nicht
+    applied=false, sondern applied="unknown"."""
+    srv = two.ns1
+
+    def unclear_patch(zid, zone, rrsets):
+        srv.fail_reads = 10          # Nachpruefung scheitert ebenfalls
+        raise srv._transport_error()
+
+    srv._patch = unclear_patch
+    with pytest.raises(HTTPException):
+        await apply("ns1", {"set_ttl": [{"name": WWW, "type": "A", "ttl": 300}]}, fake_db, admin)
+    a = audit.last
+    assert a["status"] == "error" and a["details"]["primary_outcome"] == "unknown"
+    assert a["details"]["applied"] == "unknown"
+    assert two.ns2.patches == [] and events.calls == []
+
+
 # --- Nr. 5: Peer fehlt ein zu loeschender Wert --------------------------------------------------------------------
 async def test_peer_missing_value_is_drift_not_error(two, fake_db, admin, audit, events):
     res = await apply("ns1", {"delete": [{"name": WWW, "type": "A", "content": "192.0.2.2"}]}, fake_db, admin)

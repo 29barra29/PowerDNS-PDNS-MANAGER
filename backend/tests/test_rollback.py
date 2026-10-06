@@ -360,3 +360,43 @@ async def test_rollback_primary_timeout_verified(pdns, admin, audit, events):
     assert res.details["primary_outcome"] == "verified_after_timeout"
     assert audit[0]["details"]["after_source"] == "reread" and audit[0].get("status", "success") == "success"
     assert pdns.ns2.values(Z, WWW, "A") == ["192.0.2.1"]
+
+
+# --- L-8 (WS-W3-NACHARBEIT): Rollback pflegt PTRs wie jeder Record-Schreiber -------------------------------------
+async def test_rollback_runs_ptr_sync_with_admin_default(pdns, admin, audit, events, monkeypatch):
+    from app.services import ptr as ptr_service
+
+    seen = {}
+
+    async def manage(db, requested):
+        seen["requested"] = requested
+        return seen.get("default", False)
+
+    calls = []
+
+    async def fake_sync(db, user, server_name, changes, *, ttl_default=3600, actor_user_id=None, action=None,
+                        zone=None):
+        calls.append({"server": server_name, "changes": changes, "action": action, "zone": zone})
+        return [{"ip": "192.0.2.1", "ptr": "1.2.0.192.in-addr.arpa.", "zone": "2.0.192.in-addr.arpa.",
+                 "target": WWW, "op": "set", "action": "set", "reason": None, "existing": [],
+                 "classless_zone": None, "fanout": {"ns1": "saved"}, "detail": None}]
+
+    monkeypatch.setattr(ptr_service, "resolve_manage_ptr", manage)
+    monkeypatch.setattr(ptr_service, "sync_for_changes", fake_sync)
+    # Admin-Default aus: keine PTR-Pflege, Antwort/Audit/Webhook ohne ptr
+    res = await _rollback(HistoryDB([entry([UPDATE_CHANGE])]), admin)
+    assert seen["requested"] is None and calls == []
+    assert "ptr" not in res.details and "ptr" not in audit[-1]["details"] and "ptr" not in events[-1]["data"]
+    # Admin-Default an: PTR-Pflege mit action ROLLBACK
+    pdns.ns1.zones[Z]["rrsets"] = [r for r in pdns.ns1.zones[Z]["rrsets"] if r["type"] != "A"] + [
+        rr(WWW, "A", "192.0.2.2")]
+    pdns.ns2.zones[Z]["rrsets"] = [r for r in pdns.ns2.zones[Z]["rrsets"] if r["type"] != "A"] + [
+        rr(WWW, "A", "192.0.2.2")]
+    seen["default"] = True
+    res = await _rollback(HistoryDB([entry([UPDATE_CHANGE])]), admin)
+    (call,) = calls
+    assert call["action"] == "ROLLBACK" and call["zone"] == Z and call["server"] == "ns1"
+    assert call["changes"][0]["after"]["records"][0]["content"] == "192.0.2.1"
+    assert res.details["ptr"][0]["action"] == "set"
+    assert audit[-1]["details"]["ptr"] == ptr_service.compact(res.details["ptr"])
+    assert events[-1]["data"]["ptr"] == audit[-1]["details"]["ptr"]

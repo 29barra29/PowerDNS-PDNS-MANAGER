@@ -307,6 +307,14 @@ async def rollback_change(
         )
         raise exc
 
+    # PTR-Pflege wie bei jedem anderen Record-Schreiber (Plan B.6a, Review-Fund L-8): Rollback hat kein eigenes
+    # manage_ptr, es gilt der Admin-Default ptr_auto_default (Standard aus)
+    from app.services import bulk as bulk_service
+
+    ptr = await bulk_service.sync_ptr_for_changes(db, current_user, server_name, None, change.changes,
+                                                  action="ROLLBACK", zone=zone)
+    if ptr is not None:
+        change.details["ptr"] = ptr.compact
     new_log = await write_audit(
         db, "RECORD_ROLLBACK", "record", res_name, details=change.details, user_id=current_user.id,
         server_name=server_name, zone_name=zone, revert_of_id=audit_id,
@@ -315,16 +323,17 @@ async def rollback_change(
     await enqueue_event(
         db, "record.rollback", actor=current_user, zone=zone, server=server_name,
         data={"server": server_name, "zone": zone, "reverted_audit_log_id": audit_id, "forced": forced,
-              **webhook_changes(change.changes), "fanout": fan.summary},
+              **webhook_changes(change.changes), "fanout": fan.summary,
+              **({"ptr": ptr.compact} if ptr is not None else {})},
         audit_log_id=new_log.id if new_log else None,
     )
-    return MessageResponse(
-        message=f"Änderung #{audit_id} zurückgesetzt",
-        details={"revert_audit_id": new_log.id if new_log else None,
-                 "rolled_back": [{"name": i.name, "type": i.type} for i in writes],
-                 "skipped": skipped, "forced": forced, "fanout": fan.summary,
-                 "primary_outcome": fan.primary_outcome},
-    )
+    details = {"revert_audit_id": new_log.id if new_log else None,
+               "rolled_back": [{"name": i.name, "type": i.type} for i in writes],
+               "skipped": skipped, "forced": forced, "fanout": fan.summary,
+               "primary_outcome": fan.primary_outcome}
+    if ptr is not None:
+        details["ptr"] = ptr.results
+    return MessageResponse(message=f"Änderung #{audit_id} zurückgesetzt", details=details)
 
 
 @router.get("/{server_name}/{zone_id:path}/history/{audit_id:int}", response_model=HistoryEntry)

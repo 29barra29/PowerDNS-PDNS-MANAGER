@@ -688,7 +688,7 @@ async def sync_ptr_for_changes(db, user, server_name: str, requested: Optional[b
     Laeuft nur nach Primary-Erfolg und nur, wenn A/AAAA-RRsets geaendert wurden und die PTR-Pflege aktiv ist
     (``requested`` bzw. Admin-Default ``ptr_auto_default`` ueber ``ptr.resolve_manage_ptr`` – keine eigene Kopie,
     Review-Fund L-10). ``changes`` im Audit-v2-Format; ``ptr.sync_for_changes`` wirft nie. ``action``
-    (``CREATE|UPDATE|DELETE|BULK_UPDATE``) und ``zone`` (Forward-Zone) landen im ``PTR_SYNC``-Audit und -Webhook
+    (``CREATE|UPDATE|DELETE|BULK_UPDATE|ROLLBACK``) und ``zone`` (Forward-Zone) landen im ``PTR_SYNC``-Audit und -Webhook
     (Review-Fund L-5; vorher immer ``BULK_UPDATE`` ohne Zone). Rueckgabe ``None`` = keine PTR-Pflege gelaufen.
     """
     if not any(str((c or {}).get("type", "")).upper() in PTR_FORWARD_TYPES for c in changes or []):
@@ -837,8 +837,12 @@ async def apply_bulk(db, user, server_name: str, zone_id: str, ops: BulkRecordUp
             err = fan.primary_error
             code = (err.status_code if err is not None and err.status_code else None) or 502
             detail = err.detail if err is not None else f"Server '{server_name}' hat die Änderung nicht angenommen."
-        await audit_error(st.details(fanout_summary=summary, applied=False, after_source=None,
-                                     primary_outcome=fan.primary_outcome), str(detail))
+        # applied=false nur, wenn der Primary die Aenderung sicher nicht uebernommen hat; bei unklarem Ausgang
+        # (Zeitueberschreitung ohne bestaetigten Stand) "unknown" statt einer falschen Behauptung (Review-Fund L-7)
+        unclear = fan.primary_outcome == "unknown"
+        await audit_error(st.details(fanout_summary=summary, applied=None if unclear else False, after_source=None,
+                                     primary_outcome=fan.primary_outcome,
+                                     extra={"applied": "unknown"} if unclear else None), str(detail))
         raise HTTPException(status_code=code, detail=detail)
 
     plan = st.plan or BulkPlan()
