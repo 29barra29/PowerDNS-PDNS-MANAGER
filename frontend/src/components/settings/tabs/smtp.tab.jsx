@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, Wifi, Eye, EyeOff, Mail, Send } from 'lucide-react'
+import { Loader2, Wifi, Eye, EyeOff, Mail, Send, AlertTriangle } from 'lucide-react'
 import api from '../../../api'
 import { smtpPasswordValue } from '../../../lib/settingsForms.js'
 import { useSettings } from '../settingsContext'
@@ -11,6 +11,10 @@ export const tab = { id: 'smtp', order: 50, labelKey: 'settings.smtp', icon: Mai
 // Tab "E-Mail (SMTP)".
 // F8-D05 (N20): das gespeicherte Passwort wird nie ins Formular geladen. Leeres Feld = behalten (password: null),
 // neuer Wert = ersetzen, Haken "entfernen" = loeschen (password: ''). Texte uebersetzt (A11).
+// F5 (WS-F5-FE): Warnung bei nicht entschluesselbarem Passwort (`password_unreadable`); Aendern von Server, Port,
+// Benutzer oder Verschluesselung verlangt das Passwort neu (Backend 400 `secret_reentry_required` [S3]) – der
+// Hinweis erscheint am Passwortfeld. Der Verbindungstest prueft die Werte im Formular (auch ungespeicherte).
+const SMTP_TARGET_FIELDS = ['host', 'port', 'username', 'encryption']
 export default function SmtpTab({ active }) {
     const { t } = useTranslation()
     const { notify, isAdmin } = useSettings()
@@ -22,6 +26,11 @@ export default function SmtpTab({ active }) {
     // Ist serverseitig ein Passwort gespeichert? / Soll es beim Speichern entfernt werden?
     const [smtpPasswordSet, setSmtpPasswordSet] = useState(false)
     const [smtpClearPassword, setSmtpClearPassword] = useState(false)
+    const [smtpPasswordUnreadable, setSmtpPasswordUnreadable] = useState(false)
+    // Zuletzt geladene Zielfelder (fuer den Test: nur abweichende Werte mitschicken)
+    const [smtpLoadedTargets, setSmtpLoadedTargets] = useState(null)
+    // Backend verlangt das Passwort neu (Zielfeld geaendert)
+    const [smtpRetarget, setSmtpRetarget] = useState(false)
     const [loadingSmtp, setLoadingSmtp] = useState(false)
     const [savingSmtp, setSavingSmtp] = useState(false)
     const [testingSmtp, setTestingSmtp] = useState(false)
@@ -42,7 +51,13 @@ export default function SmtpTab({ active }) {
                 enabled: data.enabled === true || data.enabled === 'true',
             })
             setSmtpPasswordSet(!!data.password_set)
+            setSmtpPasswordUnreadable(data.password_unreadable === true)
             setSmtpClearPassword(false)
+            setSmtpRetarget(false)
+            setSmtpLoadedTargets({
+                host: data.host || '', port: data.port || 587, username: data.username || '',
+                encryption: data.encryption || 'starttls',
+            })
         } catch (err) {
             setError(err.message)
         } finally { setLoadingSmtp(false) }
@@ -60,17 +75,36 @@ export default function SmtpTab({ active }) {
             setSuccess(t('settings.smtpSaveSuccess'))
             // Neu laden: zeigt, ob jetzt ein Passwort gespeichert ist, und leert das Feld
             await loadSmtp()
-        } catch (err) { setError(err.message) }
+        } catch (err) {
+            if (err?.code === 'secret_reentry_required') setSmtpRetarget(true)
+            setError(err.message)
+        }
         finally { setSavingSmtp(false) }
+    }
+
+    // Body fuer den Verbindungstest: nur Zielfelder, die vom gespeicherten Stand abweichen, und ein neu
+    // eingegebenes Passwort. null = ohne Body testen (gespeicherte Werte, Verhalten wie 2.4.1).
+    function buildSmtpTestBody() {
+        const body = {}
+        for (const key of SMTP_TARGET_FIELDS) {
+            if (!smtpLoadedTargets || smtpForm[key] !== smtpLoadedTargets[key]) body[key] = smtpForm[key]
+        }
+        if (smtpForm.password) body.password = smtpForm.password
+        else if (smtpClearPassword) body.password = ''
+        return Object.keys(body).length > 0 ? body : null
     }
 
     async function handleTestSmtp() {
         setTestingSmtp(true)
         setSmtpTestResult(null)
         try {
-            const result = await api.testSmtpConnection()
+            const body = buildSmtpTestBody()
+            const result = body ? await api.testSmtpSettings(body) : await api.testSmtpConnection()
             setSmtpTestResult(result)
-        } catch (err) { setSmtpTestResult({ success: false, error: err.message }) }
+        } catch (err) {
+            if (err?.code === 'secret_reentry_required') setSmtpRetarget(true)
+            setSmtpTestResult({ success: false, error: err.message })
+        }
         finally { setTestingSmtp(false) }
     }
 
@@ -152,10 +186,18 @@ export default function SmtpTab({ active }) {
                                     placeholder="user@example.com" className="w-full px-3 py-2 text-sm" />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('login.password')}</label>
+                                <label htmlFor="smtp-password" className="block text-sm font-medium text-text-secondary mb-1">{t('login.password')}</label>
+                                {smtpPasswordUnreadable && (
+                                    <div role="alert" className="mb-2 p-2.5 rounded-lg bg-danger/10 border border-danger/30 text-danger text-xs flex items-start gap-2">
+                                        <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+                                        <span>{t('settings.smtpPasswordUnreadable')}</span>
+                                    </div>
+                                )}
                                 <div className="relative">
-                                    <input type={showSmtpPassword ? 'text' : 'password'} value={smtpForm.password}
-                                        onChange={e => setSmtpForm({ ...smtpForm, password: e.target.value })}
+                                    <input id="smtp-password" type={showSmtpPassword ? 'text' : 'password'} value={smtpForm.password}
+                                        onChange={e => { setSmtpForm({ ...smtpForm, password: e.target.value }); if (e.target.value) setSmtpRetarget(false) }}
+                                        aria-invalid={smtpRetarget || undefined}
+                                        aria-describedby={smtpRetarget ? 'smtp-password-retarget' : undefined}
                                         placeholder={smtpPasswordSet ? t('settings.smtpPasswordKeepPlaceholder') : ''}
                                         disabled={smtpClearPassword}
                                         autoComplete="new-password"
@@ -182,6 +224,9 @@ export default function SmtpTab({ active }) {
                                 )}
                                 {smtpClearPassword && (
                                     <p className="mt-1 text-xs text-warning">{t('settings.smtpPasswordWillBeCleared')}</p>
+                                )}
+                                {smtpRetarget && !smtpForm.password && (
+                                    <p id="smtp-password-retarget" className="mt-1 text-xs text-warning">{t('settings.smtpRetargetHint')}</p>
                                 )}
                             </div>
                         </div>
