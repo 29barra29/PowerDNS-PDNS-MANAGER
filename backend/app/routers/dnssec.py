@@ -13,13 +13,20 @@ Schutzregeln (letzter aktiver Schluessel / KSK/CSK / veroeffentlichter KSK/CSK) 
 Nach jeder Aenderung: ``after_key_change`` (Serial + NOTIFY bei Master/Producer, ``bump_serial``) [D10].
 
 DNSSEC-Operationen laufen nur gegen den Server aus der URL (kein Fan-out, kein Schluesselabgleich).
+
+Teil B (WS-F4-C, ``services/dnssec_parent.py``): ``GET …/parent-ds`` (DS der Elternzone ueber die F12-Resolver),
+``GET …/dnskey-check`` (DNSKEY auf allen autoritativen Nameservern) und die Schutzregel 409 ``parent_ds_present``
+beim Deaktivieren. Beide Pruefungen nur nach Admin-Opt-in (Propagations-Einstellungen), sonst ``enabled=false``;
+``status.capabilities.parent_ds_check``/``dnskey_check`` zeigen den Stand. DNS-Abfragen teilen Rate-Limit und
+globale Parallelitaet mit dem Propagations-Check; vor der Netzphase wird die DB-Verbindung freigegeben (L6).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import NoReturn, Optional
+from typing import Annotated, NoReturn, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import assert_zone_access, get_current_user
 from app.core.database import DbRead, DbWrite
@@ -31,11 +38,15 @@ from app.schemas.dnssec import (
     CryptoKeyUpdate,
     DNSSECDisable,
     DNSSECEnableRequest,
+    DnskeyCheckResponse,
     DnssecStatusResponse,
     Nsec3Update,
+    ParentDsResponse,
 )
 from app.services import dnssec_logic as logic
+from app.services import dnssec_parent
 from app.services import dnssec_service as svc
+from app.services import propagation as prop
 from app.services import webhook_outbox
 from app.services.audit import write_audit
 from app.services.dnssec_parse import compute_key_tag, parse_dnskey_rdata, parse_ds_line
@@ -224,7 +235,103 @@ async def _apply_key_change(db, user: User, server_name: str, zone_id: str, key_
 
 
 # =============================================================================================
-# Endpunkte (Reihenfolge Spec 3.1; parent-ds folgt mit F4-C)
+# Teil B: Hilfen (Einstellungen, Rate-Limit, Elternzonen-Schutzregel)
+# =============================================================================================
+MAX_KEY_TAG_PARAMS = 12
+PARENT_DS_MESSAGE = (
+    "Die Elternzone veröffentlicht laut {resolvers} noch DS-Records für '{zone}'. Entferne sie zuerst beim "
+    "Registrar und warte die TTL ab – oder erzwinge mit force=true."
+)
+
+
+async def _check_settings(db, *, strict: bool = True) -> prop.PropagationSettings:
+    """Propagations-Einstellungen (F12); ``strict=False``: Lesefehler -> Standard (alles aus) statt 500."""
+    try:
+        return await prop.load_settings(db)
+    except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
+        logger.warning("Propagations-Einstellungen nicht lesbar: %s", type(exc).__name__)
+        return prop.PropagationSettings()
+
+
+def _rate_limited(exc: prop.PropagationRateLimited) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail=f"Zu viele DNS-Prüfungen – bitte in {exc.retry_after} Sekunden erneut versuchen.",
+        headers={"Retry-After": str(exc.retry_after)},
+    )
+
+
+def _consume_rate(user: User) -> None:
+    try:
+        prop.consume_rate(user.id)
+    except prop.PropagationRateLimited as exc:
+        raise _rate_limited(exc) from None
+
+
+async def _load_keys(client, zone_id: str) -> list[dict]:
+    """P4 (nur Schluessel) fuer die Teil-B-Lesepfade."""
+    try:
+        return svc._clean_keys(await client.get_cryptokeys(zone_id))
+    except PowerDNSAPIError as e:
+        _raise_pdns(e)
+
+
+async def _ns_zone_json(client, zone_id: str, zone_norm: str, settings: prop.PropagationSettings) -> dict:
+    """Apex-NS und Glue (A/AAAA der NS innerhalb der Zone) als Zonen-JSON fuer ``propagation.extract_reference``."""
+    try:
+        ns_json = await client.get_zone_rrset(zone_id, zone_norm, "NS", timeout=prop.PANEL_TIMEOUT)
+    except PowerDNSAPIError as e:
+        _raise_pdns(e)
+    rrsets = list((ns_json or {}).get("rrsets") or [])
+    names = prop.extract_reference({"rrsets": rrsets}, zone_norm)["nameservers"]
+    inside = [n for n in names if n == zone_norm or n.endswith("." + zone_norm)]
+    jobs = [client.get_zone_rrset(zone_id, n, t, timeout=prop.PANEL_TIMEOUT)
+            for n in inside for t in (("A", "AAAA") if settings.ipv6 else ("A",))]
+    if jobs:
+        try:
+            for part in await asyncio.gather(*jobs):
+                rrsets.extend((part or {}).get("rrsets") or [])
+        except PowerDNSAPIError as e:
+            _raise_pdns(e)
+    return {"rrsets": rrsets}
+
+
+async def _parent_ds_guard(db, user: User, zone_norm: str, ctx: svc.ZoneDnssecContext, force: bool) -> str:
+    """Schutzregel vor dem Deaktivieren (Spec 3.7 Nr. 2): 409 ``parent_ds_present`` ohne ``force``.
+
+    Rueckgabe fuer ``details.parent_ds`` im Audit: ``not_checked`` (Pruefung aus, keine SEP-Schluessel, kein
+    Resolver hat geantwortet, Rate-Limit mit ``force``), ``none`` oder ``present_forced``.
+    """
+    if not any(k.is_sep for k in ctx.keys):
+        return "not_checked"
+    settings = await _check_settings(db)
+    if not dnssec_parent.parent_check_enabled(settings):
+        return "not_checked"
+    try:
+        prop.consume_rate(user.id)
+    except prop.PropagationRateLimited as exc:
+        if force:
+            return "not_checked"
+        raise _rate_limited(exc) from None
+    async with prop.dns_slot(db):  # bisher nur gelesen -> Verbindung vor der Netzphase freigeben (L6)
+        report = await dnssec_parent.parent_ds_report(zone_norm, ctx.raw_keys, settings)
+    if report["any_visible"]:
+        if not force:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": PARENT_DS_MESSAGE.format(
+                            resolvers=", ".join(dnssec_parent.visible_resolvers(report)), zone=zone_norm),
+                        "code": "parent_ds_present", "force_possible": True},
+            )
+        return "present_forced"
+    answered = any(r["status"] in ("ok", "nodata", "nxdomain") for r in report["resolvers"])
+    return "none" if answered else "not_checked"
+
+
+# =============================================================================================
+# Endpunkte (Reihenfolge Spec 3.1; dnskey-check als Teil-B-Lesepfad direkt nach parent-ds)
 # =============================================================================================
 @router.get("/{server_name}/{zone_id:path}/status", response_model=DnssecStatusResponse)
 async def get_dnssec_status(
@@ -239,8 +346,62 @@ async def get_dnssec_status(
     await assert_zone_access(db, current_user, zone_id)
     client = _client_or_404(server_name)
     ctx = await _load(client, zone_id)
-    return await svc.build_status(db, current_user, server_name, zone_id, client, ctx=ctx, peers=peers,
-                                  history=history)
+    result = await svc.build_status(db, current_user, server_name, zone_id, client, ctx=ctx, peers=peers,
+                                    history=history)
+    settings = await _check_settings(db, strict=False)
+    caps = result.setdefault("capabilities", {})
+    caps["parent_ds_check"] = dnssec_parent.parent_check_enabled(settings)
+    caps["dnskey_check"] = dnssec_parent.dnskey_check_enabled(settings)
+    return result
+
+
+@router.get("/{server_name}/{zone_id:path}/parent-ds", response_model=ParentDsResponse)
+async def get_parent_ds(
+    server_name: str,
+    zone_id: str,
+    db: DbRead,
+    current_user: User = Depends(get_current_user),
+):
+    """DS der Elternzone bei den oeffentlichen Resolvern (F12-Opt-in) mit Abgleich gegen die eigenen KSK/CSK."""
+    await assert_zone_access(db, current_user, zone_id)
+    zone_norm = normalize_zone_name(zone_id)
+    client = _client_or_404(server_name)
+    raw_keys = await _load_keys(client, zone_id)
+    settings = await _check_settings(db)
+    if not dnssec_parent.parent_check_enabled(settings):
+        return dnssec_parent.empty_parent_report(zone_norm)
+    _consume_rate(current_user)
+    async with prop.dns_slot(db):
+        return await dnssec_parent.parent_ds_report(zone_norm, raw_keys, settings)
+
+
+@router.get("/{server_name}/{zone_id:path}/dnskey-check", response_model=DnskeyCheckResponse)
+async def get_dnskey_check(
+    server_name: str,
+    zone_id: str,
+    db: DbRead,
+    key_tag: Annotated[Optional[list[int]], Query()] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """DNSKEY bei jedem autoritativen Nameserver der Zone (F12-Opt-in); erwartet ``key_tag`` bzw. alle
+    veroeffentlichten Schluessel. Grundlage der Rollover-Freigabe (DS tauschen, alten Schluessel loeschen)."""
+    await assert_zone_access(db, current_user, zone_id)
+    zone_norm = normalize_zone_name(zone_id)
+    tags = list(dict.fromkeys(key_tag or []))
+    if len(tags) > MAX_KEY_TAG_PARAMS or any(t < 0 or t > 65535 for t in tags):
+        raise HTTPException(status_code=422,
+                            detail=f"key_tag: höchstens {MAX_KEY_TAG_PARAMS} Werte zwischen 0 und 65535.")
+    client = _client_or_404(server_name)
+    raw_keys = await _load_keys(client, zone_id)
+    expected = tags or dnssec_parent.published_key_tags(raw_keys)
+    settings = await _check_settings(db)
+    if not dnssec_parent.dnskey_check_enabled(settings):
+        return dnssec_parent.empty_dnskey_report(zone_norm, expected)
+    _consume_rate(current_user)
+    await prop.release_db(db)  # alles Noetige gelesen; PowerDNS- und DNS-Phase ohne DB-Verbindung (L6)
+    zone_json = await _ns_zone_json(client, zone_id, zone_norm, settings)
+    async with prop.dns_slot(db):
+        return await dnssec_parent.dnskey_report(zone_norm, zone_json, expected, settings)
 
 
 @router.get("/{server_name}/{zone_id:path}/ds")
@@ -438,8 +599,9 @@ async def disable_dnssec(
     zone_norm = normalize_zone_name(zone_id)
     client, ctx = await _write_context(db, server_name, zone_id)
     nsec3_before = str(ctx.meta.get("nsec3param") or "")
+    parent_ds = await _parent_ds_guard(db, current_user, zone_norm, ctx, bool(config.force))
     base = {"zone": zone_norm, "nsec3param_before": nsec3_before, "force": bool(config.force),
-            "parent_ds": "not_checked"}
+            "parent_ds": parent_ds}
 
     def brief(k: logic.KeyView) -> dict:
         raw = ctx.raw_by_id(k.id)

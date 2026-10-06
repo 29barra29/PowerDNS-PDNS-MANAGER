@@ -9,6 +9,10 @@
 // Zonen vom Typ Master/Producer Serial erhoehen + NOTIFY), false = nicht erhoehen. Antworten enthalten
 // details.serial_bumped/serial/serial_error/notified/notify_error.
 // Fehler: err.message (lesbar), err.status, err.payload (bei Schutzregeln detail = { message, code, force_possible }).
+//
+// Teil B (WS-F4-C, Welle 3): getParentDs (DS der Elternzone ueber die F12-Resolver) und getDnskeyCheck (DNSKEY auf
+// allen autoritativen Nameservern). Beide liefern enabled=false ohne Abfrage, wenn der Admin die DNS-Pruefungen in
+// den Propagations-Einstellungen nicht freigegeben hat; 429 bei zu vielen Pruefungen (Rate-Limit wie Propagation).
 import { buildQuery } from '../lib/buildQuery.js'
 
 export const overrides = ['enableDNSSEC', 'disableDNSSEC']
@@ -55,5 +59,19 @@ export default {
     // data: { nsec_mode, nsec3_iterations, nsec3_salt, nsec3_optout, nsec3narrow, bump_serial? }
     updateNsec3(server, zone, data) {
         return this.request('PUT', `${base(server, zone)}/nsec3`, data)
+    },
+
+    // -> ParentDsResponse { zone, enabled, resolvers: [{ resolver, label, status, ds, key_tags, error }],
+    //    keys: { [keyId]: { key_tag, visible_on, missing_on } }, unknown_tags, any_visible, checked_at }
+    getParentDs(server, zone, { signal } = {}) {
+        return this.request('GET', `${base(server, zone)}/parent-ds`, null, { signal })
+    },
+
+    // keyTags: erwartete Key-Tags (leer = alle veroeffentlichten Schluessel)
+    // -> DnskeyCheckResponse { zone, enabled, expected_tags, nameservers: { [ns]: { ok, serves_key_tags,
+    //    missing_tags, addresses: [{ ip, status, key_tags, error }], error } }, all_ok, truncated, checked_at }
+    getDnskeyCheck(server, zone, { keyTags = [], signal } = {}) {
+        const tags = (Array.isArray(keyTags) ? keyTags : [keyTags]).filter((t) => t !== null && t !== undefined && t !== '')
+        return this.request('GET', `${base(server, zone)}/dnskey-check${buildQuery({ key_tag: tags })}`, null, { signal })
     },
 }
