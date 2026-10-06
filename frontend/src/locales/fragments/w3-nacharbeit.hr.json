@@ -1,0 +1,10 @@
+{
+  "set": {
+    "dyndns.secretRevokedActivate": "Token se ne može aktivirati jer mu je tajna blokirana. Najprije generirajte novu tajnu.",
+    "dyndns.secretRevokedBadge": "Tajna blokirana",
+    "dyndns.secretRevokedForeignHint": "Samo vlasnik može generirati novu tajnu.",
+    "dyndns.secretRevokedHint": "Tajna je blokirana iz sigurnosnih razloga (token se pojavio u URL-u ili su pristupi opozvani). Generirajte novu tajnu i zatim ponovno aktivirajte token – stara tajna ostaje nevažeća.",
+    "dyndns.secretRevokedRotate": "Generiraj novu tajnu"
+  },
+  "remove": []
+}

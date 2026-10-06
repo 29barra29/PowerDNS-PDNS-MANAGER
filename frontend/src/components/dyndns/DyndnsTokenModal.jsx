@@ -4,6 +4,7 @@ import { Loader2, Plus, Router, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
 import { useDialogFocus } from '../../lib/useDialogFocus'
+import { dyndnsActionError, isSecretRevoked } from './dyndnsRevoked'
 import ModalPortal from '../common/ModalPortal'
 
 // Anlegen/Bearbeiten eines DynDNS-Tokens (F9 §2.1/§2.4).
@@ -60,6 +61,8 @@ function sameList(a, b) {
 export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawLimits, onClose, onSaved }) {
     const { t } = useTranslation()
     const isEdit = mode === 'edit'
+    // Gesperrtes Secret (A2): "Aktiv" laesst sich nicht wieder einschalten (Backend 409), nur ueber "Neues Secret"
+    const revoked = isEdit && isSecretRevoked(token)
     const limits = useMemo(() => ({
         ttlMin: rawLimits?.ttlMin ?? 60,
         ttlMax: rawLimits?.ttlMax ?? 86400,
@@ -187,7 +190,7 @@ export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawL
                 : await api.createDyndnsToken(body)
             onSaved({ kind: isEdit ? 'saved' : 'created', result })
         } catch (e2) {
-            setModalError(e2.message)
+            setModalError(dyndnsActionError(e2, t))
             setSaving(false)
         }
     }
@@ -357,15 +360,19 @@ export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawL
                         </div>
 
                         {isEdit && (
-                            <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={form.isActive}
-                                    onChange={(e) => setField('isActive', e.target.checked)}
-                                    className="w-4 h-4 rounded"
-                                />
-                                {t('dyndns.fieldActive')}
-                            </label>
+                            <div>
+                                <label className={`flex items-center gap-2 text-sm text-text-secondary ${revoked && !form.isActive ? 'opacity-60' : 'cursor-pointer'}`}>
+                                    <input
+                                        type="checkbox"
+                                        checked={form.isActive}
+                                        disabled={revoked && !form.isActive}
+                                        onChange={(e) => setField('isActive', e.target.checked)}
+                                        className="w-4 h-4 rounded"
+                                    />
+                                    {t('dyndns.fieldActive')}
+                                </label>
+                                {revoked && <p className="text-xs text-danger pl-6 mt-1">{t('dyndns.secretRevokedHint')}</p>}
+                            </div>
                         )}
 
                         <div className="flex justify-end gap-3 pt-2 border-t border-border">
