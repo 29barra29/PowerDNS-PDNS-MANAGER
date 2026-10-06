@@ -3,7 +3,7 @@
 const { test, expect, EMPTY_STATE } = require('../fixtures/test')
 const { PanelApi } = require('../fixtures/api')
 const { t, tl, exact } = require('../fixtures/i18n')
-const { loginViaUi, expectLoggedIn, navLink } = require('../fixtures/ui')
+const { loginViaUi, expectLoggedIn, navLink, field } = require('../fixtures/ui')
 
 test.describe('Anmeldung', () => {
   test.use({ storageState: EMPTY_STATE })
@@ -57,6 +57,34 @@ test.describe('Anmeldung', () => {
     await page.getByRole('button', { name: tl('hu', 'settings.language') }).click()
     await page.getByRole('option', { name: /Deutsch/ }).click()
     await expect(page.getByRole('button', { name: exact(t('login.submit')) })).toBeVisible()
+  })
+
+  test('Sprachwechsel im Profil: sofort wirksam und im Profil gemerkt', async ({ adminApi, openAs }) => {
+    const other = await adminApi.createUser()
+    const api = await PanelApi.login(other.username, other.password)
+    try {
+      const page = await openAs(api)
+      await page.goto('/settings?tab=profile')
+      // Sprach-Auswahl ueber ihre Optionen (die Beschriftung wechselt mit der Sprache)
+      await expect(field(page, t('settings.language'))).toBeVisible()
+      const select = page.getByRole('main').locator('select').filter({ has: page.locator('option[value="hu"]') }).first()
+      await select.selectOption('en')
+      await expect(page.getByRole('heading', { name: tl('en', 'settings.profileEdit') })).toBeVisible()
+      await expect(navLink(page, 'layout.settings')).toHaveCount(0) // Navigation jetzt englisch
+      await expect(page.locator('aside nav').getByRole('link', { name: tl('en', 'layout.settings'), exact: true })).toBeVisible()
+      await expect.poll(async () => (await api.get('auth/me')).preferred_language).toBe('en')
+
+      // Neuer Browser ohne gemerkte Sprache: Profilsprache gilt nach dem Login
+      const fresh = await openAs(api, { locale: 'de-DE' })
+      await fresh.goto('/')
+      await expect(fresh.locator('aside nav').getByRole('link', { name: tl('en', 'layout.overview'), exact: true })).toBeVisible()
+
+      await select.selectOption('sr')
+      await expect(page.getByRole('heading', { name: tl('sr', 'settings.profileEdit') })).toBeVisible()
+    } finally {
+      await api.dispose()
+      await adminApi.deleteUser(other.id)
+    }
   })
 
   test('401 waehrend der Sitzung: Neuladen auf /login', async ({ page, context }) => {
