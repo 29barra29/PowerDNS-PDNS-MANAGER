@@ -4,6 +4,11 @@
 --
 -- Quelle: Tag v2.4.1, init_db() des 2.4.1-Codes gegen eine leere mariadb:11-Datenbank (scripts/dev/test-db.sh),
 -- danach mariadb-dump --no-data; behalten wurden nur die CREATE-TABLE-Bloecke.
+-- Die Tabellen-Optionen "DEFAULT CHARSET=... COLLATE=..." wurden entfernt: 2.4.1 legte die Tabellen ueber
+-- create_all ohne Collation-Vorgabe an, sie erben die Vorgabe der Datenbank. Mit gepinnter Collation
+-- (unicode_ci aus test-db.sh) weicht das Upgrade-Schema auf Servern mit anderer Vorgabe (GitHub-CI:
+-- utf8mb4_uca1400_ai_ci) von der Neuinstallation ab (test_upgraded_schema_equals_fresh_install).
+-- Die JSON-Spalten (longtext ... utf8mb4_bin) bleiben, so legt sie SQLAlchemy auch bei Neuinstallation an.
 -- Erzeugt mit (Repo-Wurzel, Testimage pdnsmgr-test:w0; das Root-Passwort steht in scripts/dev/test-db.sh):
 --
 --   D=$(mktemp -d) && git archive v2.4.1 VERSION backend | tar -x -C "$D"
@@ -40,7 +45,7 @@ CREATE TABLE `acme_tokens` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `ix_acme_tokens_token_hash` (`token_hash`),
   KEY `ix_acme_tokens_token_prefix` (`token_prefix`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `audit_logs` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -54,7 +59,7 @@ CREATE TABLE `audit_logs` (
   `error_message` text DEFAULT NULL,
   `user_id` int(11) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `panel_tokens` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -70,7 +75,7 @@ CREATE TABLE `panel_tokens` (
   UNIQUE KEY `ix_panel_tokens_token_hash` (`token_hash`),
   KEY `ix_panel_tokens_user_id` (`user_id`),
   KEY `ix_panel_tokens_token_prefix` (`token_prefix`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `server_configs` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -86,7 +91,7 @@ CREATE TABLE `server_configs` (
   `updated_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `system_settings` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -95,7 +100,7 @@ CREATE TABLE `system_settings` (
   `updated_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `ix_system_settings_key` (`key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `user_zone_access` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -106,7 +111,7 @@ CREATE TABLE `user_zone_access` (
   PRIMARY KEY (`id`),
   KEY `ix_user_zone_access_user_id` (`user_id`),
   KEY `ix_user_zone_access_zone_name` (`zone_name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `users` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -133,7 +138,7 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `ix_users_username` (`username`),
   UNIQUE KEY `email` (`email`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `webauthn_credentials` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -149,7 +154,7 @@ CREATE TABLE `webauthn_credentials` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `ix_webauthn_credentials_credential_id` (`credential_id`),
   KEY `ix_webauthn_credentials_user_id` (`user_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `webhooks` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -162,7 +167,7 @@ CREATE TABLE `webhooks` (
   `created_at` datetime NOT NULL,
   PRIMARY KEY (`id`),
   KEY `ix_webhooks_user_id` (`user_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 CREATE TABLE `zone_templates` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -173,4 +178,4 @@ CREATE TABLE `zone_templates` (
   `updated_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;

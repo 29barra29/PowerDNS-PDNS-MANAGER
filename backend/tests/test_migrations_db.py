@@ -662,7 +662,12 @@ def test_upgraded_schema_equals_fresh_install():
     asyncio.run(upgrade())
     assert MIGRATION_ERRORS == []
     upgraded = asyncio.run(_schema_snapshot())
-    assert upgraded == fresh, {"nur_neu": sorted(fresh - upgraded), "nur_upgrade": sorted(upgraded - fresh)}
+    fresh_cols, fresh_idx = fresh
+    up_cols, up_idx = upgraded
+    assert upgraded == fresh, {
+        "spalten_nur_neu": sorted(fresh_cols - up_cols), "spalten_nur_upgrade": sorted(up_cols - fresh_cols),
+        "indizes_nur_neu": sorted(fresh_idx - up_idx), "indizes_nur_upgrade": sorted(up_idx - fresh_idx),
+    }
 
 
 @requires_db
