@@ -6,6 +6,8 @@
 // - Netzwerkmeldungen des Browsers "Failed to load resource: ... status of 4xx" sind erwartbar (401 vor dem
 //   Login, 403/404/409/422 in Negativ-Faellen) und werden nur protokolliert; 5xx dagegen zaehlen als Fehler.
 const NETWORK_4XX = /^Failed to load resource: the server responded with a status of 4\d\d\b/
+// Von external.js blockierte Ziele ausserhalb des E2E-Netzes; die werden separat (blockedRequests) gemeldet
+const BLOCKED = /^Failed to load resource: net::ERR_BLOCKED_BY_CLIENT/
 
 class ConsoleGuard {
   constructor() {
@@ -38,7 +40,7 @@ class ConsoleGuard {
   }
 
   isProblem(entry) {
-    if (entry.kind === 'console' && NETWORK_4XX.test(entry.text)) return false
+    if (entry.kind === 'console' && (NETWORK_4XX.test(entry.text) || BLOCKED.test(entry.text))) return false
     return !this.allowed.some((re) => re.test(entry.text))
   }
 

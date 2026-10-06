@@ -33,7 +33,7 @@ test.describe('Benutzerverwaltung', () => {
     for (const fn of cleanup) await fn(adminApi)
   })
 
-  test('Benutzer anlegen mit Passwortzwang -> Zwangsdialog beim ersten Login', async ({ page, browser, adminApi, guard }) => {
+  test('Benutzer anlegen mit Passwortzwang -> Zwangsdialog beim ersten Login', async ({ page, openAs }) => {
     const username = unique('uinew')
     const password = strongPassword()
     cleanup.push(async (api) => { const u = await api.findUser(username); if (u) await api.deleteUser(u.id) })
@@ -51,18 +51,12 @@ test.describe('Benutzerverwaltung', () => {
     await expect(userCard(page, `UI ${username}`)).toBeVisible()
 
     // Erster Login des neuen Benutzers in eigenem Browser-Kontext
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } })
-    guard.watchContext(ctx)
-    try {
-      const userPage = await ctx.newPage()
-      await loginViaUi(userPage, username, password)
-      await completeForcedChange(userPage, password, strongPassword())
-    } finally {
-      await ctx.close()
-    }
+    const userPage = await openAs(null)
+    await loginViaUi(userPage, username, password)
+    await completeForcedChange(userPage, password, strongPassword())
   })
 
-  test('Sicherheitsdialog: Tokens, 2FA-Reset, Zufallspasswort, Zugaenge widerrufen', async ({ page, browser, adminApi, guard }) => {
+  test('Sicherheitsdialog: Tokens, 2FA-Reset, Zufallspasswort, Zugaenge widerrufen', async ({ page, adminApi, openAs }) => {
     const seeded = await adminApi.createUser()
     cleanup.push((api) => api.deleteUser(seeded.id))
     // Benutzer mit 2FA, zwei API-Tokens und einem Webhook
@@ -121,15 +115,9 @@ test.describe('Benutzerverwaltung', () => {
     await pendingCheck(FOCUS_OWNER, () => expect(openBtn).toBeFocused())
 
     // Login mit dem Zufallspasswort ohne 2FA -> Zwangswechsel
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } })
-    guard.watchContext(ctx)
-    try {
-      const userPage = await ctx.newPage()
-      await loginViaUi(userPage, seeded.username, randomPw)
-      await completeForcedChange(userPage, randomPw, strongPassword())
-    } finally {
-      await ctx.close()
-    }
+    const userPage = await openAs(null)
+    await loginViaUi(userPage, seeded.username, randomPw)
+    await completeForcedChange(userPage, randomPw, strongPassword())
     const tokens = await adminApi.get(`auth/users/${seeded.id}/panel-tokens`)
     const list = Array.isArray(tokens) ? tokens : tokens?.tokens || []
     expect(list.filter((tok) => !tok.revoked_at && tok.status !== 'revoked')).toEqual([])
