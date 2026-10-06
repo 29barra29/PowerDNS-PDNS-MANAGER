@@ -18,4 +18,19 @@ function skipUnlessPending(owner) {
   test.skip(!PENDING, `TODO: wartet auf ${owner} (Welle 3); mit run.sh --pending ausfuehren`)
 }
 
-module.exports = { pendingCheck, skipUnlessPending, PENDING }
+/**
+ * Bekannter, gemeldeter Fehler (Integrationsnotiz WS-UI-SMOKE, Abschnitt "Funde"): fn muss scheitern. Laeuft fn durch,
+ * ist der Fehler behoben -> der Test schlaegt fehl, damit der Marker entfernt wird (kein stilles Weiterschleppen).
+ */
+async function knownBug(id, fn) {
+  test.info().annotations.push({ type: 'known-bug', description: id })
+  let failed = false
+  try {
+    await fn()
+  } catch {
+    failed = true
+  }
+  if (!failed) throw new Error(`Bekannter Fehler "${id}" tritt nicht mehr auf – knownBug-Marker in der Spec entfernen`)
+}
+
+module.exports = { pendingCheck, skipUnlessPending, knownBug, PENDING }

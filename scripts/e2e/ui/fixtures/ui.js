@@ -88,6 +88,43 @@ async function expectFocusTrapped(page, locator, presses = 12) {
   }
 }
 
+/**
+ * Der Dialog liegt sichtbar ueber der Seite: Jeder Knopf im Dialog ist nach dem Scrollen tatsaechlich klickbar
+ * (elementFromPoint trifft den Dialog, nicht eine andere Karte). Faengt Dialoge, die innerhalb eines Elements mit
+ * backdrop-filter/transform gerendert werden (dort wird position:fixed relativ zum Element statt zum Fenster).
+ */
+async function expectDialogOnTop(dialogLocator) {
+  const covered = await dialogLocator.evaluate((dlg) => {
+    const out = []
+    // Abdeckung (Overlay mit position:fixed) muss das ganze Fenster bedecken
+    // (gesucht ab dem Elternelement; ist nur das Dialog-Element selbst fixed, z. B. ein Drawer, entfaellt die Pruefung)
+    let overlay = dlg.parentElement
+    while (overlay && overlay !== document.body && getComputedStyle(overlay).position !== 'fixed') overlay = overlay.parentElement
+    if (overlay && overlay !== document.body) {
+      const o = overlay.getBoundingClientRect()
+      if (o.left > 1 || o.top > 1 || o.right < window.innerWidth - 1 || o.bottom < window.innerHeight - 1) {
+        out.push(`Abdeckung nur ${Math.round(o.width)}x${Math.round(o.height)} statt ${window.innerWidth}x${window.innerHeight} (Bezugsrahmen ist nicht das Fenster)`)
+      }
+    }
+    for (const btn of dlg.querySelectorAll('button')) {
+      const label = (btn.getAttribute('aria-label') || btn.textContent || '').trim().slice(0, 60) || '?'
+      btn.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      const r = btn.getBoundingClientRect()
+      if (!r.width || !r.height) continue
+      const x = r.left + r.width / 2
+      const y = r.top + r.height / 2
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+        out.push(`${label} (ausserhalb des Fensters)`)
+        continue
+      }
+      const hit = document.elementFromPoint(x, y)
+      if (!hit || !dlg.contains(hit)) out.push(`${label} (verdeckt von ${hit ? hit.tagName.toLowerCase() + '.' + String(hit.className).split(' ')[0] : 'nichts'})`)
+    }
+    return out
+  })
+  expect(covered, 'Knoepfe im Dialog, die nicht klickbar sind').toEqual([])
+}
+
 /** Text des aktuell fokussierten Elements (fuer Fokus-Rueckgabe-Pruefungen). */
 function activeElementText(page) {
   return page.evaluate(() => {
@@ -98,5 +135,5 @@ function activeElementText(page) {
 
 module.exports = {
   field, checkboxByLabel, zonePath, loginViaUi, expectLoggedIn, dialog, navLink, modal, rowWith, acceptNextConfirm,
-  expectFocusInside, expectFocusTrapped, activeElementText,
+  expectFocusInside, expectFocusTrapped, activeElementText, expectDialogOnTop,
 }
