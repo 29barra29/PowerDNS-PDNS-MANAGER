@@ -1,6 +1,7 @@
 ### Neue Webhook-Oberflaeche: Zustellprotokoll, Test und Verwaltung im Panel (WS-F6-FE)
 
-**Neu** (Einstellungen → API & Sicherheit → Webhooks, fuer jeden angemeldeten Benutzer)
+#### Neu
+(Einstellungen → API & Sicherheit → Webhooks, fuer jeden angemeldeten Benutzer)
 - **Liste je Webhook** mit Ziel (nur Host, ohne Pfad/Token), Ausloeser („eigene Aenderungen“ oder „alle Aenderungen in
   meinen Zonen“), abonnierten Ereignissen, Aktiv-Status, letzter erfolgreicher Zustellung bzw. letztem Fehler sowie
   Hinweisen zu offenen, endgueltig fehlgeschlagenen Zustellungen und Fehlversuchen in Folge.
@@ -19,9 +20,21 @@
   direktem Weg zum Neu-Eintragen bzw. Erneuern.
 - Alle Texte in Deutsch, Englisch, Bosnisch, Kroatisch, Ungarisch und Serbisch; Zeiten im Format der gewaehlten Sprache.
 
-**Geaendert**
+#### Geändert / Breaking
 - Die bisherige Eingabezeile „Ereignisse (kommagetrennt)“ und die einfache Liste entfallen.
+- Webhooks lassen sich nur noch mit Browser-Anmeldung verwalten (siehe WS-F6-BE); die Karte zeigt das Ziel nur als
+  Host, nie mit Pfad oder Token.
 
-**Website-Seiten (DE/EN)**
+#### API
+- Keine eigenen Endpunkte; die Oberflaeche nutzt die Webhook-Endpunkte aus WS-F6-BE.
+
+#### Nach dem Update prüfen
+- Einstellungen → API & Sicherheit → Webhooks: je Webhook „Test senden“ und das Zustellprotokoll ansehen.
+- Webhooks mit dem Hinweis „URL unlesbar“ oder „Secret nicht lesbar“ neu eintragen bzw. das Secret erneuern.
+- Aeltere Ereignis-Filter (eigene Chips) pruefen und bei Bedarf durch die Ereignis-Auswahl ersetzen.
+
+#### Website-Seiten (DE/EN)
 - `docs/features/webhooks`: Screenshots/Beschreibung der neuen Karte, des Dialogs (Ereignis-Baum, Ausloeser) und des
   Zustellprotokolls (Filter, Details, erneut senden, Auto-Aktualisierung); Hinweise „URL unlesbar“/„Secret nicht lesbar“.
+- `docs/troubleshooting`: „Webhook kommt nicht an“ – zuerst das Zustellprotokoll in der Karte oeffnen.
+- Veraltet: Eingabe „Ereignisse (kommagetrennt)“ und Screenshots der alten Webhook-Liste.

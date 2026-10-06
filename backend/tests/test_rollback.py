@@ -203,6 +203,54 @@ async def test_noop_when_already_on_before_state(pdns, admin, audit, events):
     assert pdns.ns1.patches == [] and audit == [] and events == []
 
 
+# --- L10 (Review Welle 1): RRsets, die schon auf dem Vorher-Stand sind, sind kein Konflikt -------------------------
+MAIL = "mail.example.com."
+MX_CHANGE = {"name": MAIL, "type": "MX", "before": snap("10 a.example.com."), "after": snap("10 b.example.com.")}
+
+
+async def test_noop_without_force_is_not_a_conflict(pdns, admin, audit, events):
+    pdns.ns1.add_zone(make_zone(Z, [rr(WWW, "A", "192.0.2.1")]))
+    db = HistoryDB([entry([UPDATE_CHANGE])])
+    res = await _rollback(db, admin)  # ohne force: kein 409
+    assert res.details == {"noop": True, "skipped": []}
+    assert pdns.ns1.patches == [] and pdns.ns2.patches == [] and audit == [] and events == []
+    preview = await history.rollback_preview("ns1", Z, 10, db, admin)
+    assert preview["has_conflicts"] is False
+    (item,) = preview["plan"]
+    assert item["noop"] is True and item["conflict"] is False
+
+
+async def test_mixed_noop_and_change_writes_only_the_change(pdns, admin, audit, events):
+    # www steht schon auf dem Vorher-Stand, mail noch auf dem Nachher-Stand -> nur mail wird geschrieben
+    pdns.ns1.add_zone(make_zone(Z, [rr(WWW, "A", "192.0.2.1"), rr(MAIL, "MX", "10 b.example.com.")]))
+    pdns.ns2.add_zone(make_zone(Z, [rr(WWW, "A", "192.0.2.1"), rr(MAIL, "MX", "10 b.example.com.")]))
+    db = HistoryDB([entry([UPDATE_CHANGE, MX_CHANGE], action="BULK_UPDATE")])
+    preview = await history.rollback_preview("ns1", Z, 10, db, admin)
+    assert preview["has_conflicts"] is False
+    assert [(i["name"], i["noop"], i["conflict"]) for i in preview["plan"]] == [(WWW, True, False), (MAIL, False, False)]
+    res = await _rollback(db, admin)
+    assert [[(p["name"], p["type"]) for p in batch] for batch in pdns.ns1.patches] == [[(MAIL, "MX")]]
+    assert pdns.ns1.values(Z, MAIL, "MX") == ["10 a.example.com."] and pdns.ns2.values(Z, MAIL, "MX") == ["10 a.example.com."]
+    assert pdns.ns1.values(Z, WWW, "A") == ["192.0.2.1"]
+    (a,) = audit
+    assert a["details"]["forced"] is False and "conflicts" not in a["details"]
+    assert res.details["forced"] is False and res.details["rolled_back"] == [{"name": MAIL, "type": "MX"}]
+    assert events[0]["data"]["forced"] is False
+
+
+async def test_noop_item_is_not_listed_as_conflict_next_to_a_real_one(pdns, admin, audit, events):
+    # www schon zurueck (Noop), mail seitdem anders geaendert (echter Konflikt) -> 409 nennt nur mail
+    pdns.ns1.add_zone(make_zone(Z, [rr(WWW, "A", "192.0.2.1"), rr(MAIL, "MX", "20 c.example.com.")]))
+    db = HistoryDB([entry([UPDATE_CHANGE, MX_CHANGE], action="BULK_UPDATE")])
+    with pytest.raises(HTTPException) as ei:
+        await _rollback(db, admin)
+    assert ei.value.status_code == 409
+    assert [c["name"] for c in ei.value.detail["conflicts"]] == [MAIL]
+    res = await _rollback(db, admin, force=True)
+    assert [[p["name"] for p in batch] for batch in pdns.ns1.patches] == [[MAIL]]
+    assert [c["name"] for c in audit[0]["details"]["conflicts"]] == [MAIL] and res.details["forced"] is True
+
+
 # --- Nr. 25: Primary-PATCH-Fehler -------------------------------------------------------------------------------
 async def test_primary_patch_error_audited(pdns, admin, audit, events):
     pdns.ns1.fail_on_patch = PowerDNSAPIError(422, '{"error": "kaputt"}', "ns1")

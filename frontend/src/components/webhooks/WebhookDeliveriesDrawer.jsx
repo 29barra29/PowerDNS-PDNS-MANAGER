@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronRight, Copy, Loader2, RefreshCw, RotateCcw, 
 import api from '../../api'
 import Pagination from '../common/Pagination'
 import { useDateFormat } from '../../lib/useDateFormat'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import WebhookStatusBadge from './WebhookStatusBadge'
 import {
     AUTO_REFRESH_MS, DELIVERY_STATUSES, PAGE_SIZE,
@@ -64,21 +65,8 @@ export default function WebhookDeliveriesDrawer({ hook, availableEvents, maxAtte
 
     useEffect(() => () => abortRef.current?.abort(), [])
 
-    useEffect(() => {
-        closeRef.current?.focus()
-    }, [])
-
-    // ESC schliesst den Drawer (das Secret-Modal liegt nie darueber).
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Escape') {
-                e.preventDefault()
-                onClose()
-            }
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [onClose])
+    // Fokus auf "Schliessen", Tab-Falle, ESC schliesst, Fokus-Rueckgabe an den ausloesenden Button (L11)
+    const dialogRef = useDialogFocus({ onClose, initialFocusRef: closeRef })
 
     const autoRefresh = shouldAutoRefresh(items)
     useEffect(() => {
@@ -165,6 +153,7 @@ export default function WebhookDeliveriesDrawer({ hook, availableEvents, maxAtte
             onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
         >
             <aside
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

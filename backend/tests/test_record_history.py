@@ -191,7 +191,7 @@ def test_plan_rollback_conflict_noop_and_changetypes():
     assert plan[0].conflict is True and plan[0].noop is False
 
     plan, _ = plan_rollback(log, zone(rr("www.example.com.", "A", "192.0.2.1")))
-    assert plan[0].noop is True and plan[0].conflict is True
+    assert plan[0].noop is True and plan[0].conflict is False  # schon auf dem Vorher-Stand: kein Konflikt (L10)
 
     created = {"name": "new.example.com.", "type": "A", "before": None, "after": snap("192.0.2.9")}
     plan, _ = plan_rollback(v2_log([created]), zone(rr("new.example.com.", "A", "192.0.2.9")))

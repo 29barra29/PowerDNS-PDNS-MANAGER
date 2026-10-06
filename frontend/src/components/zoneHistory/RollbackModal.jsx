@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Info, Loader2, RotateCcw, X } from 'lucide-react'
 import api from '../../api'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import ModalErrorBanner from '../ModalErrorBanner'
 import RrsetChangeDiff from '../audit/RrsetChangeDiff'
 import {
@@ -50,13 +51,8 @@ export default function RollbackModal({ server, zoneId, zoneKey, entry, onClose,
         return () => { counter.current++ }
     }, [loadPreview])
 
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Escape' && !busy) onClose()
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [busy, onClose])
+    // Fokus beim Oeffnen, Tab-Falle, ESC (nicht waehrend des Zuruecksetzens), Fokus-Rueckgabe (L11)
+    const dialogRef = useDialogFocus({ onClose, canClose: !busy })
 
     async function handleConfirm() {
         if (!canConfirmRollback(preview, { force, busy })) return
@@ -93,6 +89,7 @@ export default function RollbackModal({ server, zoneId, zoneKey, entry, onClose,
             onClick={() => { if (!busy) onClose() }}
         >
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

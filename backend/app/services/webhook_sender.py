@@ -13,7 +13,7 @@ Schutzmassnahmen:
   ``Accept-Encoding: identity``), danach wird die Verbindung geschlossen.
 - **Gesamtzeit** je Versuch hoechstens ``TOTAL_TIMEOUT`` Sekunden (schuetzt gegen langsames Tropfen).
 - **Fehlertexte ohne Geheimnisse:** nie ``str(exc)`` ungefiltert; URLs werden durch ihren Host ersetzt,
-  Userinfo entfernt (``safe_error``). Logs nennen nur den Host.
+  Userinfo entfernt (``safe_error``). Logs nennen nur den Host, nie einen Traceback (der die URL enthalten kann).
 """
 from __future__ import annotations
 
@@ -100,6 +100,17 @@ def _ms(t0: float) -> int:
 
 def _url_host_safe(url: str) -> str:
     return webhook_service.url_host(url) or "?"
+
+
+def _origin_of(exc: BaseException) -> str:
+    """Innerste Code-Stelle des Tracebacks als ``datei.py:zeile`` – ohne Meldungstext und ohne lokale Werte."""
+    tb = exc.__traceback__
+    if tb is None:
+        return "?"
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    code = tb.tb_frame.f_code
+    return f"{code.co_filename.rsplit('/', 1)[-1]}:{tb.tb_lineno} ({code.co_name})"
 
 
 def safe_error(prefix: str, exc: Optional[BaseException] = None, *urls: str) -> str:
@@ -253,8 +264,9 @@ async def send_delivery(*, url: str, body: bytes, headers: dict[str, str]) -> Se
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - ein Versuch darf den Worker nie abbrechen
-        # Kein logger.exception: der Text koennte die URL enthalten. Typ + Host reichen fuer die Diagnose.
-        logger.error("Webhook-Versand an %s: unerwarteter Fehler (%s)", _url_host_safe(url), type(exc).__name__)
-        logger.debug("Webhook-Versand: Details", exc_info=True)
+        # Nie exc_info/logger.exception (auch nicht auf DEBUG): Meldung und Traceback koennen die volle Ziel-URL
+        # mit Pfad-Token enthalten (L8). Typ, Host und die Code-Stelle reichen fuer die Diagnose.
+        logger.error("Webhook-Versand an %s: unerwarteter Fehler (%s bei %s)", _url_host_safe(url),
+                     type(exc).__name__, _origin_of(exc))
         return _result(False, None, "internal_error", f"Interner Fehler beim Versand ({type(exc).__name__})",
                        None, t0)

@@ -304,8 +304,10 @@ class RollbackItem:
 def plan_rollback(log: Any, current_zone: Any, *, origin: Optional[str] = None) -> tuple[list[RollbackItem], list[dict]]:
     """Plan fuer das Zuruecksetzen eines v2-Eintrags gegen den aktuellen Zustand des Primary.
 
-    ``current_zone``: Zonen-JSON oder Liste von RRsets. Konflikt = aktueller Zustand weicht vom Stand direkt nach
-    der Aenderung ab (Kommentare zaehlen nicht); Noop = aktueller Zustand entspricht bereits dem Vorher-Zustand.
+    ``current_zone``: Zonen-JSON oder Liste von RRsets. Noop = aktueller Zustand entspricht bereits dem
+    Vorher-Zustand (wird nicht geschrieben). Konflikt = aktueller Zustand weicht vom Stand direkt nach der Aenderung
+    ab **und** ist kein Noop (Kommentare zaehlen jeweils nicht): Ein RRset, das schon auf dem Ziel steht, verlangt
+    weder ``force`` noch erscheint es als Konflikt im Audit (L10).
     Rueckgabe ``(plan, skipped)``; ``skipped`` = ``[{"name", "type", "reason"}]`` (SOA/DNSSEC/ACME).
     """
     details = _details_of(log)
@@ -323,12 +325,14 @@ def plan_rollback(log: Any, current_zone: Any, *, origin: Optional[str] = None) 
         current = rrset_snapshot(current_zone, name, rtype)
         expected = change.get("after")
         target = change.get("before")
+        noop = snapshots_equivalent(current, target, rtype, include_comments=False, origin=zone)
         plan.append(RollbackItem(
             name=name, type=rtype,
             changetype="DELETE" if target is None else "REPLACE",
             current=current, expected=expected, target=target,
-            conflict=not snapshots_equivalent(current, expected, rtype, include_comments=False, origin=zone),
-            noop=snapshots_equivalent(current, target, rtype, include_comments=False, origin=zone),
+            conflict=not noop and not snapshots_equivalent(current, expected, rtype, include_comments=False,
+                                                           origin=zone),
+            noop=noop,
         ))
     return plan, skipped
 

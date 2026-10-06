@@ -82,6 +82,29 @@ def _err(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+class _CliAbort(RuntimeError):
+    """Eigener Abbruchgrund; der Text stammt aus der CLI selbst und darf ausgegeben werden."""
+
+
+def _safe_exc(exc: BaseException) -> str:
+    """Fehlerbeschreibung ohne Werte (L7): nur Typnamen, bei DB-Fehlern zusaetzlich Treiberklasse und Fehlernummer.
+
+    ``str(exc)`` einer SQLAlchemy-Ausnahme enthaelt das SQL samt gebundenen Parametern – beim Entschluesseln
+    also Klartext-Geheimnisse – und Treibertexte wie ``Duplicate entry '<wert>'`` nennen Werte direkt. Deshalb
+    wird nie der Text einer fremden Ausnahme ausgegeben, nur der eigener ``_CliAbort``-Abbrueche.
+    """
+    if isinstance(exc, _CliAbort):
+        return str(exc)
+    text = type(exc).__name__
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        text += f" / {type(orig).__name__}"
+        args = getattr(orig, "args", None) or ()
+        if args and isinstance(args[0], int):
+            text += f" {args[0]}"
+    return text
+
+
 def _label(item: StoredSecret) -> str:
     if item.kind == "setting":
         return f"Einstellung {item.name}"
@@ -489,7 +512,7 @@ async def cmd_status(args: argparse.Namespace) -> int:
     try:
         values = await _run_sync(secret_store.scan_values)
     except Exception as exc:  # noqa: BLE001 - DB nicht erreichbar o. ae.
-        _err(f"FEHLER: Datenbank nicht lesbar ({type(exc).__name__}). DATABASE_URL und DB-Container pruefen.")
+        _err(f"FEHLER: Datenbank nicht lesbar ({_safe_exc(exc)}). DATABASE_URL und DB-Container pruefen.")
         return EXIT_ERROR
     data = secret_store.build_status(values)
     if args.json:
@@ -569,7 +592,7 @@ async def cmd_reset_unreadable(args: argparse.Namespace) -> int:
     try:
         values = await _run_sync(secret_store.scan_values)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Datenbank nicht lesbar ({type(exc).__name__}).")
+        _err(f"FEHLER: Datenbank nicht lesbar ({_safe_exc(exc)}).")
         return EXIT_ERROR
     plan = plan_reset(values, keys.box)
     if plan.empty:
@@ -621,7 +644,7 @@ async def cmd_reset_unreadable(args: argparse.Namespace) -> int:
     try:
         result = await _run_sync(apply_reset, plan, box, new_webhook_secret=generate_webhook_secret, write=True)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Zuruecksetzen fehlgeschlagen ({type(exc).__name__}) – Transaktion zurueckgerollt, nichts geaendert.")
+        _err(f"FEHLER: Zuruecksetzen fehlgeschlagen ({_safe_exc(exc)}) – Transaktion zurueckgerollt, nichts geaendert.")
         return EXIT_ERROR
 
     details = {k: result[k] for k in ("servers", "webhooks", "settings", "users_2fa_reset")}
@@ -671,7 +694,7 @@ async def cmd_decrypt_all(args: argparse.Namespace) -> int:
     try:
         values = await _run_sync(secret_store.scan_values)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Datenbank nicht lesbar ({type(exc).__name__}).")
+        _err(f"FEHLER: Datenbank nicht lesbar ({_safe_exc(exc)}).")
         return EXIT_ERROR
     plan = plan_decrypt(values, keys.box)
     rc = _check_decrypt_preconditions(keys, plan, args.force)
@@ -691,7 +714,7 @@ async def cmd_decrypt_all(args: argparse.Namespace) -> int:
     try:
         decrypted = await _run_sync(apply_decrypt, plan, keys.box, write=True)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Entschluesseln fehlgeschlagen ({type(exc).__name__}) – Transaktion zurueckgerollt.")
+        _err(f"FEHLER: Entschluesseln fehlgeschlagen ({_safe_exc(exc)}) – Transaktion zurueckgerollt.")
         return EXIT_ERROR
     await _write_audit("SECRETS_DECRYPT_ALL", {"decrypted": decrypted, "skipped_unreadable": len(plan.unreadable)})
     _out(f"Erledigt: {sum(decrypted.values())} Werte liegen jetzt im Klartext in der Datenbank.")
@@ -715,7 +738,7 @@ async def cmd_prepare_downgrade(args: argparse.Namespace) -> int:
     try:
         plan = await _run_sync(plan_prepare_downgrade, keys.box)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Datenbank nicht lesbar ({type(exc).__name__}).")
+        _err(f"FEHLER: Datenbank nicht lesbar ({_safe_exc(exc)}).")
         return EXIT_ERROR
     rc = _check_decrypt_preconditions(keys, plan.decrypt, args.force)
     if rc is not None:
@@ -733,12 +756,13 @@ async def cmd_prepare_downgrade(args: argparse.Namespace) -> int:
         def _apply(conn):
             fresh = plan_prepare_downgrade(conn, keys.box)
             if fresh.decrypt.unreadable and not args.force:
-                raise RuntimeError("nicht lesbare Werte")
+                raise _CliAbort("nicht lesbare Werte")
             return apply_prepare_downgrade(conn, fresh, keys.box)
 
         result = await _run_sync(_apply, write=True)
     except Exception as exc:  # noqa: BLE001
-        _err(f"FEHLER: Vorbereitung fehlgeschlagen ({type(exc).__name__}: {exc}) – Transaktion zurueckgerollt, "
+        # Nie str(exc) einer DB-Ausnahme: sie enthielte die entschluesselten Werte als SQL-Parameter (L7).
+        _err(f"FEHLER: Vorbereitung fehlgeschlagen ({_safe_exc(exc)}) – Transaktion zurueckgerollt, "
              "nichts geaendert.")
         return EXIT_ERROR
     await _write_audit("DOWNGRADE_PREPARED", result)
@@ -798,6 +822,9 @@ async def main(argv: Optional[Sequence[str]] = None) -> int:
         if asyncio.iscoroutine(result):
             result = await result
         return int(result)
+    except Exception as exc:  # noqa: BLE001 - kein Traceback: er koennte SQL-Parameter (Klartext) enthalten (L7)
+        _err(f"FEHLER: unerwarteter Fehler ({_safe_exc(exc)}) – Details werden bewusst nicht ausgegeben.")
+        return EXIT_ERROR
     finally:
         if args.command not in ("generate-key", "key-info"):
             try:

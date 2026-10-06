@@ -1,6 +1,6 @@
 ### Webhooks werden zugestellt – mit Wiederholungen, Protokoll und Test (WS-F6-BE)
 
-**Neu**
+#### Neu
 - **Zuverlaessige Zustellung:** Ein Hintergrunddienst stellt die Ereignisse aus der Warteschlange zu. Schlaegt ein
   Versuch fehl (Verbindungsfehler, Zeitueberschreitung, HTTP-Status ausser 2xx), folgt der naechste nach ca. 1, 2, 4, 8
   und 16 Minuten; nach 6 Versuchen (~31 min) gilt die Zustellung als endgueltig fehlgeschlagen. `Retry-After` bei 429/503
@@ -22,19 +22,20 @@
   (nur der Host des Ziels, nie Pfad oder Secret).
 - **Prometheus:** `pdnsmgr_webhook_deliveries_total{status="success|retry|dead|cancelled"}` zaehlt die Versuche.
 
-**Geaendert / Breaking**
+#### Geändert / Breaking
 - Webhooks werden ab 3.0 wirklich verschickt (in 2.3.7–2.4.x lief die Zustellung wegen eines Fehlers nie). Empfaenger vor
   dem Update pruefen.
 - Anlegen, Aendern, Loeschen, Test, Zustellprotokoll und erneut senden nur noch mit Browser-Anmeldung, nicht per API-Token.
   Die Liste ist per Token weiter lesbar, dann ohne Ziel-URL.
 - Ist die (jetzt verschluesselte) Ziel-URL nicht mehr lesbar, z. B. nach Verlust des Schluessels, wird nichts gesendet
   (`url_unreadable`); die Liste zeigt die URL dann als nicht lesbar – bitte neu eintragen.
-- Wird beim Widerruf aller Zugaenge eines Benutzers ein Webhook deaktiviert, erscheinen seine wartenden Zustellungen als
-  `cancelled` und werden nicht mehr gesendet.
+- Wird beim Widerruf aller Zugaenge eines Benutzers ein Webhook deaktiviert, erscheinen seine wartenden und auf eine
+  Wiederholung wartenden (fehlgeschlagenen) Zustellungen als `cancelled` und werden nicht mehr gesendet.
 - Voraussetzung fuer externe Datenbanken: MariaDB ab 10.6 bzw. MySQL ab 8.0 (`SKIP LOCKED`). Es darf nur **ein**
   Backend-Prozess die Warteschlange abarbeiten (Standard). `BACKGROUND_WORKERS_ENABLED=false` sammelt Ereignisse nur.
 
-**API** (alle unter `/api/v1/auth/me/webhooks`)
+#### API
+Alle unter `/api/v1/auth/me/webhooks`:
 - `GET ""` – Liste mit `url_display`, `has_url`, `has_secret`, `scope`, Zaehlern (`last_success_at`, `last_failure_at`,
   `consecutive_failures`), `stats` je Status sowie `available_events`, `worker_enabled`, `worker_running`,
   `max_attempts`, `retention_days`, `max_webhooks`.
@@ -51,11 +52,11 @@
   `dns_error`, `ssrf_blocked`, `invalid_url`, `internal_error`, `webhook_inactive`, `webhook_deleted`, `owner_inactive`,
   `interrupted`, `secret_unreadable`, `url_unreadable`.
 
-**Nach dem Update pruefen**
+#### Nach dem Update prüfen
 - Einstellungen → API & Sicherheit → Webhooks: „Test senden“ fuer jeden Webhook; das Zustellprotokoll zeigt das Ergebnis.
 - Bestehende Empfaenger auf Payload v2 und die Header `X-DNS-Manager-Event`, `-Delivery`, `-Attempt` einstellen.
 
-**Website-Seiten (DE/EN)**
+#### Website-Seiten (DE/EN)
 - `docs/features/webhooks`: Abschnitt „Zustellung (kein Retry)“ ersetzen durch „Zustellung, Wiederholungen & Protokoll“
   (Backoff-Tabelle 1/2/4/8/16 min, Status, Test, erneut senden, mindestens einmal, Deduplizierung per Delivery-ID, keine
   Reihenfolge, 410/SSRF endgueltig, Retry-After); „Secret rotieren“: Button im Panel, per API nur mit Browser-Sitzung

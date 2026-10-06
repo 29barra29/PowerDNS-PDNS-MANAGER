@@ -14,7 +14,8 @@
     mit Einschränkungen (Zonen, nur Lesen, Ablaufdatum, Admin ohne Freigabe) deaktivieren, Migrations-Marker
     löschen, Audit `DOWNGRADE_PREPARED`,
   - `decrypt-all` (Spezialfall) und `key-info` (Quelle/Fingerprint, für `update.sh`).
-  Ohne `--yes` laufen die schreibenden Kommandos als Trockenlauf. Backend vorher stoppen.
+  Ohne `--yes` laufen die schreibenden Kommandos als Trockenlauf. Backend vorher stoppen. Bei Datenbankfehlern nennt
+  die CLI nur Fehlerart und -nummer, nie SQL-Texte oder Werte.
 - **update.sh** sichert den Schlüssel nach dem Start (wenn er nicht in der `.env` steht) als
   `<stack>-<fingerprint>.key` in `${PDNSMGR_KEY_BACKUP_DIR:-$HOME/.pdnsmgr-keys}` (Ordner 0700, Datei 0600) –
   nie neben dem DB-Dump und nie im Stack-Ordner, nur bei neuem Fingerprint. Neue Schalter

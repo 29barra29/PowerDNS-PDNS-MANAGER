@@ -1,5 +1,7 @@
 ### Oberflaeche: Fehlerbehebungen und Feinschliff (WS-F8b)
 
+#### Neu / Behoben
+
 **Records bearbeiten**
 - TTL als Zahlenfeld mit Vorgaben und lesbarer Anzeige ("= 2 Stunden"), erlaubt sind 60 Sekunden bis 7 Tage.
   Ein Record mit 7200 s zeigt beim Bearbeiten wieder 7200 (bisher sprang die Auswahl auf "1 Min"). Hat ein
@@ -52,3 +54,35 @@ Fonts, auch nicht auf der Login-Seite.
 
 **Ersteinrichtung:** Unzulaessige Zeichen im Benutzernamen werden schon im ersten Schritt erklaert; SMTP-Angaben
 aus dem Einrichtungsassistenten werden jetzt tatsaechlich gespeichert.
+
+#### Geändert / Breaking
+- **Vorlagen:** TTL-Werte ausserhalb von 60 bis 604800 Sekunden lehnt das Backend beim Anlegen und Aendern einer
+  Vorlage mit 422 ab (bisher scheiterten solche Records erst beim Anlegen der Zone).
+- **Versionspruefung:** Die Abfrage bei GitHub laeuft nur noch in Admin-Sitzungen und hoechstens alle 6 Stunden.
+- **Schrift lokal:** Keine Verbindungen mehr zu Google Fonts; eine eigene `CSP` aus 2.x darf die Google-Hosts weiter
+  enthalten (schadet nicht), braucht sie aber nicht mehr.
+- Delegations-NS lassen sich loeschen; geschuetzt bleiben nur SOA und Apex-NS.
+
+#### API
+- Geaendert: Vorlagen-Endpunkte unter `/api/v1/templates` pruefen `ttl` bzw. `default_ttl` (60–604800, sonst 422).
+  Keine neuen Endpunkte.
+
+#### Nach dem Update prüfen
+- Einstellungen → Vorlagen: Vorlagen mit sehr kurzer oder sehr langer TTL einmal oeffnen und speichern; Werte
+  ausserhalb der Grenzen werden gemeldet.
+- Sprache im Profil kontrollieren (die Auswahl bleibt jetzt erhalten) und Datumsangaben in der gewaehlten Sprache
+  pruefen; Uebersetzungsfehler bitte melden.
+- Wer eine eigene Content-Security-Policy setzt: Seite neu laden und in der Browser-Konsole auf CSP-Meldungen achten.
+
+#### Website-Seiten (DE/EN)
+- `features/zonen-records`: CAA steht in der Liste der Formular-Typen (strukturierter Editor), freie TTL 60–604800 s
+  mit Vorgaben, Deaktiviert-Kennzeichen, Loeschen pro Wert mit Rueckfrage, Delegations-NS loeschbar, unbekannte
+  Typen als Rohtext bearbeitbar.
+- `features/branding`: „Logo entfernen“ loescht die Datei; Tagline/Creator leeren setzt den Standardtext.
+- `features/smtp-mails`: Passwortfeld leer = behalten, Haken „Gespeichertes Passwort entfernen“.
+- `faq`: Google Fonts entfaellt; GitHub-Versionsabfrage nur aus Admin-Sitzungen (hoechstens alle 6 h).
+- `konfiguration`: CSP-Standard ohne Google-Fonts-Hosts.
+- `features/benutzer-rollen`: Admin-Seiten zeigen Nicht-Admins „Kein Zugriff“; Rollenwechsel mit Rueckfrage.
+- `features/multi-server`: Suche fragt alle Server parallel ab, Hinweis bei Server-Fehlern und gekuerzten Ergebnissen.
+- `features/i18n`: Sprachwahl bleibt erhalten (Server-Standard ueberschreibt eine eigene Wahl nicht).
+- Veraltet: Hinweise auf Google Fonts, „Suche nur nacheinander“, CAA als reines Textfeld.

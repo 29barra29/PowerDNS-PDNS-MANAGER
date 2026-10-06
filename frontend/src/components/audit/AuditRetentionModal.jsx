@@ -4,6 +4,7 @@ import { CheckCircle, Loader2, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
 import { useDateFormat } from '../../lib/useDateFormat'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import { isRetentionShortening, RETENTION_MAX_DAYS, validateRetention } from './historyModel.js'
 
 // Aufbewahrung des Audit-Logs (F7 §2.5 Nr. 8, §3.9/§3.10; nur Admin-Session).
@@ -35,13 +36,8 @@ export default function AuditRetentionModal({ onClose, onSaved }) {
         return () => ctrl.abort()
     }, [])
 
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Escape' && !saving) onClose()
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [onClose, saving])
+    // Fokus beim Oeffnen, Tab-Falle, ESC (nicht waehrend des Speicherns), Fokus-Rueckgabe (L11)
+    const dialogRef = useDialogFocus({ onClose, canClose: !saving })
 
     const check = validateRetention(value)
     const current = settings?.retention_days ?? 0
@@ -78,6 +74,7 @@ export default function AuditRetentionModal({ onClose, onSaved }) {
             onClick={() => { if (!saving) onClose() }}
         >
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
@@ -144,6 +141,7 @@ export default function AuditRetentionModal({ onClose, onSaved }) {
                                 max={RETENTION_MAX_DAYS}
                                 step={1}
                                 inputMode="numeric"
+                                autoFocus
                                 value={value}
                                 onChange={(e) => { setValue(e.target.value); setSaved(false) }}
                                 aria-invalid={!check.ok}

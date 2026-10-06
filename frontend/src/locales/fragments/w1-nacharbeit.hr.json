@@ -1,0 +1,9 @@
+{
+  "set": {
+    "audit.actions.APP_INFO_UPDATE": "Postavke aplikacije izmijenjene",
+    "audit.actions.APP_LOGO_UPLOAD": "Logotip prenesen",
+    "audit.resourceTypes.system": "Sustav",
+    "settings.monitoring.scrapePlaceholderHost": "<tvoj-host>"
+  },
+  "remove": []
+}

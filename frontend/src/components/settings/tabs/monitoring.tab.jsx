@@ -8,8 +8,8 @@ import api from '../../../api'
 import OneTimeSecretModal from '../../OneTimeSecretModal'
 import { useDateFormat } from '../../../lib/useDateFormat'
 import {
-    DEFAULT_RESOLVERS, GRAFANA_QUERIES, backgroundTasks, buildCurlCommand, buildScrapeYaml, monitoringStatusRows,
-    parseResolverText, resolverText, scrapeTarget,
+    DEFAULT_RESOLVERS, GRAFANA_QUERIES, SCRAPE_PLACEHOLDER_HOST, backgroundTasks, buildCurlCommand, buildScrapeYaml,
+    monitoringStatusRows, parseResolverText, resolverText, scrapeTarget,
 } from '../../../zoneDetail/propagationModel.js'
 
 // Tab "Monitoring" (nur Admins; F12 §2.2, F13 §2.3, Plan [S14]; Workstream WS-F12F13-FE):
@@ -20,6 +20,11 @@ import {
 // Das Backend verlangt eine Admin-Browser-Session (Panel-Tokens sind gesperrt).
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'monitoring', order: 85, labelKey: 'settings.monitoring.tab', icon: Activity, adminOnly: true }
+
+// Ohne Basis-URL enthalten die Beispiele einen Platzhalter-Host; er erscheint in der UI-Sprache (L13).
+function localizeScrapePlaceholder(text, t) {
+    return String(text).split(SCRAPE_PLACEHOLDER_HOST).join(t('settings.monitoring.scrapePlaceholderHost'))
+}
 
 export default function MonitoringTab({ active }) {
     return (
@@ -493,6 +498,7 @@ function MetricsCard({ active }) {
     const envOverride = !!metrics?.env_override
     const hasToken = !!metrics?.token_set
     const scrape = scrapeTarget(metrics?.scrape_url)
+    const example = (text) => (scrape.placeholder ? localizeScrapePlaceholder(text, t) : text)
 
     return (
         <div className="glass-card p-6">
@@ -606,11 +612,11 @@ function MetricsCard({ active }) {
                             {scrape.placeholder && (
                                 <p className="text-xs text-warning mb-2">{t('settings.monitoring.metricsNoBaseUrl')}</p>
                             )}
-                            <CodeBlock code={buildScrapeYaml(metrics.scrape_url)} label={t('settings.monitoring.metricsScrapeTitle')} />
+                            <CodeBlock code={example(buildScrapeYaml(metrics.scrape_url))} label={t('settings.monitoring.metricsScrapeTitle')} />
                         </div>
                         <div>
                             <h3 className="text-sm font-semibold text-text-primary mb-2">{t('settings.monitoring.metricsCurlTitle')}</h3>
-                            <CodeBlock code={buildCurlCommand(metrics.scrape_url)} label={t('settings.monitoring.metricsCurlTitle')} />
+                            <CodeBlock code={example(buildCurlCommand(metrics.scrape_url))} label={t('settings.monitoring.metricsCurlTitle')} />
                         </div>
                         <div>
                             <h3 className="text-sm font-semibold text-text-primary">{t('settings.monitoring.metricsGrafanaTitle')}</h3>
