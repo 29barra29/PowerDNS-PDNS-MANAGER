@@ -31,8 +31,9 @@ export default function ServersTab() {
     const [revealingKey, setRevealingKey] = useState(false)
     // true, sobald der Admin das Key-Feld selbst geaendert hat; nur dann wird api_key beim Bearbeiten gesendet
     const [apiKeyDirty, setApiKeyDirty] = useState(false)
-    // api_key_status des bearbeiteten Servers ('set' beim Anlegen)
+    // api_key_status des bearbeiteten Servers ('set' beim Anlegen) und ob er aktiv ist
     const [editKeyStatus, setEditKeyStatus] = useState('set')
+    const [editIsActive, setEditIsActive] = useState(true)
     // Backend verlangt den Key neu (URL geaendert) bzw. Pflicht-Key fehlt -> Feldhinweis
     const [apiKeyFieldHint, setApiKeyFieldHint] = useState('')
     // Nach dem Neu-Eintragen eines Keys fuer einen nicht geladenen Server: Hinweis "Zonen abgleichen" [D4]
@@ -71,6 +72,7 @@ export default function ServersTab() {
         setShowApiKey(false)
         setApiKeyDirty(false)
         setEditKeyStatus('set')
+        setEditIsActive(true)
         setApiKeyFieldHint('')
         setServerModalError('')
         setShowForm(true)
@@ -92,6 +94,7 @@ export default function ServersTab() {
         setShowApiKey(false)
         setApiKeyDirty(false)
         setEditKeyStatus(keyStatus(s))
+        setEditIsActive(s.is_active !== false)
         setApiKeyFieldHint('')
         setServerModalError('')
         setShowForm(true)
@@ -143,8 +146,9 @@ export default function ServersTab() {
 
     async function handleSave(e) {
         e.preventDefault()
-        // Nicht lesbarer/fehlender Key: ohne neuen Key bliebe der Server ungeladen (F5 §2 D)
-        const needsKey = !!editId && editKeyStatus !== 'set'
+        // Nicht lesbarer/fehlender Key: ohne neuen Key bliebe der aktive Server ungeladen (F5 §2 D). Ein
+        // deaktivierter Server ist ohnehin nicht geladen – dort darf z. B. die Beschreibung ohne Key gespeichert werden.
+        const needsKey = !!editId && editKeyStatus !== 'set' && editIsActive
         if (needsKey && !(apiKeyDirty && form.api_key.trim())) {
             setApiKeyFieldHint(t('settingsMore.apiKeyRequiredUnreadable'))
             setServerModalError(t('settingsMore.apiKeyRequiredUnreadable'))
@@ -399,14 +403,14 @@ export default function ServersTab() {
 
                         <div>
                             <label htmlFor="server-api-key" className="block text-sm font-medium text-text-secondary mb-1">
-                                {t('settingsMore.apiKey')}{!editId || editKeyStatus !== 'set' ? ' *' : ''}
+                                {t('settingsMore.apiKey')}{!editId || (editKeyStatus !== 'set' && editIsActive) ? ' *' : ''}
                             </label>
                             {editId && editKeyStatus !== 'set' && (
                                 <div role="alert" className={`mb-2 p-3 rounded-lg border text-sm flex items-start gap-2 ${editKeyStatus === 'unreadable' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-warning/10 border-warning/30 text-warning'}`}>
                                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
                                     <div className="space-y-1">
                                         <p>{editKeyStatus === 'unreadable' ? t('settingsMore.apiKeyUnreadableHint') : t('settingsMore.apiKeyMissingHint')}</p>
-                                        <p className="text-xs">{t('settingsMore.apiKeyNotLoadedHint')}</p>
+                                        {editIsActive && <p className="text-xs">{t('settingsMore.apiKeyNotLoadedHint')}</p>}
                                     </div>
                                 </div>
                             )}
@@ -417,7 +421,7 @@ export default function ServersTab() {
                                     onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true); setApiKeyFieldHint('') }}
                                     placeholder={editId && editKeyStatus === 'set' ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
                                     className="w-full px-3 py-2 pr-20 text-sm"
-                                    required={!editId || editKeyStatus !== 'set'}
+                                    required={!editId || (editKeyStatus !== 'set' && editIsActive)}
                                     maxLength={500}
                                     autoComplete="off"
                                     aria-invalid={apiKeyFieldHint ? true : undefined}
