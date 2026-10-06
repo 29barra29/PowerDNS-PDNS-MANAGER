@@ -1,0 +1,15 @@
+{
+  "reason": "WS-F1 (Bulk-Editor): 'TTL' ist in allen Sprachen der Fachbegriff (wie history.ttl); im Deutschen sind 'Name' und 'Syntax' die ueblichen Begriffe (Spaltenkopf bzw. Syntax-Hilfe). Problemtexte bulk.issue.<code> werden aus dem Backend-Code gebildet.",
+  "global": [
+    "bulk.colTtl"
+  ],
+  "perLanguage": {
+    "de": [
+      "bulk.colName",
+      "bulk.syntaxHelpTitle"
+    ]
+  },
+  "dynamic": [
+    "bulk.issue.*"
+  ]
+}
