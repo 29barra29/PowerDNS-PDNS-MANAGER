@@ -15,7 +15,9 @@
   Apex-NS, SOA, LUA-Berechtigung). Löschungen müssen ausdrücklich bestätigt werden. Wurde die Zone zwischen
   Vorschau und Speichern geändert, wird nichts überschrieben (Hinweis „Vorschau neu laden“).
 - **PTR-Pflege:** Bei A/AAAA-Änderungen bietet die Vorschau die Option „PTR in Reverse-Zone mitpflegen“; beim
-  Löschen einzelner A/AAAA-Records gilt die zuletzt gewählte Einstellung der Zone.
+  Löschen einzelner A/AAAA-Records gilt die zuletzt gewählte Einstellung der Zone. Das Panel sendet immer genau
+  den angezeigten Wert. Nach dem Speichern stehen gesetzte/entfernte PTRs an der Erfolgsmeldung, übersprungene
+  (z. B. fremder PTR, fehlendes Recht auf die Reverse-Zone) je IP mit Begründung in einem gelben Hinweis.
 
 #### Geändert
 - **Bulk auf mehreren Servern:** je Server genau eine atomare Änderung; zuerst der Server aus der URL, scheitert er,
@@ -37,7 +39,8 @@
   `{"text": {"content", "mode", "scope", "default_ttl"}}`) – Antwort mit `changes`, `issues`, `summary`,
   `peers` und einem fertigen Body `ops` für `/bulk`.
 - `/bulk` kennt zusätzlich `merge`, `set_ttl`, `set_disabled`, `default_ttl`, `expected` (Fingerprints aus der
-  Vorschau → `409` mit `conflicts`), `force` (nur API, im Audit als `forced`), `source`, `mode`, `manage_ptr`.
+  Vorschau für jedes berührte RRset, auch unveränderte; Abweichung oder ein geändertes RRset ohne Fingerprint →
+  `409` mit `conflicts`), `force` (nur API, im Audit als `forced`), `source`, `mode`, `manage_ptr`.
   Antwort-`details`: `created`, `deleted`, `changed_rrsets`, `unchanged_rrsets`, `fanout`, `peer_drift`, `audit_id`,
   optional `ptr`. Neuer Fan-out-Status `skipped (no changes needed)`.
 - Einzel-Endpunkte (Anlegen/Ändern/Löschen) und Bulk liefern bei PTR-Pflege `details.ptr`.
