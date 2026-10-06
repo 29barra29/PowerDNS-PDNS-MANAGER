@@ -1,60 +1,37 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Check, Copy, Info, X } from 'lucide-react'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 
 // Gemeinsame Bausteine der DNSSEC-Dialoge (Plan WS-F4-B): Rahmen mit Fokusfuehrung, Kopier-Knopf,
 // Schalter "Serial erhoehen + NOTIFY" [D10] und Anzeige des Ergebnisses (serial_bumped/notified/notify_error).
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 /**
  * Dialog-Rahmen (z-50): Overlay-Klick und ESC schliessen nur, wenn nicht `busy`; Strg/Cmd+Enter ruft `onSubmit`
- * (falls gesetzt und nicht busy). Fokus: beim Oeffnen auf das erste Bedienelement im Inhalt, Tab bleibt im Dialog,
- * beim Schliessen zurueck auf das zuvor fokussierte Element.
+ * (falls gesetzt und nicht busy). Fokus (lib/useDialogFocus): beim Oeffnen auf das Element mit `data-autofocus`,
+ * sonst das erste Bedienelement; Tab bleibt im Dialog, beim Schliessen zurueck auf das zuvor fokussierte Element.
  */
 export default function DnssecDialog({ title, icon: Icon, onClose, onSubmit, busy = false, wide = false, children }) {
     const { t } = useTranslation()
     const titleId = useId()
-    const boxRef = useRef(null)
-    const latest = useRef({ onClose, onSubmit, busy })
+    const boxRef = useDialogFocus({ onClose, canClose: !busy })
+    const latest = useRef({ onSubmit, busy })
 
     useEffect(() => {
-        latest.current = { onClose, onSubmit, busy }
+        latest.current = { onSubmit, busy }
     })
 
+    // Strg/Cmd+Enter ruft die Primaeraktion (ESC, Tab-Falle und Fokus uebernimmt der Hook)
     useEffect(() => {
-        const previous = typeof document !== 'undefined' ? document.activeElement : null
-        const box = boxRef.current
-        const first = box?.querySelector(`[data-autofocus], ${FOCUSABLE}`)
-        ;(first || box)?.focus?.()
         function onKey(e) {
             const cur = latest.current
-            if (e.key === 'Escape') {
-                if (!cur.busy) cur.onClose?.()
-            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                if (cur.onSubmit && !cur.busy) {
-                    e.preventDefault()
-                    cur.onSubmit()
-                }
-            } else if (e.key === 'Tab' && box) {
-                const items = Array.from(box.querySelectorAll(FOCUSABLE))
-                if (!items.length) return
-                const firstEl = items[0]
-                const lastEl = items[items.length - 1]
-                if (e.shiftKey && document.activeElement === firstEl) {
-                    e.preventDefault()
-                    lastEl.focus()
-                } else if (!e.shiftKey && document.activeElement === lastEl) {
-                    e.preventDefault()
-                    firstEl.focus()
-                }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && cur.onSubmit && !cur.busy) {
+                e.preventDefault()
+                cur.onSubmit()
             }
         }
         document.addEventListener('keydown', onKey)
-        return () => {
-            document.removeEventListener('keydown', onKey)
-            if (previous && typeof previous.focus === 'function') previous.focus()
-        }
+        return () => document.removeEventListener('keydown', onKey)
     }, [])
 
     return (

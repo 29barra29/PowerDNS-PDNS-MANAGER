@@ -19,27 +19,25 @@ const SRC = path.resolve(HERE, '..', 'src')
 const HOOK_FILE = 'lib/useDialogFocus.js'
 
 // Dialoge, die (noch) nicht auf den Hook umgestellt sind – Pfad relativ zu src/, mit Grund.
-// Wer eine Datei umstellt, entfernt sie hier; neue Dialoge kommen nicht auf diese Liste, sondern nutzen den Hook.
-const PENDING = Object.freeze({
-    'components/OneTimeSecretModal.jsx':
-        'W0-SHARED-FE: eigenes Fokus-/ESC-Verhalten (ESC wird absichtlich verschluckt); Umstellung per Antrag',
-    'components/userSecurity/UserSecurityModal.jsx': 'WS-F2F3 (L12): Umstellung per Antrag an den Datei-Besitzer',
-    'pages/AuditLogPage.jsx': 'WS-F7-FE (L11, Detail-Drawer): Umstellung per Antrag an den Datei-Besitzer',
-    // Dialoge paralleler Welle-2-Workstreams (Stand beim Erstellen dieses Tests); Umstellung ab Welle 3
-    'components/dialogs/10-stepup.dialog.jsx': 'WS-F10-APP-FE (Welle 2, parallel): Umstellung ab Welle 3',
-    'components/panelTokens/PanelTokenFormModal.jsx': 'WS-F14-APP (Welle 2, parallel): Umstellung ab Welle 3',
-    'components/dyndns/DyndnsTokenModal.jsx': 'WS-F9F11-FE (Welle 2, parallel): Umstellung ab Welle 3',
-    'components/dnssec/DnssecDialog.jsx': 'WS-F4-B (Welle 2, parallel): Umstellung ab Welle 3',
-    'components/bulk/BulkEditorModal.jsx': 'WS-F1 (Welle 2, parallel; im Integrationsschritt eingetragen): Umstellung ab Welle 3',
-    'components/bulk/BulkTtlDialog.jsx': 'WS-F1 (Welle 2, parallel; im Integrationsschritt eingetragen): Umstellung ab Welle 3',
-})
+// Seit WS-W2-NACHARBEIT (Welle 3) leer: alle Dialoge nutzen den Hook. Neue Dialoge kommen nicht auf diese Liste.
+const PENDING = Object.freeze({})
 
-// Mindestens diese Dialoge nutzen den Hook (Besitz WS-W1-NACHARBEIT, Welle 2).
+// Mindestens diese Dialoge nutzen den Hook: WS-W1-NACHARBEIT (Welle 2) und WS-W2-NACHARBEIT (Welle 3,
+// die frueheren PENDING-Eintraege).
 const REQUIRED = [
     'components/zoneHistory/RollbackModal.jsx',
     'components/audit/AuditRetentionModal.jsx',
     'components/webhooks/WebhookFormModal.jsx',
     'components/webhooks/WebhookDeliveriesDrawer.jsx',
+    'components/OneTimeSecretModal.jsx',
+    'components/userSecurity/UserSecurityModal.jsx',
+    'pages/AuditLogPage.jsx',
+    'components/dialogs/10-stepup.dialog.jsx',
+    'components/panelTokens/PanelTokenFormModal.jsx',
+    'components/dyndns/DyndnsTokenModal.jsx',
+    'components/dnssec/DnssecDialog.jsx',
+    'components/bulk/BulkEditorModal.jsx',
+    'components/bulk/BulkTtlDialog.jsx',
 ]
 
 const ROLE_DIALOG = /role\s*=\s*(?:"dialog"|'dialog'|\{\s*["']dialog["']\s*\})/
@@ -91,14 +89,14 @@ test('a11y: jede Komponente mit role="dialog" nutzt useDialogFocus (oder steht b
     assert.deepEqual(problems, [], 'Dialoge ohne gemeinsamen Fokus-Hook:\n' + problems.join('\n'))
 })
 
-test('a11y: die Dialoge von WS-W1-NACHARBEIT sind umgestellt', () => {
+test('a11y: die Dialoge von WS-W1-NACHARBEIT und WS-W2-NACHARBEIT sind umgestellt, PENDING ist leer', () => {
     const files = dialogFiles()
     for (const file of REQUIRED) {
         assert.ok(files.includes(file), `${file}: role="dialog" fehlt`)
         assert.equal(hookUsageProblem(fs.readFileSync(path.join(SRC, file), 'utf8')), null, file)
         assert.equal(Object.hasOwn(PENDING, file), false, `${file} darf nicht in PENDING stehen`)
     }
-    for (const [file, reason] of Object.entries(PENDING)) assert.ok(reason.length > 10, `${file}: Grund fehlt`)
+    assert.deepEqual(Object.keys(PENDING), [], 'PENDING muss leer bleiben – neue Dialoge nutzen useDialogFocus')
 })
 
 test('a11y: die statische Pruefung erkennt fehlende Nutzung', () => {

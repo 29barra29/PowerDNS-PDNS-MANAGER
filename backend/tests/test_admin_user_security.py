@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from f2f3fakes import AuditSink, PanelToken, UserDB, http_request, make_user
+from f2f3fakes import AuditSink, DynDnsToken, PanelToken, UserDB, http_request, make_user
 from app.models.models import WebAuthnCredential
 from app.routers import auth as auth_router
 from app.routers.auth import (
@@ -49,6 +49,16 @@ def _token(tid: int, user_id: int, *, active: bool = True) -> PanelToken:
                       is_active=active, permission="manage", allow_admin=False, revoked_at=None)
 
 
+def _dyn(tid: int, user_id: int, *, active: bool = True) -> DynDnsToken:
+    return DynDnsToken(id=tid, user_id=user_id, name=f"d{tid}", token_prefix="dnsmgr_dyn_x", token_hash=f"{tid:064x}",
+                       is_active=active)
+
+
+def _users_updates(db) -> list:
+    """UPDATE users ... sessions_revoked_at (L3, access_revocation.revoke_sessions)."""
+    return [u for u in db.updates_on("users") if "sessions_revoked_at" in u.compile().params]
+
+
 def _cred(cid: int, user_id: int, name: str) -> WebAuthnCredential:
     return WebAuthnCredential(id=cid, user_id=user_id, name=name, credential_id=f"c{cid}", public_key="pk",
                               sign_count=0)
@@ -74,13 +84,15 @@ async def test_reset_user_password_defaults(audit):
     assert call["user_id"] == 1 and call["details"] == {"target_user_id": 2, "must_change_password": True}
     assert res["new_password"] not in repr(audit.calls)
     assert not db.updates_on("dyndns_tokens")  # ohne Option kein Widerruf
+    assert len(_users_updates(db)) == 1  # L3: Sitzungen enden auch ueber sessions_revoked_at
 
 
 async def test_reset_user_password_revoke_all_access_sets_revoked_at(audit):
     admin, user = _admin(), make_user(2, "anna")
     tokens = [_token(10, 2), _token(11, 2, active=False)]  # auch pausierte Tokens werden endgueltig widerrufen
-    db = UserDB([admin, user], tokens=tokens,
-                rowcounts={"dyndns_tokens": 1, "webhooks": 2, "webhook_deliveries": 3})
+    dyn = [_dyn(20, 2)]
+    db = UserDB([admin, user], tokens=tokens, dyndns=dyn,
+                rowcounts={"webhooks": 2, "webhook_deliveries": 3})
     res = await auth_router.reset_user_password(
         db, 2, AdminPasswordResetBody(must_change_password=False, revoke_all_access=True), admin)
     assert user.must_change_password is False
@@ -88,7 +100,9 @@ async def test_reset_user_password_revoke_all_access_sets_revoked_at(audit):
     expected = {"panel_tokens": 2, "dyndns_tokens": 1, "webhooks": 2, "cancelled_deliveries": 3}
     assert res["revoked"] == expected
     assert audit.one("USER_PASSWORD_RESET")["details"]["revoked"] == expected
-    assert len(db.updates_on("dyndns_tokens")) == 1 and len(db.updates_on("webhooks")) == 1
+    # DynDNS: Sicherheitssperre (Secret entwertet) statt UPDATE is_active=0 (Antrag A1 WS-F9F11-BE fix2)
+    assert dyn[0].is_active is False and dyn[0].token_hash.startswith("revoked:")
+    assert not db.updates_on("dyndns_tokens") and len(db.updates_on("webhooks")) == 1
     (upd,) = db.updates_on("webhook_deliveries")
     sql = str(upd)
     assert "status IN" in sql and upd.compile().params["status"] == "cancelled"
@@ -577,8 +591,8 @@ async def test_revoke_user_access_all_options(audit):
     admin = _admin()
     user = make_user(2, "anna", totp_enabled=True, totp_secret="JBSWY3DPEHPK3PXP")
     tokens = [_token(10, 2)]
-    db = UserDB([admin, user], tokens=tokens, creds=[_cred(1, 2, "yubi")],
-                rowcounts={"dyndns_tokens": 2, "webhooks": 1, "webhook_deliveries": 4})
+    db = UserDB([admin, user], tokens=tokens, creds=[_cred(1, 2, "yubi")], dyndns=[_dyn(20, 2), _dyn(21, 2, active=False)],
+                rowcounts={"webhooks": 1, "webhook_deliveries": 4})
     res = await auth_router.revoke_user_access(
         db, 2, RevokeAccessBody(reset_2fa=True, remove_passkeys=True), admin)
     assert res["revoked"] == {"panel_tokens": 1, "dyndns_tokens": 2, "webhooks": 1, "cancelled_deliveries": 4}
@@ -598,6 +612,7 @@ async def test_revoke_user_access_selected_only_and_guards(audit):
         db, 2, RevokeAccessBody(panel_tokens=False, dyndns_tokens=False, webhooks=True), admin)
     assert res["revoked"]["webhooks"] == 3 and res["revoked"]["panel_tokens"] == 0
     assert tokens[0].revoked_at is None and not db.updates_on("dyndns_tokens")
+    assert len(_users_updates(db)) == 1  # Sitzungen enden immer (L3)
     nothing = RevokeAccessBody(panel_tokens=False, dyndns_tokens=False, webhooks=False)
     await _raises(auth_router.revoke_user_access(db, 2, nothing, admin), 400, "Nichts zum Widerrufen ausgewählt")
     await _raises(auth_router.revoke_user_access(db, 1, None, admin), 400, auth_router.OWN_ACCESS_DETAIL)

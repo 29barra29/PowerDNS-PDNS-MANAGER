@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -12,6 +12,7 @@ import {
     AUDIT_ACTION_GROUPS, AUDIT_ACTIONS, AUDIT_RESOURCE_TYPES, actionsInGroup, auditActionLabel, resourceTypeLabel,
 } from '../constants/auditActions'
 import { useDateFormat } from '../lib/useDateFormat'
+import { useDialogFocus } from '../lib/useDialogFocus'
 import {
     AUDIT_PAGE_SIZES, SEARCH_DEBOUNCE_MS, auditSearchObject, buildAuditParams, effectiveSearch, hasActiveFilters,
     isInvalidRange, parseAuditSearch, zoneHistoryHref,
@@ -133,13 +134,9 @@ export default function AuditLogPage() {
         return () => clearTimeout(timer)
     }, [qInput, zoneInput, filters, limit, setSearchParams])
 
-    // Drawer: ESC schliesst
-    useEffect(() => {
-        if (!drawerEntry) return undefined
-        function onKey(e) { if (e.key === 'Escape') setDrawerEntry(null) }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [drawerEntry])
+    // Drawer: Fokus, Tab-Falle, ESC schliesst, Fokus zurueck auf die Tabellenzeile (lib/useDialogFocus)
+    const closeDrawer = useCallback(() => setDrawerEntry(null), [])
+    const drawerRef = useDialogFocus({ onClose: closeDrawer, active: !!drawerEntry })
 
     function openDrawer(entry) {
         setDrawerEntry(entry)
@@ -429,6 +426,7 @@ export default function AuditLogPage() {
             {drawerEntry && (
                 <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setDrawerEntry(null)}>
                     <aside
+                        ref={drawerRef}
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby={drawerTitleId}

@@ -11,7 +11,9 @@ Nicht entschluesselbare Werte kommen als Platzhalter ``UNREADABLE`` (``== ""``) 
 Antworten als ``*_unreadable``/``api_key_status`` gemeldet, nie ueberschrieben, solange kein neuer Wert
 kommt. Settings nur ueber ``services/system_settings.py``. Wer bei SMTP ein Zielfeld (Host, Port,
 Benutzer, Verschluesselung) aendert, muss das Passwort neu eingeben (``guard_secret_retarget`` [S3], in
-PUT und Test); ``SecretReentryRequired`` bildet main.py auf 400 ab.
+PUT und Test); ebenso, wer die URL eines PowerDNS-Servers aendert, den API-Key (L1). ``SecretReentryRequired``
+bildet main.py auf 400 ab. Der Klartext-Key (Reveal) wird nur ausgeliefert, wenn der Audit-Eintrag geschrieben
+wurde (sonst 503, L2).
 Den Status der Verschluesselung liefert ``routers/settings_secrets.py``.
 """
 import asyncio
@@ -303,6 +305,7 @@ REVEAL_UNREADABLE_DETAIL = (
     "Bitte den API-Key neu eintragen."
 )
 REVEAL_EMPTY_DETAIL = "Für diesen Server ist kein API-Key gespeichert."
+REVEAL_AUDIT_FAILED_DETAIL = "Audit-Eintrag konnte nicht geschrieben werden – der API-Key wird nicht angezeigt."
 
 
 def _api_key_status(cfg: ServerConfig) -> str:
@@ -434,16 +437,26 @@ async def update_server_config(
     if not cfg:
         raise HTTPException(status_code=404, detail="Server-Konfiguration nicht gefunden")
     
+    # Neuer Key nur bei echtem Wert: leer/whitespace oder die Maske = Bestand behalten (verhindert, dass das
+    # Frontend beim Speichern einer Edit-Form ohne Reveal den Key loescht oder die Maske als Key speichert).
+    new_key = data.api_key if secret_input_action(data.api_key) == "set" else None
+    # [S3]/L1: Der gespeicherte Key darf nicht still an eine neue URL gehen – wer die URL aendert, gibt den
+    # API-Key neu ein (400 secret_reentry_required). Ohne lesbaren gespeicherten Key gibt es nichts zu schuetzen.
+    guard_secret_retarget(
+        targets_before={"url": cfg.url},
+        targets_after={"url": data.url.rstrip("/") if data.url is not None else cfg.url},
+        secret_in=new_key,
+        secret_stored=bool(cfg.api_key),
+    )
+
     before = {"display_name": cfg.display_name, "url": cfg.url, "api_key": cfg.api_key,
               "description": cfg.description, "is_active": cfg.is_active, "allow_writes": cfg.allow_writes}
     if data.display_name is not None:
         cfg.display_name = data.display_name
     if data.url is not None:
         cfg.url = data.url.rstrip("/")
-    if data.api_key is not None and data.api_key.strip():
-        # Leerer/whitespace-Wert wird ignoriert -> Bestand bleibt erhalten (verhindert,
-        # dass das Frontend versehentlich beim Speichern einer Edit-Form ohne Reveal den Key löscht).
-        cfg.api_key = data.api_key
+    if new_key is not None:
+        cfg.api_key = new_key
     if data.description is not None:
         cfg.description = data.description
     if data.is_active is not None:
@@ -515,8 +528,12 @@ async def reveal_server_api_key(
     if not cfg.api_key:
         raise HTTPException(status_code=409, detail=REVEAL_EMPTY_DETAIL)
 
-    # Audit vor der Antwort committet (DbWrite): ohne Eintrag kein Klartext-Key
-    await write_audit(db, "REVEAL_API_KEY", "server_config", cfg.name, user_id=admin.id, server_name=cfg.name)
+    # Audit vor der Antwort committet (DbWrite): ohne Eintrag kein Klartext-Key. write_audit faengt Fehler ab und
+    # liefert dann None – in dem Fall wird der Key nicht ausgeliefert (L2).
+    if await write_audit(db, "REVEAL_API_KEY", "server_config", cfg.name, user_id=admin.id,
+                         server_name=cfg.name) is None:
+        logger.error("API-Key von Server '%s' nicht angezeigt: Audit-Eintrag fehlgeschlagen", cfg.name)
+        raise HTTPException(status_code=503, detail=REVEAL_AUDIT_FAILED_DETAIL)
     logger.info(f"API key revealed for server '{cfg.name}' by admin '{admin.username}'")
     return {"id": cfg.id, "name": cfg.name, "api_key": cfg.api_key}
 

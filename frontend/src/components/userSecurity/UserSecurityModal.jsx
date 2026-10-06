@@ -4,6 +4,7 @@ import { CheckCircle2, KeyRound, Loader2, ShieldOff, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
 import OneTimeSecretModal from '../OneTimeSecretModal'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import { visibleSecuritySections } from './UserSecuritySections'
 
 /*
@@ -61,13 +62,9 @@ export default function UserSecurityModal({ user, resetMailAvailable, onClose, o
 
     const canClose = !busy && !oneTime
 
-    useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Escape' && canClose) onClose()
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [canClose, onClose])
+    // Fokus, Tab-Falle, ESC (nicht waehrend einer Aktion/Einmal-Anzeige) und Fokus-Rueckgabe: lib/useDialogFocus.
+    // Die Einmal-Anzeige darueber nutzt denselben Hook; nur der oberste Dialog reagiert auf ESC/Tab.
+    const dialogRef = useDialogFocus({ onClose, canClose })
 
     const run = useCallback(async (key, fn) => {
         setBusy(key)
@@ -116,6 +113,7 @@ export default function UserSecurityModal({ user, resetMailAvailable, onClose, o
                 onClick={() => { if (canClose) onClose() }}
             >
                 <div
+                    ref={dialogRef}
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="user-security-title"

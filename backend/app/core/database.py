@@ -303,6 +303,8 @@ SCHEMA_STATEMENTS: list[SchemaEntry] = [
     "CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id VARCHAR(255) "
     "CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
+    # (2b) users: Sitzungs-Widerruf (Schema-Nachtrag Welle 3, L3)
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_revoked_at DATETIME NULL",
     # (3) users.totp_* verbreitern (F5)
     ModifyIfNeeded("users", "totp_secret",
                    "ALTER TABLE users MODIFY COLUMN totp_secret VARCHAR(512) NULL", _needs_varchar512),

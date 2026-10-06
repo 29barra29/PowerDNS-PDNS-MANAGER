@@ -4,13 +4,12 @@ import { AlertTriangle, Info, KeyRound, Loader2, Plus, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
 import { useDateFormat } from '../../lib/useDateFormat'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import {
     EXPIRY_OPTIONS, NAME_MAX,
     buildCreatePayload, buildUpdatePayload, filterZoneOptions, initialForm, isValidZone, mergeZoneNames,
     normalizeZoneInput, validateForm, zoneOptionsFromPermissions,
 } from '../../lib/panelTokens'
-
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // Admin: Zonen aller erreichbaren Server laden (F14 §2.3). Liefert { names, failed: [Servername] }.
 async function loadAdminZones() {
@@ -37,7 +36,6 @@ export default function PanelTokenFormModal({ mode, token, isAdmin, zonePermissi
     const { fmtDate } = useDateFormat()
     const isEdit = mode === 'edit'
     const titleId = useId()
-    const dialogRef = useRef(null)
     const formRef = useRef(null)
     const nameRef = useRef(null)
     const loadedRef = useRef(false)
@@ -83,15 +81,6 @@ export default function PanelTokenFormModal({ mode, token, isAdmin, zonePermissi
             .finally(() => setZonesLoading(false))
     }
 
-    // Fokus: Namensfeld; beim Schliessen zurueck auf das ausloesende Element.
-    useEffect(() => {
-        const previous = document.activeElement
-        nameRef.current?.focus()
-        return () => {
-            if (previous && typeof previous.focus === 'function') previous.focus()
-        }
-    }, [])
-
     // Bearbeiten mit Zonen-Scope: Admin-Zonenliste gleich laden (Ereignis ausserhalb des Renders)
     useEffect(() => {
         if (isEdit && form.scopeMode === 'selected') queueMicrotask(() => ensureAdminZones())
@@ -99,32 +88,19 @@ export default function PanelTokenFormModal({ mode, token, isAdmin, zonePermissi
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    // ESC schliesst (nicht waehrend des Speicherns), Strg/Cmd+Enter sendet ab, Tab bleibt im Dialog.
+    const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef: nameRef })
+
+    // Strg/Cmd+Enter sendet ab (Fokus, Tab-Falle, ESC und Fokus-Rueckgabe: lib/useDialogFocus).
     useEffect(() => {
         function onKey(e) {
-            if (e.key === 'Escape' && !busy) {
-                e.preventDefault()
-                onClose()
-            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) {
                 e.preventDefault()
                 formRef.current?.requestSubmit()
-            } else if (e.key === 'Tab' && dialogRef.current) {
-                const items = [...dialogRef.current.querySelectorAll(FOCUSABLE)]
-                if (!items.length) return
-                const first = items[0]
-                const last = items[items.length - 1]
-                if (e.shiftKey && document.activeElement === first) {
-                    e.preventDefault()
-                    last.focus()
-                } else if (!e.shiftKey && document.activeElement === last) {
-                    e.preventDefault()
-                    first.focus()
-                }
             }
         }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
-    }, [busy, onClose])
+    }, [busy])
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))

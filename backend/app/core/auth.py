@@ -92,6 +92,7 @@ ADMIN_ONLY_DETAIL = "Nur Administratoren haben Zugriff"
 
 # --- Gate "Passwortwechsel erforderlich" (F2/F3 3.2.11, 5.6) ------------------------------------
 # Gilt nur fuer Browser-Sessions; Panel-Tokens sind ausgenommen (F3 E7).
+SESSION_EXPIRED_DETAIL = "Sitzung abgelaufen – bitte erneut anmelden"
 PASSWORD_CHANGE_REQUIRED_DETAIL = "Passwortänderung erforderlich – bitte zuerst ein neues Passwort festlegen"
 PASSWORD_CHANGE_HEADER = "X-Password-Change-Required"
 _PASSWORD_CHANGE_ALLOWED = frozenset({
@@ -528,6 +529,22 @@ async def _authenticate_panel_token(request: Request, db: AsyncSession, token: s
 # Die Session-Abhaengigkeit laeuft mit scope="function" (wie ``DbWrite``): schreibende Handler teilen sich
 # damit dieselbe Session mit der Authentifizierung (ein Commit VOR dem Senden der Antwort, Bauplan B.7 [D2]),
 # und ``current_user`` gehoert zur Handler-Session.
+def session_revoked(payload: dict, user) -> bool:
+    """Wurde diese Browser-Sitzung vor dem letzten Sitzungs-Widerruf ausgestellt? (L3, ``users.sessions_revoked_at``)
+
+    ``sessions_revoked_at`` ist naive UTC in vollen Sekunden und liegt eine Sekunde nach dem Widerruf
+    (``access_revocation.revoke_sessions``); abgelehnt wird jede Sitzung mit ``iat`` davor, also auch eine, die in
+    derselben Sekunde wie der Widerruf ausgestellt wurde. Ohne gueltiges ``iat`` gilt die Sitzung als widerrufen.
+    """
+    revoked = to_naive_utc(getattr(user, "sessions_revoked_at", None))
+    if revoked is None:
+        return False
+    iat = payload.get("iat")
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+        return True
+    return iat < revoked.replace(tzinfo=timezone.utc).timestamp()
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db, scope="function"),
@@ -591,10 +608,11 @@ async def get_current_user(
 
     # Session an den Passwort-Hash gebunden: nach Passwortaenderung/-reset sind alle
     # bestehenden Sessions ungueltig. Tokens ohne pwv (vor diesem Update) ebenfalls.
-    if payload.get("pwv") != password_version(user.hashed_password):
+    # Zusaetzlich: Sitzungen, die vor dem letzten Sitzungs-Widerruf ausgestellt wurden (L3).
+    if payload.get("pwv") != password_version(user.hashed_password) or session_revoked(payload, user):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Sitzung abgelaufen – bitte erneut anmelden",
+            detail=SESSION_EXPIRED_DETAIL,
         )
 
     set_auth_context(request, "session", None, None, username=user.username, client_ip=get_client_ip(request))

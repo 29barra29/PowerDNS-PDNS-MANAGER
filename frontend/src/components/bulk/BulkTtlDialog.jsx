@@ -4,6 +4,7 @@ import { Clock, Info, Loader2, X } from 'lucide-react'
 import ModalErrorBanner from '../ModalErrorBanner'
 import TtlInput from '../TtlInput'
 import { TTL_MAX, TTL_MIN, isValidBulkTtl } from '../../zoneDetail/bulkModel.js'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 
 // TTL fuer die Auswahl setzen (F1 2.2, 6.3.2). Der Aufrufer mountet den Dialog je Oeffnen neu (key), daher
 // kein Effekt zum Zuruecksetzen. Die TTL gilt fuer ganze RRsets – der Hinweis nennt die Zahl der nicht gewaehlten
@@ -14,13 +15,14 @@ export default function BulkTtlDialog({ initialTtl, stats, busy, error, onCancel
     const [ttl, setTtl] = useState(String(initialTtl ?? 3600))
     const valid = isValidBulkTtl(ttl)
 
+    // Fokus, Tab-Falle, ESC (nicht waehrend der Vorschau) und Fokus-Rueckgabe: lib/useDialogFocus
+    const dialogRef = useDialogFocus({ onClose: onCancel, canClose: !busy })
+
+    // Danach (Effekt-Reihenfolge) das TTL-Feld fokussieren; der Hook hat den Ausloeser schon gemerkt.
     useEffect(() => {
-        function onKey(e) {
-            if (e.key === 'Escape' && !busy) onCancel()
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [busy, onCancel])
+        const input = document.getElementById(`${titleId}-ttl`)
+        if (input && !input.disabled) input.focus()
+    }, [titleId])
 
     function submit(e) {
         e.preventDefault()
@@ -34,6 +36,7 @@ export default function BulkTtlDialog({ initialTtl, stats, busy, error, onCancel
             onClick={() => { if (!busy) onCancel() }}
         >
             <form
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

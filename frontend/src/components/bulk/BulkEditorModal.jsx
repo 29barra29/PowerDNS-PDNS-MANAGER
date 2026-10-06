@@ -6,6 +6,7 @@ import ModalErrorBanner from '../ModalErrorBanner'
 import PtrSyncOption from '../PtrSyncOption'
 import TtlInput from '../TtlInput'
 import { getManagePtr, getPtrConfig, setManagePtr, subscribePtrConfig } from '../../lib/ptrPreference.js'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 import BulkPreviewView from './BulkPreviewView'
 import {
     TEXT_MODES, TTL_MAX, TTL_MIN, applyErrorIssues, buildTextRequest, bulkApplyBody, canApply, effectivePtrChoice,
@@ -76,20 +77,26 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
         onClose()
     }, [busy, dirty, onClose, t])
 
-    // ESC schliesst (nicht waehrend eines Requests), Strg/Cmd+Enter = Vorschau bzw. Anwenden
+    // Fokus (Textarea im Text-Schritt), Tab-Falle, ESC (requestClose, nicht waehrend eines Requests) und
+    // Fokus-Rueckgabe: lib/useDialogFocus
+    const dialogRef = useDialogFocus({ onClose: requestClose, canClose: !busy, initialFocusRef: textareaRef })
+
+    // Zurueck in den Text-Schritt: Fokus wieder in die Textarea (nach dem Hook-Effekt, s. o.)
+    useEffect(() => {
+        if (step === 'text') textareaRef.current?.focus()
+    }, [step])
+
+    // Strg/Cmd+Enter = Vorschau bzw. Anwenden
     useEffect(() => {
         function onKey(e) {
-            if (e.key === 'Escape') {
-                e.preventDefault()
-                requestClose()
-            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault()
                 if (primaryRef.current && !primaryRef.current.disabled) primaryRef.current.click()
             }
         }
         document.addEventListener('keydown', onKey)
         return () => document.removeEventListener('keydown', onKey)
-    }, [requestClose])
+    }, [])
 
     async function sendPreview(request) {
         setBusy(true)
@@ -192,6 +199,7 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
             onClick={requestClose}
         >
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
@@ -284,7 +292,6 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
                             <textarea
                                 id={`${titleId}-text`}
                                 ref={textareaRef}
-                                autoFocus
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={18}

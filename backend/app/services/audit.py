@@ -225,6 +225,8 @@ PUBLIC_DETAIL_KEYS = frozenset({
     "auth",
     # Kennzeichen, die nur die Vollstaendigkeit beschreiben
     "history_incomplete", "history_truncated", "change_keys",
+    # F9: DynDNS-Reparatur eines veralteten Servers (Kennzeichen ohne personenbezogene Daten; Antrag WS-F9F11-BE)
+    "repair",
 })
 # Schluessel, die auf keiner Ebene der erlaubten Werte erscheinen duerfen.
 PRIVATE_NESTED_KEYS = frozenset({"client_ip", "ip", "ip_source", "token_prefix"})

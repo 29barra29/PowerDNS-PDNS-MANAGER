@@ -86,7 +86,8 @@ WEBHOOK_STATUS_MAP = {
     "canceled": "cancelled",
     "discarded": "cancelled",
 }
-DYNDNS_RESULTS = ("good", "nochg", "badauth", "nohost", "notfqdn", "abuse", "badagent", "dnserr", "911", "other")
+DYNDNS_RESULTS = ("good", "nochg", "badauth", "nohost", "notfqdn", "numhost", "badip", "abuse", "badagent", "dnserr",
+                  "911", "other")
 PROPAGATION_RESULTS = ("in_sync", "out_of_sync", "failed", "rate_limited", "cached")
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 

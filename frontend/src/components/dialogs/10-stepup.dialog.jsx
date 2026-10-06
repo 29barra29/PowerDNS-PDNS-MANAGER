@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Loader2, LogIn, ShieldCheck } from 'lucide-react'
@@ -6,6 +6,7 @@ import api, { STEP_UP_EVENT } from '../../api'
 import {
     cancelStepUp, getStepUpState, openStepUp, saveReturnPath, submitStepUp, subscribeStepUp, takeReturnPath,
 } from '../sso/stepUpStore'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (components/dialogs/Dialogs.jsx)
 export const dialog = { id: 'stepup' }
@@ -54,29 +55,13 @@ export default function StepUpDialog() {
 }
 
 function Frame({ titleId, title, icon: Icon, onCancel, children }) {
-    const previous = useRef(typeof document !== 'undefined' ? document.activeElement : null)
-
-    useEffect(() => {
-        const prev = previous.current
-        function onKey(e) {
-            if (e.key === 'Escape') {
-                e.stopPropagation()
-                onCancel()
-            }
-        }
-        window.addEventListener('keydown', onKey, true)
-        return () => {
-            window.removeEventListener('keydown', onKey, true)
-            // Fokus an das ausloesende Element zurueckgeben
-            if (prev && typeof prev.focus === 'function') {
-                try { prev.focus() } catch { /* Element existiert nicht mehr */ }
-            }
-        }
-    }, [onCancel])
+    // Fokus (Element mit data-autofocus), Tab-Falle, ESC = Abbrechen, Fokus-Rueckgabe an das ausloesende Element.
+    // Der Dialog liegt ueber anderen Dialogen (z-[70]); der Hook-Stapel sorgt dafuer, dass ESC nur ihn schliesst.
+    const dialogRef = useDialogFocus({ onClose: onCancel })
 
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="glass-card p-6 w-full max-w-md space-y-4">
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="glass-card p-6 w-full max-w-md space-y-4">
                 <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center shrink-0">
                         <Icon className="w-5 h-5 text-warning" aria-hidden="true" />
@@ -124,7 +109,7 @@ function PasswordPanel({ error, needTotp }) {
                         className="w-full px-3 py-2 text-sm"
                         autoComplete="current-password"
                         maxLength={128}
-                        autoFocus
+                        data-autofocus
                         required
                     />
                 </div>
@@ -186,7 +171,7 @@ function ReauthPanel() {
                     type="button"
                     onClick={handleReauth}
                     disabled={busy}
-                    autoFocus
+                    data-autofocus
                     className="px-4 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
                 >
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <LogIn className="w-4 h-4" aria-hidden="true" />}

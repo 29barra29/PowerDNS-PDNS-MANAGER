@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { AlertTriangle, Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useDialogFocus } from '../lib/useDialogFocus'
 
 // Einmal-Anzeige eines Geheimnisses (Panel-Token, Webhook-Secret, DynDNS-Token, Zufallspasswort ...),
 // Plan B.14 / F8-D12 (f76):
-// - liegt ueber anderen Modals (z-[60]); KEIN Schliessen per Overlay-Klick oder ESC (ESC wird abgefangen,
-//   damit auch darunterliegende Modals nicht schliessen)
+// - liegt ueber anderen Modals (z-[60]); KEIN Schliessen per Overlay-Klick oder ESC. Fokus, Tab-Falle und
+//   Fokus-Rueckgabe macht lib/useDialogFocus (ohne onClose: ESC bewirkt nichts). Weil dieser Dialog zuletzt
+//   geoeffnet wurde, liegt er oben auf dem Dialog-Stapel des Hooks – darunterliegende Dialoge reagieren dann
+//   weder auf ESC noch auf Tab und schliessen also auch nicht.
 // - Kopieren wartet auf die Zwischenablage; Erfolg und Fehler werden angezeigt, das Secret bleibt sichtbar
 // - geschlossen wird nur ueber den Bestaetigungs-Button (onDone)
 // Props: { title, body, secret, children, doneLabel, onDone }. body === undefined -> Standard-Warnung,
@@ -18,22 +21,9 @@ export default function OneTimeSecretModal({ title, body, secret, children, done
     const copyRef = useRef(null)
     const resetTimer = useRef(null)
 
-    // ESC im Capture-Pfad abfangen: dieses Modal schliesst nicht und andere Listener sehen die Taste nicht.
-    useEffect(() => {
-        function swallowEscape(e) {
-            if (e.key === 'Escape') {
-                e.preventDefault()
-                e.stopImmediatePropagation()
-            }
-        }
-        window.addEventListener('keydown', swallowEscape, true)
-        return () => window.removeEventListener('keydown', swallowEscape, true)
-    }, [])
+    const dialogRef = useDialogFocus({ canClose: false, initialFocusRef: copyRef })
 
-    useEffect(() => {
-        copyRef.current?.focus()
-        return () => clearTimeout(resetTimer.current)
-    }, [])
+    useEffect(() => () => clearTimeout(resetTimer.current), [])
 
     async function handleCopy() {
         clearTimeout(resetTimer.current)
@@ -53,6 +43,7 @@ export default function OneTimeSecretModal({ title, body, secret, children, done
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
