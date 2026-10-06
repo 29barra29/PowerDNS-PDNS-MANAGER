@@ -174,7 +174,8 @@
     "secretsBannerDismiss": "Értesítés elrejtése erre a munkamenetre",
     "secretsBannerPlaintext": "A titkos adatok jelenleg titkosítatlanul tárolódnak – a kulcsot nem sikerült létrehozni.",
     "secretsBannerServers": "Be nem töltött PowerDNS-szerverek (az API-kulcs nem olvasható): {{list}}. A zónamódosítások ott kimaradnak – a kulcs újbóli megadása után egyeztesse a zónákat.",
-    "secretsBannerUnreadable": "Néhány tárolt titkos adat nem fejthető vissza, ezeket újra meg kell adni."
+    "secretsBannerUnreadable": "Néhány tárolt titkos adat nem fejthető vissza, ezeket újra meg kell adni.",
+    "menu": "Főmenü"
   },
   "settings": {
     "title": "Beállítások",
@@ -2462,7 +2463,12 @@
       "abuse": "a token sokszorosan túllépi a kéréskorlátot",
       "dnserr": "a PowerDNS elutasította",
       "badrequest": "érvénytelen kérés"
-    }
+    },
+    "secretRevokedActivate": "A token nem kapcsolható be, mert a titka le van tiltva. Előbb generálj új titkot.",
+    "secretRevokedBadge": "Titok letiltva",
+    "secretRevokedForeignHint": "Új titkot csak a tulajdonos generálhat.",
+    "secretRevokedHint": "A titkot biztonsági okból letiltottuk (a token egy URL-ben szerepelt, vagy a hozzáféréseket visszavonták). Generálj új titkot, majd kapcsold be újra a tokent – a régi titok érvénytelen marad.",
+    "secretRevokedRotate": "Új titok generálása"
   },
   "ptr": {
     "manage": "PTR karbantartása a reverse zónában",
@@ -2574,7 +2580,8 @@
       "title": "LUA-rekordok",
       "valueNo": "nem",
       "valueUnknown": "ismeretlen",
-      "valueYes": "igen"
+      "valueYes": "igen",
+      "loadError": "A LUA-beállítások nem tölthetők be ({{error}}). Mentés csak sikeres betöltés után lehetséges."
     },
     "statusDisabled": "{{server}}: a LUA ki van kapcsolva (enable-lua-records=no)",
     "statusEnabled": "{{server}}: LUA bekapcsolva ({{mode}})",

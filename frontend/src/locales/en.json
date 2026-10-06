@@ -174,7 +174,8 @@
     "secretsBannerDismiss": "Hide this notice for this session",
     "secretsBannerPlaintext": "Secrets are currently stored unencrypted – the key could not be created.",
     "secretsBannerServers": "PowerDNS servers not loaded (API key unreadable): {{list}}. Zone changes are skipped there – after entering the key again, reconcile the zones.",
-    "secretsBannerUnreadable": "Some stored secrets cannot be decrypted and must be entered again."
+    "secretsBannerUnreadable": "Some stored secrets cannot be decrypted and must be entered again.",
+    "menu": "Main menu"
   },
   "settings": {
     "title": "Settings",
@@ -2462,7 +2463,12 @@
       "abuse": "token exceeds the request limit many times over",
       "dnserr": "rejected by PowerDNS",
       "badrequest": "invalid request"
-    }
+    },
+    "secretRevokedActivate": "The token cannot be enabled because its secret was revoked. Generate a new secret first.",
+    "secretRevokedBadge": "Secret revoked",
+    "secretRevokedForeignHint": "Only the owner can generate a new secret.",
+    "secretRevokedHint": "The secret was revoked for security reasons (the token appeared in a URL or access was revoked). Generate a new secret and enable the token again afterwards – the old secret stays invalid.",
+    "secretRevokedRotate": "Generate new secret"
   },
   "ptr": {
     "manage": "Maintain PTR in reverse zone",
@@ -2574,7 +2580,8 @@
       "title": "LUA records",
       "valueNo": "no",
       "valueUnknown": "unknown",
-      "valueYes": "yes"
+      "valueYes": "yes",
+      "loadError": "The LUA settings could not be loaded ({{error}}). Saving is only possible after they have loaded."
     },
     "statusDisabled": "{{server}}: LUA is switched off (enable-lua-records=no)",
     "statusEnabled": "{{server}}: LUA enabled ({{mode}})",

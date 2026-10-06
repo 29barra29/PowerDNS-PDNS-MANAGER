@@ -174,7 +174,8 @@
     "secretsBannerDismiss": "Sakrij obavijest za ovu sesiju",
     "secretsBannerPlaintext": "Tajne se trenutačno pohranjuju nešifrirane – ključ nije moguće stvoriti.",
     "secretsBannerServers": "PowerDNS poslužitelji koji nisu učitani (API ključ nečitljiv): {{list}}. Promjene zona ondje se preskaču – nakon ponovnog unosa ključa uskladite zone.",
-    "secretsBannerUnreadable": "Neke pohranjene tajne nije moguće dešifrirati i treba ih ponovno unijeti."
+    "secretsBannerUnreadable": "Neke pohranjene tajne nije moguće dešifrirati i treba ih ponovno unijeti.",
+    "menu": "Glavni izbornik"
   },
   "settings": {
     "title": "Postavke",
@@ -2483,7 +2484,12 @@
       "abuse": "token višestruko prekoračuje ograničenje zahtjeva",
       "dnserr": "PowerDNS je odbio",
       "badrequest": "neispravan zahtjev"
-    }
+    },
+    "secretRevokedActivate": "Token se ne može aktivirati jer mu je tajna blokirana. Najprije generirajte novu tajnu.",
+    "secretRevokedBadge": "Tajna blokirana",
+    "secretRevokedForeignHint": "Samo vlasnik može generirati novu tajnu.",
+    "secretRevokedHint": "Tajna je blokirana iz sigurnosnih razloga (token se pojavio u URL-u ili su pristupi opozvani). Generirajte novu tajnu i zatim ponovno aktivirajte token – stara tajna ostaje nevažeća.",
+    "secretRevokedRotate": "Generiraj novu tajnu"
   },
   "ptr": {
     "manage": "Održavaj PTR u reverznoj zoni",
@@ -2595,7 +2601,8 @@
       "title": "LUA zapisi",
       "valueNo": "ne",
       "valueUnknown": "nepoznato",
-      "valueYes": "da"
+      "valueYes": "da",
+      "loadError": "LUA postavke nije bilo moguće učitati ({{error}}). Spremanje je moguće tek nakon uspješnog učitavanja."
     },
     "statusDisabled": "{{server}}: LUA je isključen (enable-lua-records=no)",
     "statusEnabled": "{{server}}: LUA uključen ({{mode}})",

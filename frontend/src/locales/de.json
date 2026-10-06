@@ -174,7 +174,8 @@
     "secretsBannerDismiss": "Hinweis für diese Sitzung ausblenden",
     "secretsBannerPlaintext": "Geheimnisse werden derzeit unverschlüsselt gespeichert – der Schlüssel konnte nicht angelegt werden.",
     "secretsBannerServers": "Nicht geladene PowerDNS-Server (API-Key nicht lesbar): {{list}}. Zonen-Änderungen werden dort übersprungen – nach dem Neu-Eintragen des Keys die Zonen abgleichen.",
-    "secretsBannerUnreadable": "Einige gespeicherte Geheimnisse können nicht entschlüsselt werden und müssen neu eingetragen werden."
+    "secretsBannerUnreadable": "Einige gespeicherte Geheimnisse können nicht entschlüsselt werden und müssen neu eingetragen werden.",
+    "menu": "Hauptmenü"
   },
   "settings": {
     "title": "Einstellungen",
@@ -2462,7 +2463,12 @@
       "abuse": "Token überschreitet das Anfrage-Limit um ein Vielfaches",
       "dnserr": "von PowerDNS abgelehnt",
       "badrequest": "ungültige Anfrage"
-    }
+    },
+    "secretRevokedActivate": "Der Token lässt sich nicht aktivieren, weil sein Secret gesperrt ist. Bitte zuerst ein neues Secret erzeugen.",
+    "secretRevokedBadge": "Secret gesperrt",
+    "secretRevokedForeignHint": "Nur der Besitzer kann ein neues Secret erzeugen.",
+    "secretRevokedHint": "Das Secret wurde aus Sicherheitsgründen gesperrt (der Token stand in einer URL oder die Zugänge wurden widerrufen). Erzeuge ein neues Secret und aktiviere den Token danach wieder – das alte Secret bleibt ungültig.",
+    "secretRevokedRotate": "Neues Secret erzeugen"
   },
   "ptr": {
     "manage": "PTR in Reverse-Zone mitpflegen",
@@ -2574,7 +2580,8 @@
       "title": "LUA-Records",
       "valueNo": "nein",
       "valueUnknown": "unbekannt",
-      "valueYes": "ja"
+      "valueYes": "ja",
+      "loadError": "Die LUA-Einstellungen konnten nicht geladen werden ({{error}}). Speichern ist erst nach erfolgreichem Laden möglich."
     },
     "statusDisabled": "{{server}}: LUA ist ausgeschaltet (enable-lua-records=no)",
     "statusEnabled": "{{server}}: LUA aktiv ({{mode}})",
