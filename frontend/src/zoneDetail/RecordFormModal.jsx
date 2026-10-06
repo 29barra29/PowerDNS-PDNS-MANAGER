@@ -18,6 +18,7 @@ import {
     collectExtensions, extensionsAt, initialExtStates, mergeRequestBody, notifyExtensions, validateExtensions,
 } from './formExtensions.js'
 import ModalPortal from '../components/common/ModalPortal'
+import { translateLuaDenied } from '../lib/luaRecord.js'
 
 // Record-Dialog (Anlegen / Bearbeiten / Klonen / Schnellvorlage).
 // Wird von der Shell bei jedem Oeffnen neu gemountet (key = request.seq), d. h. jeder Aufruf startet frisch.
@@ -216,7 +217,8 @@ export default function RecordFormModal({ request }) {
     /* ----- LUA-Policy (F15) ---------------------------------------------------*/
     const luaWriteOk = luaPolicy?.can_write === true
     const luaDisabledPolicy = luaPolicy?.policy === 'disabled'
-    const luaDeniedText = luaPolicy?.reason || t(luaDisabledPolicy ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
+    // immer i18n statt luaPolicy.reason (deutscher Backend-Text, W3-L8)
+    const luaDeniedText = t(luaDisabledPolicy ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
     const luaOptionSuffix = t(luaDisabledPolicy ? 'lua.typeOptionDisabled' : 'lua.typeOptionAdminOnly')
 
     /* ----- Submit -----------------------------------------------------------*/
@@ -346,7 +348,7 @@ export default function RecordFormModal({ request }) {
             notifyExtensions(exts, extStates, res, extForm, ctx)
             loadZone()
         } catch (err) {
-            setModalError(err.message)
+            setModalError(translateLuaDenied(err.message, t))
         } finally {
             setSaving(false)
         }

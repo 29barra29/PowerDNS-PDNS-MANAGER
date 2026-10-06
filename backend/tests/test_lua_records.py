@@ -401,6 +401,9 @@ def test_frontend_lists_match_backend():
     m = re.search(r"export const LUA_MAX_CONTENT_LENGTH\s*=\s*(\d+)", lua_text)
     assert m and int(m.group(1)) == lr.LUA_MAX_CONTENT_LENGTH
     assert _js_string_list(lua_text, "GEO_FUNCTIONS") == list(lr.GEO_FUNCTIONS)
+    # W3-L8 (WS-W3-NACHARBEIT): die Oberflaeche erkennt die 403-Texte der Policy und zeigt sie uebersetzt
+    assert f"admin: '{lr.MSG_DENIED_ADMIN}'" in lua_text
+    assert f"disabled: '{lr.MSG_DENIED_DISABLED}'" in lua_text
     types = _js_string_list(types_js.read_text(encoding="utf-8"), "ALL_RECORD_TYPE_KEYS")
     assert sorted(types) == sorted(ALLOWED_RECORD_TYPES)
     assert types.index("LUA") == types.index("ALIAS") + 1

@@ -125,7 +125,8 @@ export function CopyButton({ value, label, onResult, text, className = '' }) {
             disabled={value == null || value === ''}
             className={`inline-flex items-center gap-1.5 shrink-0 rounded text-accent-light hover:bg-accent/15 disabled:opacity-40 ${text ? 'px-2 py-1 text-xs font-medium' : 'p-1.5'} ${className}`}
             title={label ? `${t('common.copy')}: ${label}` : t('common.copy')}
-            aria-label={label ? `${t('common.copy')}: ${label}` : t('common.copy')}
+            // sichtbarer Text ist der zugaengliche Name (WCAG 2.5.3, UI-SMOKE-2); aria-label nur fuer Icon-Knoepfe
+            aria-label={text ? undefined : (label ? `${t('common.copy')}: ${label}` : t('common.copy'))}
         >
             {done ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />}
             {text}

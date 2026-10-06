@@ -205,3 +205,22 @@ test('Sync: LUA_TARGET_TYPES, LUA_MAX_CONTENT_LENGTH, GEO_FUNCTIONS und Typliste
     assert.deepEqual([...ALL_RECORD_TYPE_KEYS].sort(), [...allowed].sort())
     assert.equal(ALL_RECORD_TYPE_KEYS.indexOf('LUA'), ALL_RECORD_TYPE_KEYS.indexOf('ALIAS') + 1)
 })
+
+test('W3-L8: 403-Texte der LUA-Policy werden uebersetzt (luaDeniedKey/translateLuaDenied)', async () => {
+    const { LUA_DENIED_MESSAGES, luaDeniedKey, translateLuaDenied } = await import('../src/lib/luaRecord.js')
+    assert.equal(luaDeniedKey(LUA_DENIED_MESSAGES.admin), 'lua.notAllowedAdmin')
+    assert.equal(luaDeniedKey(` ${LUA_DENIED_MESSAGES.disabled} `), 'lua.notAllowedDisabled')
+    assert.equal(luaDeniedKey('Kein Schreibrecht auf die Zone'), null)
+    assert.equal(luaDeniedKey(undefined), null)
+    const t = (k) => `T:${k}`
+    assert.equal(translateLuaDenied(LUA_DENIED_MESSAGES.admin, t), 'T:lua.notAllowedAdmin')
+    assert.equal(translateLuaDenied('anderer Fehler', t), 'anderer Fehler')
+})
+
+test('W3-L8: RecordsTable und RecordFormModal nutzen nicht den Backend-Text luaPolicy.reason', () => {
+    const src = path.resolve(HERE, '..', 'src')
+    for (const rel of ['zoneDetail/RecordsTable.jsx', 'zoneDetail/RecordFormModal.jsx']) {
+        const text = fs.readFileSync(path.join(src, rel), 'utf8')
+        assert.equal(/luaPolicy\?\.reason/.test(text), false, rel)
+    }
+})

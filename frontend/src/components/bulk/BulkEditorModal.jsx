@@ -14,6 +14,7 @@ import {
     refreshRequest, touchesPtrTypes,
 } from '../../zoneDetail/bulkModel.js'
 import ModalPortal from '../common/ModalPortal'
+import { translateLuaDenied } from '../../lib/luaRecord.js'
 
 // Editor-/Vorschau-Modal des Bulk-Editors (F1 2.4/2.5, 6.3.3). Zwei Schritte: "text" (BIND-Text, Modus, Standard-TTL,
 // Zeilenfehler mit Sprung) und "preview" (BulkPreviewView, Pflicht-Checkbox bei Loeschungen, PTR-Option).
@@ -164,7 +165,7 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
             }
             const issues = applyErrorIssues(err)
             if (issues.length > 0) setApplyIssues(issues)
-            setError(err?.message || String(err))
+            setError(translateLuaDenied(err?.message || String(err), t))
         }
     }
 
