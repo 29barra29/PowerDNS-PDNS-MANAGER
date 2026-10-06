@@ -32,7 +32,14 @@ Ergebnisse zaehlen nicht), 4 parallele Checks im Prozess, Ergebnis-Cache 10 s. A
 normalisierte Werte zurueck.
 
 Oeffentliche Helfer fuer andere Workstreams: ``load_settings(db)`` und ``query_dns(name, rdtype, server, timeout)``
-(F4-C nutzt sie fuer die DNSKEY-Pruefung; ``DnsAnswer.key_tags`` liefert die Key-Tags einer DNSKEY-Antwort).
+(F4-C nutzt sie fuer die DNSKEY-Pruefung; ``DnsAnswer.key_tags`` liefert die Key-Tags einer DNSKEY-Antwort),
+``consume_rate(user_id)`` (gemeinsames Limit je Benutzer fuer alle DNS-Pruefungen) und ``dns_slot(db)``.
+
+DB-Verbindung und Wartezeit (Review-Fund L6): Wer auf die globale Semaphore oder auf das Netz wartet, darf keine
+Verbindung aus dem DB-Pool halten. ``release_db(db)`` beendet deshalb die offene Transaktion der Request-Session
+(Commit; die Session ist mit ``expire_on_commit=False`` danach weiter nutzbar und holt sich bei der naechsten
+Abfrage eine neue Verbindung). ``dns_slot(db)`` = ``release_db`` + globale Semaphore; ``check_zone(..., db=db)``
+nutzt denselben Ablauf. Aufrufer lesen alles Noetige aus der DB *vor* dem Slot und schreiben erst *danach*.
 """
 from __future__ import annotations
 
@@ -43,6 +50,7 @@ import logging
 import math
 import time
 from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Collection, Iterable, Optional
 
@@ -553,6 +561,34 @@ def _cache_put(key: tuple, value: PropagationResponse) -> None:
         _cache.popitem(last=False)
 
 
+async def release_db(db) -> None:
+    """Gibt die Pool-Verbindung der Request-Session vor einer Warte-/Netzphase frei (L6).
+
+    Commit statt Close: bisher Gelesenes bleibt gueltig (``expire_on_commit=False``), spaetere Abfragen und
+    Schreibzugriffe laufen in einer neuen Transaktion. Ohne offene Transaktion passiert nichts. Nur aufrufen,
+    solange der Handler noch nichts geschrieben hat, das bei einem spaeteren Fehler zurueckgerollt werden muesste.
+    """
+    if db is None:
+        return
+    in_tx = getattr(db, "in_transaction", None)
+    if callable(in_tx) and not in_tx():
+        return
+    await db.commit()
+
+
+@asynccontextmanager
+async def dns_slot(db=None):
+    """Platz fuer eine DNS-Pruefung (globale Parallelitaet ``GLOBAL_CONCURRENCY``); gibt vorher die DB frei (L6)."""
+    await release_db(db)
+    async with _global_semaphore():
+        yield
+
+
+def consume_rate(user_id: int) -> None:
+    """Zaehlt eine nicht gecachte DNS-Pruefung des Benutzers; ``PropagationRateLimited`` ueber dem Limit."""
+    _rate_check(user_id)
+
+
 def _rate_check(user_id: int) -> None:
     now = time.monotonic()
     q = _rate.setdefault(int(user_id), deque())
@@ -1045,11 +1081,12 @@ def _dns_row(run: _Run, tg: _Target, expected: int, expected_vals: Optional[list
 async def check_zone(*, user_id: int, is_admin: bool, server_name: str, zone_norm: str,
                      record_fqdn: Optional[str], rtype: Optional[str], compare_content_flag: bool,
                      settings: PropagationSettings,
-                     writable_servers: Optional[Collection[str]] = None) -> PropagationResponse:
+                     writable_servers: Optional[Collection[str]] = None, db=None) -> PropagationResponse:
     """Fuehrt einen Check aus (Cache, Rate-Limit, globale Parallelitaet; Ablauf siehe Modul-Docstring).
 
     ``writable_servers``: Namen der schreibbaren Panel-Server (``fanout.writable_server_names``); ``None`` = alle
-    gelten als schreibbar. Fehler: ``ValueError`` (Server unbekannt), ``PropagationRateLimited``,
+    gelten als schreibbar. ``db``: Request-Session; wird vor dem Warten auf die Semaphore freigegeben (L6), der
+    Check selbst braucht keine DB. Fehler: ``ValueError`` (Server unbekannt), ``PropagationRateLimited``,
     ``PropagationReferenceError``.
     """
     writable = frozenset(writable_servers) if writable_servers is not None else None
@@ -1059,7 +1096,7 @@ async def check_zone(*, user_id: int, is_admin: bool, server_name: str, zone_nor
         prom.record_propagation("cached")
         return hit.model_copy(update={"cached": True})
     _rate_check(user_id)
-    async with _global_semaphore():
+    async with dns_slot(db):
         hit = _cache_get(key)  # paralleler identischer Check ist gerade fertig geworden
         if hit is not None:
             prom.record_propagation("cached")

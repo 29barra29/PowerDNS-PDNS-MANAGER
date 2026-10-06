@@ -6,7 +6,9 @@ Eingaben: ``NsecOptions`` (gemeinsame NSEC/NSEC3-Felder), ``DNSSECEnable`` (auch
 ``bump_serial`` (Plan F4-A [D10]): ``None`` = bei Zonen vom Typ Master/Producer Serial erhoehen + NOTIFY,
 ``False`` = nicht, sonst ignoriert.
 
-Antworten: ``DnssecStatusResponse`` mit ``DnssecKeyInfo`` u. a. – nie ``privatekey``.
+Antworten: ``DnssecStatusResponse`` mit ``DnssecKeyInfo`` u. a. – nie ``privatekey``. Teil B (WS-F4-C):
+``ParentDsResponse`` (``GET …/parent-ds``, DS der Elternzone ueber die F12-Resolver) und ``DnskeyCheckResponse``
+(``GET …/dnskey-check``, DNSKEY auf den autoritativen Nameservern).
 ``schemas/dns.py`` re-exportiert ``DNSSECEnable`` und ``CryptoKeyResponse`` (Kompatibilitaet).
 """
 from __future__ import annotations
@@ -275,7 +277,9 @@ class DnssecCapabilities(BaseModel):
     rsa_bits: list[int] = Field(default_factory=lambda: list(logic.RSA_BITS_ALLOWED))
     nsec3_max_iterations: int = logic.NSEC3_MAX_ITERATIONS
     max_keys: int = logic.MAX_KEYS_PER_ZONE
-    parent_ds_check: bool = False
+    # Teil B (F4-C): Pruefungen per DNS, nur nach Admin-Opt-in in den Propagations-Einstellungen (F12)
+    parent_ds_check: bool = False  # oeffentliche Resolver eingeschaltet und mindestens einer eingetragen
+    dnskey_check: bool = False  # autoritative Nameserver duerfen abgefragt werden
 
 
 class DnssecStatusResponse(BaseModel):
@@ -298,3 +302,57 @@ class DnssecStatusResponse(BaseModel):
     server_writable: bool = True
     user_can_write: bool = False
     can_write: bool = False
+
+
+# =============================================================================================
+# Teil B (WS-F4-C): Elternzone und DNSKEY auf den Nameservern
+# =============================================================================================
+class ParentDsResolverResult(BaseModel):
+    resolver: str
+    label: Optional[str] = None  # z. B. "Cloudflare" bei bekannten Resolvern
+    status: Literal["ok", "nodata", "nxdomain", "timeout", "servfail", "error", "skipped"]
+    ds: list[str] = Field(default_factory=list)
+    key_tags: list[int] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class ParentDsKeyState(BaseModel):
+    key_tag: Optional[int] = None
+    visible_on: list[str] = Field(default_factory=list)
+    missing_on: list[str] = Field(default_factory=list)  # Resolver mit Antwort, aber ohne DS dieses Schluessels
+
+
+class ParentDsResponse(BaseModel):
+    zone: str
+    enabled: bool = False
+    resolvers: list[ParentDsResolverResult] = Field(default_factory=list)
+    keys: dict[str, ParentDsKeyState] = Field(default_factory=dict)  # Schluessel-ID -> Sichtbarkeit (nur SEP)
+    unknown_tags: list[int] = Field(default_factory=list)  # DS bei den Eltern ohne passenden eigenen Schluessel
+    any_visible: bool = False  # DS mindestens eines eigenen Schluessels bei mindestens einem Resolver
+    checked_at: Optional[str] = None
+
+
+class DnskeyCheckAddress(BaseModel):
+    ip: Optional[str] = None
+    status: Literal["ok", "timeout", "network_error", "bad_response", "refused", "servfail", "nxdomain",
+                    "not_authoritative", "error", "skipped", "ns_unresolvable"]
+    key_tags: list[int] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class DnskeyCheckNameserver(BaseModel):
+    ok: bool = False
+    serves_key_tags: list[int] = Field(default_factory=list)  # von allen antwortenden Adressen geliefert
+    missing_tags: list[int] = Field(default_factory=list)
+    addresses: list[DnskeyCheckAddress] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class DnskeyCheckResponse(BaseModel):
+    zone: str
+    enabled: bool = False
+    expected_tags: list[int] = Field(default_factory=list)
+    nameservers: dict[str, DnskeyCheckNameserver] = Field(default_factory=dict)
+    all_ok: bool = False  # jeder Nameserver liefert alle erwarteten Key-Tags
+    truncated: bool = False  # mehr Adressen als ``MAX_NS_TARGETS`` – Rest nicht geprueft
+    checked_at: Optional[str] = None
