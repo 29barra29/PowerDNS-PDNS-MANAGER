@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.SSO_SETTINGS_UPDATE": "SSO-beállítások módosítva",
-    "audit.actions.SSO_SETTINGS_TEST": "SSO-kapcsolat tesztelve",
-    "audit.actions.USER_SSO_LINK": "Fiók összekapcsolva SSO/LDAP-pal",
-    "audit.actions.USER_CONVERT_LOCAL": "Helyi fiókká alakítva"
-  },
-  "remove": []
-}

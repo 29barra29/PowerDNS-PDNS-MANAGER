@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.APP_INFO_UPDATE": "App settings updated",
-    "audit.actions.APP_LOGO_UPLOAD": "Logo uploaded",
-    "audit.resourceTypes.system": "System",
-    "settings.monitoring.scrapePlaceholderHost": "<your-host>"
-  },
-  "remove": []
-}

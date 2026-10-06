@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.APP_INFO_UPDATE": "Alkalmazásbeállítások módosítva",
-    "audit.actions.APP_LOGO_UPLOAD": "Logó feltöltve",
-    "audit.resourceTypes.system": "Rendszer",
-    "settings.monitoring.scrapePlaceholderHost": "<a-te-hosztod>"
-  },
-  "remove": []
-}

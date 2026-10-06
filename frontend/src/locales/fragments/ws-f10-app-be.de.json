@@ -1,9 +1,0 @@
-{
-  "set": {
-    "audit.actions.SSO_SETTINGS_UPDATE": "SSO-Einstellungen geändert",
-    "audit.actions.SSO_SETTINGS_TEST": "SSO-Verbindung getestet",
-    "audit.actions.USER_SSO_LINK": "Konto mit SSO/LDAP verknüpft",
-    "audit.actions.USER_CONVERT_LOCAL": "In lokales Konto umgewandelt"
-  },
-  "remove": []
-}
