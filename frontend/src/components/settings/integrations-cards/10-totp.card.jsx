@@ -1,19 +1,26 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Shield, Loader2, Copy } from 'lucide-react'
+import { Shield, Loader2, Copy, AlertTriangle } from 'lucide-react'
 import QRCode from 'qrcode'
 import api from '../../../api'
 import InfoHint from '../../InfoHint'
+import { useSettings } from '../settingsContext'
+import { isExternalAccount } from '../../sso/ssoModel'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const card = { id: 'totp', order: 10 }
 
-// Karte "Zwei-Faktor (TOTP)" – mechanisch aus SettingsIntegrationsPanel.jsx (2.4.1) übernommen.
+// Karte "Zwei-Faktor (TOTP)" – aus SettingsIntegrationsPanel.jsx (2.4.1) übernommen.
+// WS-F10-APP-FE: externe Konten (SSO/LDAP) schalten 2FA nur mit dem Code ab (F10 §2.7); unlesbares Geheimnis
+// (F5, totp_unreadable) -> Hinweis statt Abschalten (das Backend verweigert es, nur ein Admin kann zuruecksetzen);
+// F8-A11: Beschriftung des Code-Felds über i18n.
 export default function TotpCard() {
     const { t } = useTranslation()
+    const { profile } = useSettings()
+    const external = isExternalAccount(profile)
     const [loadErr, setLoadErr] = useState('')
     const [busy, setBusy] = useState(false)
-    const [totp, setTotp] = useState({ totp_enabled: false, totp_pending: false })
+    const [totp, setTotp] = useState({ totp_enabled: false, totp_pending: false, totp_unreadable: false })
     const [totpCode, setTotpCode] = useState('')
     const [totpUri, setTotpUri] = useState('')
     const [totpSecret, setTotpSecret] = useState('')
@@ -89,7 +96,8 @@ export default function TotpCard() {
         setBusy(true)
         setLoadErr('')
         try {
-            await api.totpDisable(disPw, disCode)
+            // Externe Konten: kein Passwort (wird beim Anmeldedienst verwaltet), nur der Code
+            await api.totpDisable(external ? null : disPw, disCode)
             setDisPw('')
             setDisCode('')
             await refresh()
@@ -154,8 +162,11 @@ export default function TotpCard() {
                                 </div>
                             )}
                             <div>
-                                <label className="block text-xs text-text-muted mb-1">TOTP-Code (6+ Ziffern)</label>
+                                <label htmlFor="totp-enable-code" className="block text-xs text-text-muted mb-1">{t('settings.integrations.totpCodeLabel')}</label>
                                 <input
+                                    id="totp-enable-code"
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
                                     value={totpCode}
                                     onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
                                     className="w-full max-w-xs px-3 py-2 text-sm"
@@ -168,11 +179,44 @@ export default function TotpCard() {
                         </div>
                     )}
                 </div>
+            ) : totp.totp_unreadable ? (
+                <div role="alert" className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-start gap-2 max-w-2xl">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                    <div className="space-y-1">
+                        <p className="font-medium">{t('settings.integrations.totpUnreadable')}</p>
+                        <p>{t('settings.integrations.totpUnreadableHint')}</p>
+                    </div>
+                </div>
             ) : (
                 <div className="space-y-2 max-w-md">
-                    <input type="password" value={disPw} onChange={(e) => setDisPw(e.target.value)} className="w-full px-3 py-2 text-sm" placeholder={t('login.password')} />
-                    <input value={disCode} onChange={(e) => setDisCode(e.target.value.replace(/\D/g, '').slice(0, 8))} className="w-full px-3 py-2 text-sm" placeholder="TOTP" />
-                    <button type="button" disabled={busy} onClick={disableTotp} className="px-3 py-2 rounded-lg border border-danger/40 text-danger text-sm">
+                    {external ? (
+                        <p className="text-xs text-text-muted">{t('settings.integrations.totpDisableExternalHint')}</p>
+                    ) : (
+                        <input
+                            type="password"
+                            value={disPw}
+                            onChange={(e) => setDisPw(e.target.value)}
+                            className="w-full px-3 py-2 text-sm"
+                            placeholder={t('login.password')}
+                            aria-label={t('login.password')}
+                            autoComplete="current-password"
+                        />
+                    )}
+                    <input
+                        value={disCode}
+                        onChange={(e) => setDisCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                        className="w-full px-3 py-2 text-sm font-mono"
+                        placeholder="123456"
+                        aria-label={t('settings.integrations.totpCodeLabel')}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                    />
+                    <button
+                        type="button"
+                        disabled={busy || disCode.length < 6 || (!external && !disPw)}
+                        onClick={disableTotp}
+                        className="px-3 py-2 rounded-lg border border-danger/40 text-danger text-sm disabled:opacity-50"
+                    >
                         {t('settings.integrations.totpDisable')}
                     </button>
                 </div>

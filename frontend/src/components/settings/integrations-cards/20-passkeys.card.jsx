@@ -4,13 +4,35 @@ import { Loader2, Trash2, Plus, Fingerprint } from 'lucide-react'
 import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser'
 import api from '../../../api'
 import InfoHint from '../../InfoHint'
+import { useDateFormat } from '../../../lib/useDateFormat'
+import { useSettings } from '../settingsContext'
+import { isExternalAccount } from '../../sso/ssoModel'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const card = { id: 'passkeys', order: 20 }
 
-// Karte "Passkeys" – mechanisch aus SettingsIntegrationsPanel.jsx (2.4.1) übernommen.
+// Karte "Passkeys" – aus SettingsIntegrationsPanel.jsx (2.4.1) übernommen.
+// WS-F10-APP-FE: Konten mit SSO-/LDAP-Anmeldung haben keine Passkeys (F10 §2.7, E7) – nur Hinweis.
+// F8-A12: Datum im Format der UI-Sprache (useDateFormat).
 export default function PasskeysCard() {
+    const { profile } = useSettings()
+    if (isExternalAccount(profile)) return <ExternalPasskeysCard />
+    return <LocalPasskeysCard />
+}
+
+function ExternalPasskeysCard() {
     const { t } = useTranslation()
+    return (
+        <div className="glass-card p-6 space-y-3">
+            <h2 className="text-lg font-bold flex items-center gap-2"><Fingerprint className="w-5 h-5" />{t('settings.integrations.passkeys')}</h2>
+            <p className="text-sm text-text-muted">{t('settings.integrations.passkeysExternal')}</p>
+        </div>
+    )
+}
+
+function LocalPasskeysCard() {
+    const { t } = useTranslation()
+    const { fmtDate } = useDateFormat()
     const [loadErr, setLoadErr] = useState('')
     const [busy, setBusy] = useState(false)
     const [passkeys, setPasskeys] = useState([])
@@ -106,8 +128,8 @@ export default function PasskeysCard() {
                             <span className="min-w-0">
                                 <span className="font-medium">{p.name}</span>
                                 <span className="block text-xs text-text-muted">
-                                    {t('settings.integrations.passkeyCreatedLabel')}: {p.created_at ? new Date(p.created_at).toLocaleDateString() : '—'}
-                                    {p.last_used_at ? ` · ${t('settings.integrations.passkeyLastUsedLabel')}: ${new Date(p.last_used_at).toLocaleDateString()}` : ''}
+                                    {t('settings.integrations.passkeyCreatedLabel')}: {p.created_at ? fmtDate(p.created_at) : '—'}
+                                    {p.last_used_at ? ` · ${t('settings.integrations.passkeyLastUsedLabel')}: ${fmtDate(p.last_used_at)}` : ''}
                                 </span>
                             </span>
                             <button type="button" onClick={() => delPasskey(p.id)} className="p-1 text-danger hover:bg-danger/10 rounded shrink-0"><Trash2 className="w-4 h-4" /></button>

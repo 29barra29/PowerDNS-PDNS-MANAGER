@@ -6,7 +6,9 @@ import { LANGUAGES, applyLanguage } from '../../../i18n'
 import { buildAppInfoPayload, buildProfilePayload } from '../../../lib/settingsForms.js'
 import { useDateFormat } from '../../../lib/useDateFormat'
 import PageSpinner from '../../PageSpinner'
+import InfoHint from '../../InfoHint'
 import { useSettings } from '../settingsContext'
+import { authSourceKey, isExternalAccount } from '../../sso/ssoModel'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'profile', order: 10, labelKey: 'settings.profile', icon: UserCog, adminOnly: false }
@@ -15,12 +17,16 @@ export const tab = { id: 'profile', order: 10, labelKey: 'settings.profile', ico
 // F8 (Welle 1): keine Sprachaenderung beim Laden, Sprachwechsel mit Rollback (A07, f92); App-Info-Ladefehler
 // sperrt die Admin-Felder statt Fallbacks zu speichern (D01); Felder leerbar (D02, D04); erst Profil, dann
 // App-Info speichern (D03); Datumsformat der UI-Sprache (A12).
+// F10 (WS-F10-APP-FE): Konten mit SSO-/LDAP-Anmeldung – Benutzername und E-Mail nur lesend (werden beim
+// Anmeldedienst verwaltet und nicht gesendet), Passwortkarte durch einen Hinweis ersetzt (F10 §2.7).
 export default function ProfileTab() {
     const { t, i18n } = useTranslation()
     const { fmtDate, fmtDateTime } = useDateFormat()
     const { profile, setProfile, isAdmin, adminInfo, notify } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
+    const external = isExternalAccount(profile)
+    const sourceLabel = t(authSourceKey(profile?.auth_source))
     // Ohne Profil (getMe fehlgeschlagen) bleibt das Formular leer wie in 2.4.1
     const [formReady, setFormReady] = useState(!profile)
     // App-Info (Systemtitel, Registrierung, Branding) geladen? Sonst Admin-Felder gesperrt und nicht gespeichert
@@ -131,7 +137,13 @@ export default function ProfileTab() {
         try {
             let result
             try {
-                result = await api.updateProfile(buildProfilePayload(profileForm))
+                const payload = buildProfilePayload(profileForm)
+                if (external) {
+                    // Werden beim Anmeldedienst verwaltet; das Backend lehnt Aenderungen ab (F10 §3.2.6)
+                    delete payload.username
+                    delete payload.email
+                }
+                result = await api.updateProfile(payload)
             } catch (err) {
                 setError(err.message)
                 return
@@ -237,6 +249,12 @@ export default function ProfileTab() {
                         <p className="text-xs text-text-muted mt-1">{t('settings.languageHint')}</p>
                     </div>
 
+                    {external && (
+                        <InfoHint title={sourceLabel}>
+                            <p>{t('settings.externalAccountHint', { source: sourceLabel })}</p>
+                        </InfoHint>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-text-secondary mb-1">
@@ -247,11 +265,12 @@ export default function ProfileTab() {
                                 value={profileForm.username}
                                 onChange={e => setProfileForm({ ...profileForm, username: e.target.value })}
                                 placeholder="admin"
-                                className="w-full px-3 py-2 text-sm"
-                                required
-                                minLength={3}
+                                className="w-full px-3 py-2 text-sm disabled:opacity-60"
+                                required={!external}
+                                minLength={external ? undefined : 3}
+                                disabled={external}
                             />
-                            <p className="text-xs text-text-muted mt-1">{t('settings.usernameHint')}</p>
+                            {!external && <p className="text-xs text-text-muted mt-1">{t('settings.usernameHint')}</p>}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-text-secondary mb-1">
@@ -278,7 +297,8 @@ export default function ProfileTab() {
                                 value={profileForm.email}
                                 onChange={e => setProfileForm({ ...profileForm, email: e.target.value })}
                                 placeholder="admin@example.com"
-                                className="w-full pl-10 pr-3 py-2 text-sm"
+                                className="w-full pl-10 pr-3 py-2 text-sm disabled:opacity-60"
+                                disabled={external}
                             />
                         </div>
                     </div>
@@ -474,97 +494,111 @@ export default function ProfileTab() {
                 </form>
             </div>
 
-            {/* Password Change */}
-            <div className="glass-card p-6">
-                <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center">
-                        <Lock className="w-5 h-5 text-warning" />
-                    </div>
-                    <div>
-                        <h2 className="text-lg font-semibold text-text-primary">{t('settings.passwordChange')}</h2>
-                        <p className="text-sm text-text-muted">{t('settings.passwordChangeHint')}</p>
+            {/* Password Change (externe Konten: Hinweis, F10 §2.7) */}
+            {external ? (
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center">
+                            <Lock className="w-5 h-5 text-warning" />
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-semibold text-text-primary">{t('settings.passwordChange')}</h2>
+                            <p className="text-sm text-text-muted">{t('settings.externalPasswordHint', { source: sourceLabel })}</p>
+                        </div>
                     </div>
                 </div>
-
-                <form onSubmit={handleChangePassword} className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-text-secondary mb-1">
-                            {t('settings.currentPassword')}
-                        </label>
-                        <div className="relative">
-                            <input
-                                type={showCurrentPw ? 'text' : 'password'}
-                                value={passwordForm.current_password}
-                                onChange={e => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
-                                placeholder="••••••••"
-                                className="w-full px-3 py-2 pr-10 text-sm"
-                                required
-                            />
-                            <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
-                                {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                            </button>
+            ) : (
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center">
+                            <Lock className="w-5 h-5 text-warning" />
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-semibold text-text-primary">{t('settings.passwordChange')}</h2>
+                            <p className="text-sm text-text-muted">{t('settings.passwordChangeHint')}</p>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <form onSubmit={handleChangePassword} className="space-y-4">
                         <div>
                             <label className="block text-sm font-medium text-text-secondary mb-1">
-                                {t('settings.newPassword')}
+                                {t('settings.currentPassword')}
                             </label>
                             <div className="relative">
                                 <input
-                                    type={showNewPw ? 'text' : 'password'}
-                                    value={passwordForm.new_password}
-                                    onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                                    type={showCurrentPw ? 'text' : 'password'}
+                                    value={passwordForm.current_password}
+                                    onChange={e => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
                                     placeholder="••••••••"
                                     className="w-full px-3 py-2 pr-10 text-sm"
+                                    required
+                                />
+                                <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                    {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">
+                                    {t('settings.newPassword')}
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        type={showNewPw ? 'text' : 'password'}
+                                        value={passwordForm.new_password}
+                                        onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                                        placeholder="••••••••"
+                                        className="w-full px-3 py-2 pr-10 text-sm"
+                                        required
+                                        minLength={8}
+                                        maxLength={128}
+                                    />
+                                    <button type="button" onClick={() => setShowNewPw(!showNewPw)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                        {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">
+                                    {t('settings.newPasswordConfirm')}
+                                </label>
+                                <input
+                                    type={showNewPw ? 'text' : 'password'}
+                                    value={passwordForm.confirm_password}
+                                    onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
+                                    placeholder="••••••••"
+                                    className="w-full px-3 py-2 text-sm"
                                     required
                                     minLength={8}
                                     maxLength={128}
                                 />
-                                <button type="button" onClick={() => setShowNewPw(!showNewPw)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
-                                    {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                </button>
                             </div>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-text-secondary mb-1">
-                                {t('settings.newPasswordConfirm')}
-                            </label>
-                            <input
-                                type={showNewPw ? 'text' : 'password'}
-                                value={passwordForm.confirm_password}
-                                onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
-                                placeholder="••••••••"
-                                className="w-full px-3 py-2 text-sm"
-                                required
-                                minLength={8}
-                                maxLength={128}
-                            />
-                        </div>
-                    </div>
 
-                    {passwordForm.new_password && passwordForm.confirm_password && passwordForm.new_password !== passwordForm.confirm_password && (
-                        <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4 shrink-0" />
-                            {t('settings.passwordsDoNotMatch')}
-                        </div>
-                    )}
+                        {passwordForm.new_password && passwordForm.confirm_password && passwordForm.new_password !== passwordForm.confirm_password && (
+                            <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-center gap-2">
+                                <AlertCircle className="w-4 h-4 shrink-0" />
+                                {t('settings.passwordsDoNotMatch')}
+                            </div>
+                        )}
 
-                    <div className="flex justify-end pt-2 border-t border-border">
-                        <button
-                            type="submit"
-                            disabled={savingPassword || (passwordForm.new_password !== passwordForm.confirm_password)}
-                            className="px-5 py-2 bg-gradient-to-r from-warning/80 to-orange-600 hover:from-warning hover:to-orange-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
-                        >
-                            {savingPassword && <Loader2 className="w-4 h-4 animate-spin" />}
-                            {t('settings.changePasswordButton')}
-                        </button>
-                    </div>
-                </form>
-            </div>
+                        <div className="flex justify-end pt-2 border-t border-border">
+                            <button
+                                type="submit"
+                                disabled={savingPassword || (passwordForm.new_password !== passwordForm.confirm_password)}
+                                className="px-5 py-2 bg-gradient-to-r from-warning/80 to-orange-600 hover:from-warning hover:to-orange-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all"
+                            >
+                                {savingPassword && <Loader2 className="w-4 h-4 animate-spin" />}
+                                {t('settings.changePasswordButton')}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
         </div>
     )
 }
