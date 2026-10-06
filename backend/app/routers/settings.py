@@ -129,6 +129,7 @@ async def get_app_info(db: DbRead):
     rows = await get_settings(db, (
         "app_name",
         "registration_enabled",
+        "sso_local_login_enabled",
         "forgot_password_enabled",
         "app_tagline",
         "app_creator",
@@ -146,10 +147,12 @@ async def get_app_info(db: DbRead):
     if not captcha_site_key:
         captcha_provider = captcha_service.PROVIDER_NONE
 
+    # F10 3.4: Registrierung nur, solange die Anmeldung mit lokalen Konten erlaubt ist (Default an)
+    local_login = (rows.get("sso_local_login_enabled") or "true").strip().lower() == "true"
     return {
         "app_name": rows.get("app_name") or settings.APP_NAME,
         "app_version": settings.APP_VERSION,
-        "registration_enabled": (rows.get("registration_enabled") or "false").lower() == "true",
+        "registration_enabled": (rows.get("registration_enabled") or "false").lower() == "true" and local_login,
         "forgot_password_enabled": (rows.get("forgot_password_enabled") or "false").lower() == "true",
         "app_tagline": (rows.get("app_tagline") or "").strip() or "PowerDNS Admin Panel",
         "app_creator": (rows.get("app_creator") or "").strip() or "Created by GemTec Games • Barra",

@@ -1,0 +1,9 @@
+{
+  "set": {
+    "audit.actions.SSO_SETTINGS_UPDATE": "SSO postavke promijenjene",
+    "audit.actions.SSO_SETTINGS_TEST": "SSO veza testirana",
+    "audit.actions.USER_SSO_LINK": "Račun povezan sa SSO/LDAP-om",
+    "audit.actions.USER_CONVERT_LOCAL": "Pretvoreno u lokalni račun"
+  },
+  "remove": []
+}

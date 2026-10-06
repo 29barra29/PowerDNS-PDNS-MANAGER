@@ -10,9 +10,18 @@ Benutzerverwaltung (F2/F3): Zufallspasswort mit Einmalanzeige, erzwungener Passw
 Zugangs-Widerruf (``services/access_revocation.py``) und Schutzregeln (``services/user_guard.py``: E-Mail-Duplikat
 409, letzter aktiver Admin, externe Konten). Alle Admin-Mutationen verlangen eine Browser-Session
 (``get_admin_session_user``); ein Admin kann diese Aktionen nicht auf sein eigenes Konto anwenden (F3 E11).
+
+SSO (F10, Welle 2): ``POST /auth/login`` prueft erst das lokale Konto, dann – bei aktivem LDAP – das Verzeichnis
+(Login-Zaehler je IP und Benutzername vor jedem Passwortvergleich und jedem LDAP-Bind, [S2]); der 2FA-Schritt nimmt
+das Pending-Token auch aus dem Cookie des OIDC-Callbacks. Externe Konten (``auth_source`` oidc/ldap) haben weder
+Passwort-Login noch Passwort-Reset/-Wechsel noch Passkeys; Benutzername und E-Mail verwaltet der Anmeldedienst.
+Bei aktivem SSO bleibt immer ein aktiver lokaler Admin (Notfallzugang, ``user_guard.assert_keeps_local_admin``).
+``convert-to-local`` verlangt einen Step-up des Admins (``core.auth.verify_step_up``, [S8]). Die SSO-Flows selbst
+liegen in ``routers/sso.py``, die SSO-Einstellungen in ``routers/settings_sso.py``.
 """
 import json
 import logging
+import secrets
 import time
 from datetime import date, datetime, timezone
 from typing import Literal
@@ -30,7 +39,7 @@ from app.core.timeutil import iso_utc
 from app.core.config import settings as app_settings
 from app.core.database import DbRead, DbWrite
 from app.core.client_ip import get_client_ip
-from app.core.login_rate_limit import is_login_rate_limited, record_failed_login
+from app.core.login_rate_limit import clear_login_fails, is_login_rate_limited, record_failed_login
 import pyotp
 from starlette.concurrency import run_in_threadpool
 from app.core.secrets import is_unreadable
@@ -43,14 +52,15 @@ from app.services.password_reset_mail import (
 from app.core.auth import (
     get_session_user, get_admin_session_user, totp_verify_once, decode_password_reset_payload, password_version,
     hash_password, verify_password, create_access_token,
-    create_two_factor_pending_token, decode_two_factor_pending_token,
+    create_two_factor_pending_token, decode_two_factor_pending_token, decode_two_factor_pending_payload,
     create_webauthn_challenge_token, decode_webauthn_challenge_token,
     get_current_user, get_admin_user,
     generate_random_password, MIN_PASSWORD_LENGTH,
     TOKEN_TYPE_WEBAUTHN_REG, TOKEN_TYPE_WEBAUTHN_AUTH,
+    StepUpBody, totp_secret_state, verify_step_up,
 )
 from app.models.models import (
-    DynDnsToken, User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook, WebhookDelivery,
+    User, UserZoneAccess, WebAuthnCredential, PanelToken, Webhook, WebhookDelivery,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,15 +91,9 @@ TOTP_UNREADABLE_DISABLE = (
 def _totp_secret_state(user) -> Literal["ok", "missing", "unreadable"]:
     """Zustand des aktiven TOTP-Geheimnisses: ``unreadable`` (Chiffretext nicht entschluesselbar), ``missing``, ``ok``.
 
-    Auf dem Rohattribut pruefen: ``UnreadableSecret`` verhaelt sich wie "" und waere nach ``strip()`` nicht
-    mehr erkennbar (F5 5.13, Plan [S4]).
+    Implementierung in ``core.auth.totp_secret_state`` (gemeinsam mit ``routers/sso.py`` und ``verify_step_up``).
     """
-    raw = getattr(user, "totp_secret", None)
-    if is_unreadable(raw):
-        return "unreadable"
-    if not (raw or "").strip():
-        return "missing"
-    return "ok"
+    return totp_secret_state(user)  # type: ignore[return-value]
 
 
 # --- Texte der Benutzerverwaltung (F3) ------------------------------------------------------------------
@@ -198,6 +202,12 @@ class AdminPasswordResetBody(BaseModel):
     """Optionaler Body von ``PUT /auth/users/{id}/reset-password`` (fehlt er, gelten die Defaults, F3 E6)."""
     must_change_password: bool = True
     revoke_all_access: bool = False
+
+
+class ConvertToLocalBody(BaseModel):
+    """``POST /auth/users/{id}/convert-to-local`` (F10 3.2.10): Passwortwechsel erzwingen (Default) + Step-up [S8]."""
+    must_change_password: bool = True
+    step_up: Optional[StepUpBody] = None
 
 
 class RevokeAccessBody(BaseModel):
@@ -317,8 +327,13 @@ async def _get_auth_setting(db: AsyncSession, key: str) -> bool:
 # Auth Endpoints
 # ========================
 class TwoFactorComplete(BaseModel):
-    """Abschluss der Anmeldung nach TOTP – Token aus /login bei need_two_factor."""
-    two_factor_token: str = Field(..., min_length=20)
+    """Abschluss der Anmeldung nach TOTP.
+
+    ``two_factor_token`` aus ``/login`` (``need_two_factor``); fehlt er, gilt das HttpOnly-Cookie ``pdnsmgr_2fa``
+    aus dem OIDC-Callback (F10 3.2.2).
+    """
+    two_factor_token: Annotated[Optional[str], BeforeValidator(_blank_to_none)] = Field(
+        None, min_length=20, max_length=4096)
     totp_code: str = Field(..., min_length=4, max_length=12)
 
 
@@ -326,6 +341,50 @@ def _rate_limited(method: str) -> HTTPException:
     """429 mit identischem Text fuer IP- und Benutzer-Sperre (Metrik ``rate_limited``)."""
     prom.record_login(method, "rate_limited")
     return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_DETAIL)
+
+
+# --- F10: Anmeldung mit LDAP und externen Konten (5.8) --------------------------------------------------------
+BAD_CREDENTIALS_DETAIL = "Falscher Benutzername oder Passwort"
+ACCOUNT_DISABLED_DETAIL = "Konto ist deaktiviert"
+LOCAL_LOGIN_DISABLED_DETAIL = "Die Anmeldung mit lokalem Konto ist deaktiviert – bitte über SSO anmelden."
+LDAP_UNAVAILABLE_DETAIL = "Der Anmeldedienst (LDAP) ist nicht erreichbar. Bitte später erneut versuchen."
+LDAP_CONFIG_DETAIL = "Die LDAP-Anmeldung ist fehlerhaft konfiguriert – bitte den Administrator informieren."
+_PROVISIONING_LOGIN_TEXT = {
+    "not_allowed": "Dein Konto ist nicht für dieses Panel freigegeben.",
+    "no_account": "Für dieses Konto ist im Panel kein Zugang eingerichtet. Bitte wende dich an den Administrator.",
+    "account_disabled": ACCOUNT_DISABLED_DETAIL,
+}
+EXTERNAL_PASSKEY_LOGIN_DETAIL = "Die Passkey-Anmeldung ist für Konten mit SSO- oder LDAP-Anmeldung nicht möglich"
+EXTERNAL_PASSKEY_REGISTER_DETAIL = "Passkeys sind für Konten mit SSO- oder LDAP-Anmeldung nicht verfügbar"
+EXTERNAL_USERNAME_DETAIL = "Der Benutzername wird beim Anmeldedienst verwaltet und kann nicht geändert werden"
+EXTERNAL_EMAIL_SELF_DETAIL = "Die E-Mail-Adresse wird beim Anmeldedienst verwaltet und kann nicht geändert werden"
+EXTERNAL_EMAIL_ADMIN_DETAIL = "Die E-Mail-Adresse externer Konten wird beim Anmeldedienst verwaltet"
+MAX_LOGIN_USERNAME = 100
+
+_DUMMY_HASH: Optional[str] = None
+
+
+def _dummy_hash() -> str:
+    """Bcrypt-Hash eines Zufallswerts: gleicht die Laufzeit fuer unbekannte Benutzer an (Fund f39)."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password(secrets.token_hex(16))
+    return _DUMMY_HASH
+
+
+def _is_external(user) -> bool:
+    """Externes Konto (OIDC/LDAP): Passwort, Benutzername und E-Mail verwaltet der Anmeldedienst."""
+    return not user_guard.is_local_account(user)
+
+
+async def _load_sso_config(db: AsyncSession):
+    from app.services.sso_settings import load_sso_config  # lazy: SSO-Dienste nur bei Bedarf laden
+
+    return await load_sso_config(db)
+
+
+async def _local_login_enabled(db: AsyncSession) -> bool:
+    return (await _load_sso_config(db)).general.local_login_enabled
 
 
 @router.post("/login")
@@ -336,10 +395,12 @@ async def login(
     captcha_token: Optional[str] = Form(default=None, description="Captcha-Token (nur wenn aktiviert)"),
     totp_code: Optional[str] = Form(default=None, description="6-stelliger TOTP-Code, falls 2FA aktiv"),
 ):
-    """Anmeldung mit Benutzername und Passwort. Setzt das HttpOnly-Cookie (kein Token im Body).
+    """Anmeldung mit Benutzername und Passwort (lokal, sonst LDAP). Setzt das HttpOnly-Cookie (kein Token im Body).
 
-    Drosselung je IP (/64) UND je Benutzername (B.3 [S2]): ein gesperrter Benutzername loest weder
-    Captcha-Pruefung noch DB-Lookup noch Passwortvergleich aus.
+    Drosselung je IP (/64) UND je Benutzername (B.3 [S2]): ein gesperrter Benutzername loest weder Captcha-Pruefung
+    noch DB-Lookup, Passwortvergleich oder LDAP-Bind aus. Reihenfolge (F10 5.8): lokales Konto mit passendem
+    Passwort, sonst – bei aktivem LDAP – Suche + Bind im Verzeichnis (auch nach falschem lokalem Passwort; die
+    Zuordnung laeuft nur ueber die externe ID). Externe Konten haben kein nutzbares lokales Passwort.
     """
     client_ip = get_client_ip(request) or "unknown"
     if is_login_rate_limited(client_ip, form_data.username):
@@ -349,40 +410,85 @@ async def login(
     from app.services.captcha import verify_or_raise as _verify_captcha
     await _verify_captcha(db, captcha_token, get_client_ip(request))
 
-    result = await db.execute(
-        select(User).where(User.username == form_data.username)
-    )
-    user = result.scalar_one_or_none()
+    from app.services import sso_ldap
+    from app.services.sso_provisioning import ProvisioningError, resolve_external_user
+    from app.services.sso_settings import ldap_ready, policy_from
 
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        record_failed_login(client_ip, form_data.username)
-        prom.record_login("password", "failure")
+    cfg = await _load_sso_config(db)
+    username = (form_data.username or "").strip()
+    password = form_data.password or ""
+    user = None
+    if 0 < len(username) <= MAX_LOGIN_USERNAME:
+        user = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    ldap_on = ldap_ready(cfg)
+    method, authed, prov = "password", False, None
+    if user is not None and user_guard.is_local_account(user):
+        authed = verify_password(password, user.hashed_password)
+    elif not ldap_on:
+        verify_password(password, _dummy_hash())   # unbekannt bzw. extern ohne LDAP: gleiche Laufzeit (f39)
+
+    if not authed and ldap_on and username and password:
+        # [S2] erneut vor dem Bind: ein gesperrter Name erreicht das Verzeichnis nie (kein AD-Lockout)
+        if is_login_rate_limited(client_ip, username):
+            raise _rate_limited("ldap")
+        try:
+            ident = await sso_ldap.authenticate(cfg.ldap, username, password)
+        except sso_ldap.LdapUnavailable:
+            prom.record_login("ldap", "failure")
+            await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
+                              details={"ip": client_ip, "method": "ldap", "reason": "ldap_unavailable"})
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_UNAVAILABLE_DETAIL)
+        except sso_ldap.LdapConfigError as exc:
+            logger.error("LDAP-Konfigurationsfehler: %s", exc)
+            prom.record_login("ldap", "failure")
+            await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
+                              details={"ip": client_ip, "method": "ldap", "reason": "ldap_config"})
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_CONFIG_DETAIL)
+        if ident is not None:
+            try:
+                prov = await resolve_external_user(db, ident.profile, policy_from(cfg.ldap, "ldap"))
+            except ProvisioningError as pe:
+                prom.record_login("ldap", "denied")
+                await write_audit(db, "LOGIN_FAILED", "user", username[:255], user_id=pe.user_id, status="error",
+                                  details={"ip": client_ip, "method": "ldap", "reason": pe.code})
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail=_PROVISIONING_LOGIN_TEXT.get(pe.code, _PROVISIONING_LOGIN_TEXT["not_allowed"]))
+            user, authed, method = prov.user, True, "ldap"
+
+    if not authed:
+        record_failed_login(client_ip, username or form_data.username)
+        prom.record_login("ldap" if ldap_on else "password", "failure")
         await write_audit(
-            db, "LOGIN_FAILED", "user", form_data.username,
+            db, "LOGIN_FAILED", "user", (username or form_data.username or "")[:255],
             user_id=user.id if user else None, status="error",
-            details={"ip": client_ip, "reason": "bad_credentials"},
+            details={"ip": client_ip, "reason": "bad_credentials", "method": "ldap" if ldap_on else "password"},
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Falscher Benutzername oder Passwort",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=BAD_CREDENTIALS_DETAIL)
 
     if not user.is_active:
+        prom.record_login(method, "denied")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ACCOUNT_DISABLED_DETAIL)
+
+    # Lokale Anmeldung abgeschaltet: Notfallzugang nur fuer Admins (Rolle des Ziel-Kontos, kein Token-Kontext)
+    if method == "password" and not cfg.general.local_login_enabled and user.role != "admin":  # static-ok: role-admin
         prom.record_login("password", "denied")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Konto ist deaktiviert",
-        )
+        await write_audit(db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+                          details={"ip": client_ip, "method": "password", "reason": "local_login_disabled"})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=LOCAL_LOGIN_DISABLED_DETAIL)
+
+    # Beim LDAP-Login kann der Panel-Name vom eingegebenen Namen abweichen (jdoe -> jdoe-2): beide Zaehler loeschen
+    if method == "ldap" and username and username.lower() != (user.username or "").lower():
+        clear_login_fails(client_ip, username)
+    audit_extra = prov.audit_extra if prov else None
 
     # --- 2FA (TOTP) ------------------------------------------------------------
-    method = "password"
     if getattr(user, "totp_enabled", False):
         if _totp_secret_state(user) == "unreadable":
             # Passwort war korrekt -> kein Fehlzaehler; Recovery: Passkey oder Admin setzt 2FA zurueck (F5 5.13)
-            prom.record_login("password", "denied")
+            prom.record_login(method, "denied")
             await write_audit(
                 db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
-                details={"ip": client_ip, "reason": "totp_unreadable"},
+                details={"ip": client_ip, "method": method, "reason": "totp_unreadable"},
             )
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=TOTP_UNREADABLE_LOGIN)
         sec = (user.totp_secret or "").strip()
@@ -393,8 +499,8 @@ async def login(
             )
         code = (totp_code or "").strip().replace(" ", "")
         if not code:
-            prom.record_login("password", "2fa_required")
-            pending = create_two_factor_pending_token(user.id)
+            prom.record_login(method, "2fa_required")
+            pending = create_two_factor_pending_token(user.id, method=method)
             return JSONResponse(
                 status_code=200,
                 content={
@@ -409,10 +515,10 @@ async def login(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Falscher TOTP-Code",
             )
-        method = "password+totp"
+        method = f"{method}+totp"
 
     # Erfolg: last_login, Benutzer-Zaehler des Paars loeschen, Audit LOGIN, Metrik, Cookie (B.4)
-    return await _complete_login(db, user, request, method=method)
+    return await _complete_login(db, user, request, method=method, audit_extra=audit_extra)
 
 
 @router.post("/login/2fa")
@@ -421,19 +527,29 @@ async def login_two_factor(
     data: TwoFactorComplete,
     request: Request,
 ):
-    """TOTP-Code + pending-Token aus /login, wenn 2FA aktiv. Setzt Session-Cookie."""
+    """TOTP-Code + pending-Token (Body oder Cookie ``pdnsmgr_2fa``), wenn 2FA aktiv. Setzt das Session-Cookie.
+
+    Die Methode der ersten Stufe steht im Token (``password``/``ldap``/``oidc``); Audit ``<methode>+totp``. Bei
+    ``password`` gilt die Abschaltung der lokalen Anmeldung (ausser Admins). OIDC-Anmeldungen loeschen keine
+    Login-Zaehler (kein Passwort-Raten).
+    """
+    from app.services.login_session import TWO_FACTOR_COOKIE, TWO_FACTOR_COOKIE_PATH, delete_transient_cookie
+
     client_ip = get_client_ip(request) or "unknown"
     if is_login_rate_limited(client_ip):
         raise _rate_limited("totp")
-    uid = decode_two_factor_pending_token(data.two_factor_token)
-    if not uid:
+    from_cookie = not data.two_factor_token
+    token = data.two_factor_token or request.cookies.get(TWO_FACTOR_COOKIE)
+    payload = decode_two_factor_pending_payload(token)
+    if not payload:
         record_failed_login(client_ip)
         prom.record_login("totp", "failure")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Ungültiger oder abgelaufener Zweitschritt-Token",
         )
-    result = await db.execute(select(User).where(User.id == uid))
+    first = payload["m"]
+    result = await db.execute(select(User).where(User.id == payload["sub"]))
     user = result.scalar_one_or_none()
     if not user or not user.is_active or not getattr(user, "totp_enabled", False):
         record_failed_login(client_ip)
@@ -442,11 +558,21 @@ async def login_two_factor(
     # Benutzer-Zaehler: dieselbe Sperre wie beim Passwort-Login (kein TOTP-Raten ueber /login/2fa)
     if is_login_rate_limited(client_ip, user.username):
         raise _rate_limited("totp")
+    if first == "password" and _is_external(user):
+        # Token einer lokalen Anmeldung, Konto inzwischen extern verknuepft
+        record_failed_login(client_ip)
+        prom.record_login("totp", "failure")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nicht anmeldbar")
+    if first == "password" and user.role != "admin" and not await _local_login_enabled(db):  # static-ok: role-admin
+        prom.record_login("totp", "denied")
+        await write_audit(db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+                          details={"ip": client_ip, "method": "password", "reason": "local_login_disabled"})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=LOCAL_LOGIN_DISABLED_DETAIL)
     if _totp_secret_state(user) == "unreadable":
         prom.record_login("totp", "denied")
         await write_audit(
             db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
-            details={"ip": client_ip, "reason": "totp_unreadable"},
+            details={"ip": client_ip, "method": f"{first}+totp", "reason": "totp_unreadable"},
         )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=TOTP_UNREADABLE_LOGIN)
     sec = (user.totp_secret or "").strip()
@@ -457,7 +583,10 @@ async def login_two_factor(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Falscher TOTP-Code",
         )
-    return await _complete_login(db, user, request, method="password+totp")
+    resp = await _complete_login(db, user, request, method=f"{first}+totp", clear_fails=(first != "oidc"))
+    if from_cookie:
+        delete_transient_cookie(resp, TWO_FACTOR_COOKIE, path=TWO_FACTOR_COOKIE_PATH)
+    return resp
 
 
 @router.post("/logout")
@@ -475,8 +604,12 @@ async def register_public(
     request: Request,
     background_tasks: BackgroundTasks,
 ):
-    """Register a new user (only when registration is enabled in settings)."""
-    if not await _get_auth_setting(db, "registration_enabled"):
+    """Register a new user (only when registration is enabled in settings).
+
+    F10 3.2.12: Ist die Anmeldung mit lokalen Konten abgeschaltet, ist auch die Registrierung aus (ein neues lokales
+    Konto koennte sich ohnehin nicht anmelden).
+    """
+    if not await _get_auth_setting(db, "registration_enabled") or not await _local_login_enabled(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registrierung ist deaktiviert",
@@ -605,7 +738,10 @@ async def forgot_password(
 
     # Immer gleiche Antwort (keine Hinweise ob Konto existiert). Externe Konten (SSO/LDAP) und deaktivierte
     # Konten bekommen keinen Link: ihr Passwort verwaltet der Identitaetsanbieter bzw. der Link waere wertlos.
+    # Ist die lokale Anmeldung abgeschaltet, bekommen nur Admins (Notfallzugang) einen Link (F10 3.2.12).
     if not user or not user.email or not user.is_active or not user_guard.is_local_account(user):
+        return dict(FORGOT_PASSWORD_REPLY)
+    if user.role != "admin" and not await _local_login_enabled(db):  # static-ok: role-admin (Ziel-Konto)
         return dict(FORGOT_PASSWORD_REPLY)
     try:
         await send_password_reset_mail(db, user, valid_minutes=SELF_SERVICE_VALID_MINUTES, admin_initiated=False)
@@ -687,7 +823,16 @@ async def update_profile(
     data: ProfileUpdate,
     current_user: User = Depends(get_session_user),
 ):
-    """Update own profile (username, email, display_name)."""
+    """Update own profile (username, email, display_name).
+
+    Externe Konten (F10 3.2.6): Benutzername und E-Mail verwaltet der Anmeldedienst (400 bei einer Aenderung);
+    Anzeigename und uebrige Felder bleiben editierbar.
+    """
+    if _is_external(current_user):
+        if data.username is not None and data.username != current_user.username:
+            raise HTTPException(status_code=400, detail=EXTERNAL_USERNAME_DETAIL)
+        if "email" in data.model_fields_set and (data.email or None) != (current_user.email or None):
+            raise HTTPException(status_code=400, detail=EXTERNAL_EMAIL_SELF_DETAIL)
     if data.username is not None and data.username != current_user.username:
         # Check if new username is already taken
         result = await db.execute(select(User).where(User.username == data.username))
@@ -772,6 +917,8 @@ async def list_users(
     """Alle Benutzer mit Zonenrechten, Passkey- und Token-Zaehlern. Admin only.
 
     ``password_reset_mail_available``: SMTP und oeffentliche Basis-URL sind eingerichtet (Reset-Link-Button).
+    F10 3.2.11: je Benutzer ``external_issuer``/``external_id`` (nur hier, nicht in ``/auth/me``), dazu der Block
+    ``sso`` (Rollen-Modus und JIT je Quelle) fuer Badges und Hinweise der Benutzerverwaltung.
     """
     result = await db.execute(select(User).order_by(User.created_at))
     users = result.scalars().all()
@@ -785,8 +932,13 @@ async def list_users(
         d = await _user_to_dict(u, db)
         d["passkey_count"] = passkey_counts.get(u.id, 0)
         d["panel_token_count"] = token_counts.get(u.id, 0)
+        d["external_issuer"] = getattr(u, "external_issuer", None)
+        d["external_id"] = getattr(u, "external_id", None)
         out.append(d)
-    return {"users": out, "password_reset_mail_available": await reset_mail_available(db)}
+    cfg = await _load_sso_config(db)
+    sso = {"oidc_role_mode": cfg.oidc.role_mode, "ldap_role_mode": cfg.ldap.role_mode,
+           "oidc_jit": cfg.oidc.jit_enabled, "ldap_jit": cfg.ldap.jit_enabled}
+    return {"users": out, "password_reset_mail_available": await reset_mail_available(db), "sso": sso}
 
 
 async def _get_user_or_404(db: AsyncSession, user_id: int) -> User:
@@ -866,6 +1018,14 @@ async def update_user(
         new_role=data.role or user.role,
         new_active=user.is_active if data.is_active is None else data.is_active,
     )
+    # F10 3.2.8: Notfallzugang (letzter aktiver lokaler Admin bei aktivem SSO)
+    await user_guard.assert_keeps_local_admin(
+        db, user,
+        new_role=data.role or user.role,
+        new_active=user.is_active if data.is_active is None else data.is_active,
+    )
+    if _is_external(user) and "email" in data.model_fields_set and (data.email or None) != (user.email or None):
+        raise HTTPException(status_code=400, detail=EXTERNAL_EMAIL_ADMIN_DETAIL)
     email_change = "email" in data.model_fields_set and data.email and data.email != user.email
     if email_change and await user_guard.email_taken(db, data.email, exclude_user_id=user.id):
         raise HTTPException(status_code=409, detail=user_guard.EMAIL_TAKEN_DETAIL)
@@ -910,7 +1070,11 @@ async def delete_user(
     user_id: int,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Delete a user and their zone assignments. Admin only."""
+    """Delete a user and their zone assignments. Admin only.
+
+    Der letzte aktive lokale Admin bleibt bei aktivem SSO erhalten (Notfallzugang, F10 3.2.9). DynDNS-Tokens loescht
+    ``services/dyndns.delete_tokens_of_user`` (WS-F9F11-BE).
+    """
     if admin.id == user_id:
         raise HTTPException(status_code=400, detail="Du kannst dich nicht selbst loeschen")
 
@@ -918,20 +1082,25 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail=USER_NOT_FOUND)
+    await user_guard.assert_keeps_local_admin(db, user, removing=True)
+
+    # Laufzeit-Import: services/dyndns.py liefert WS-F9F11-BE parallel in Welle 2 (Cross-Item F9, Plan C)
+    from app.services import dyndns as dyndns_service
 
     # Alle benutzergebundenen Daten entfernen (keine FK-Constraints im Schema -> manuell).
     # Zustellungen (Outbox) VOR den Webhooks loeschen (F6 3.9).
     await db.execute(sql_delete(UserZoneAccess).where(UserZoneAccess.user_id == user_id))
     await db.execute(sql_delete(WebAuthnCredential).where(WebAuthnCredential.user_id == user_id))
     await db.execute(sql_delete(PanelToken).where(PanelToken.user_id == user_id))
-    res_dyndns = await db.execute(sql_delete(DynDnsToken).where(DynDnsToken.user_id == user_id))
+    deleted_dyndns = await dyndns_service.delete_tokens_of_user(db, user_id)
     res_deliveries = await db.execute(sql_delete(WebhookDelivery).where(WebhookDelivery.user_id == user_id))
     res_webhooks = await db.execute(sql_delete(Webhook).where(Webhook.user_id == user_id))
     await write_audit(db, "USER_DELETE", "user", user.username, user_id=admin.id,
                       details={"target_user_id": user.id, "role": user.role,
+                               "auth_source": getattr(user, "auth_source", None) or "local",
                                "deleted_webhooks": int(res_webhooks.rowcount or 0),
                                "deleted_webhook_deliveries": int(res_deliveries.rowcount or 0),
-                               "deleted_dyndns_tokens": int(res_dyndns.rowcount or 0)})
+                               "deleted_dyndns_tokens": int(deleted_dyndns or 0)})
     await db.delete(user)
     await db.flush()
     return {"message": f"Benutzer '{user.username}' geloescht"}
@@ -1128,6 +1297,50 @@ async def revoke_user_access(
     }
 
 
+@router.post("/users/{user_id}/convert-to-local")
+async def convert_user_to_local(
+    db: DbWrite,
+    user_id: int,
+    request: Request,
+    data: Optional[ConvertToLocalBody] = Body(default=None),
+    admin: User = Depends(get_admin_session_user),
+):
+    """Externes Konto (OIDC/LDAP) in ein lokales umwandeln: Zufallspasswort (Einmalanzeige), externe ID entfernt.
+
+    Immer mit Step-up des Admins (``step_up``: Passwort + ggf. TOTP bzw. frische Anmeldung bei externen Admins,
+    Plan [S8]). Audit ``USER_CONVERT_LOCAL`` (ohne Passwort).
+    """
+    opts = data or ConvertToLocalBody()
+    user = await _get_user_or_404(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Das eigene Konto kann nicht umgewandelt werden")
+    if user_guard.is_local_account(user):
+        raise HTTPException(status_code=400, detail="Das Konto ist bereits ein lokales Konto")
+    step_up = await verify_step_up(db, admin, request, opts.step_up)
+
+    previous_source, previous_issuer = user.auth_source, user.external_issuer
+    new_password = generate_random_password(16)
+    user.hashed_password = hash_password(new_password)
+    user.auth_source = "local"
+    user.external_issuer = None
+    user.external_id = None
+    user.must_change_password = bool(opts.must_change_password)
+    await db.flush()
+    logger.info("Admin '%s' hat das Konto '%s' (id=%s) in ein lokales umgewandelt", admin.username, user.username,
+                user.id)
+    await write_audit(db, "USER_CONVERT_LOCAL", "user", user.username, user_id=admin.id,
+                      details={"target_user_id": user.id, "previous_source": previous_source,
+                               "previous_issuer": previous_issuer,
+                               "must_change_password": bool(user.must_change_password), "step_up": step_up})
+    return {
+        "message": f"Konto '{user.username}' ist jetzt ein lokales Konto",
+        "username": user.username,
+        "new_password": new_password,  # nur dieses eine Mal
+        "hint": "Bitte unverzüglich an den Nutzer weitergeben – das Passwort wird nicht erneut angezeigt.",
+        "must_change_password": bool(user.must_change_password),
+    }
+
+
 # ========================
 # Zone Access Management (Admin only)
 # ========================
@@ -1200,7 +1413,8 @@ class TotpEnableBody(BaseModel):
 
 
 class TotpDisableBody(BaseModel):
-    password: str
+    # Pflicht nur fuer lokale Konten; externe Konten haben kein lokales Passwort (F10 3.2.5)
+    password: Optional[str] = Field(None, max_length=128)
     code: str = Field(..., min_length=4, max_length=12)
 
 
@@ -1270,8 +1484,9 @@ async def totp_disable(
     data: TotpDisableBody,
     current_user: User = Depends(get_session_user),
 ):
-    """2FA ausschalten: Passwort + gueltiger TOTP."""
-    if not verify_password(data.password, current_user.hashed_password):
+    """2FA ausschalten: Passwort (nur lokale Konten) + gueltiger TOTP."""
+    if not _is_external(current_user) and (
+            not data.password or not verify_password(data.password, current_user.hashed_password)):
         raise HTTPException(status_code=400, detail="Passwort ist falsch")
     if not getattr(current_user, "totp_enabled", False):
         return {"message": "2FA war nicht aktiv", "user": await _user_to_dict(current_user, db)}
@@ -1336,7 +1551,9 @@ async def webauthn_register_begin(
     request: Request,
     current_user: User = Depends(get_session_user),
 ):
-    """Startet die Passkey-Registrierung: liefert Creation-Options + Challenge-Token."""
+    """Startet die Passkey-Registrierung: liefert Creation-Options + Challenge-Token (nur lokale Konten)."""
+    if _is_external(current_user):
+        raise HTTPException(status_code=400, detail=EXTERNAL_PASSKEY_REGISTER_DETAIL)
     from app.services import webauthn_service as wa
 
     existing = await _list_user_credentials(db, current_user.id)
@@ -1357,6 +1574,8 @@ async def webauthn_register_complete(
     current_user: User = Depends(get_session_user),
 ):
     """Schließt die Passkey-Registrierung ab: verifiziert Attestation und speichert den Public-Key."""
+    if _is_external(current_user):
+        raise HTTPException(status_code=400, detail=EXTERNAL_PASSKEY_REGISTER_DETAIL)
     from app.services import webauthn_service as wa
 
     payload = decode_webauthn_challenge_token(data.challenge_token, purpose=TOKEN_TYPE_WEBAUTHN_REG)
@@ -1473,6 +1692,18 @@ async def webauthn_login_complete(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Konto ist deaktiviert")
     if is_login_rate_limited(client_ip, user.username):
         raise _rate_limited("passkey")
+    # F10 3.2.3: Passkeys nur fuer lokale Konten (sie wuerden eine Sperre beim Anmeldedienst umgehen); bei
+    # abgeschalteter lokaler Anmeldung nur fuer Admins (Notfallzugang)
+    if _is_external(user):
+        _fail()
+        await write_audit(db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+                          details={"ip": client_ip, "method": "passkey", "reason": "external_account"})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=EXTERNAL_PASSKEY_LOGIN_DETAIL)
+    if user.role != "admin" and not await _local_login_enabled(db):  # static-ok: role-admin (Ziel-Konto)
+        prom.record_login("passkey", "denied")
+        await write_audit(db, "LOGIN_FAILED", "user", user.username, user_id=user.id, status="error",
+                          details={"ip": client_ip, "method": "passkey", "reason": "local_login_disabled"})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=LOCAL_LOGIN_DISABLED_DETAIL)
 
     try:
         new_sign_count = wa.verify_authentication(request, data.credential, payload["chal"], cred)
