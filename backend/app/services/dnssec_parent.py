@@ -44,6 +44,10 @@ PARENT_DS_TOTAL = 5.0  # Gesamtlaufzeit der Elternzonen-Pruefung (Spec 3.13)
 DNSKEY_TIMEOUT = 3.0  # je Nameserver-Adresse
 DNSKEY_TOTAL = 8.0  # Gesamtlaufzeit der DNSKEY-Pruefung (wie der Propagations-Check)
 NS_RESOLVE_TIMEOUT = 2.0
+# Obergrenzen je DNSKEY-Pruefung (W3-L2): so viele NS-Namen werden aufgeloest/gefragt, so viele gleichzeitig aufgeloest
+MAX_NS_NAMES = prop.MAX_NS_TARGETS
+NS_RESOLVE_CONCURRENCY = 6
+MSG_TOO_MANY_NS_NAMES = "Nicht geprüft (zu viele Nameserver)"
 DS_DIGESTS = {1: "SHA1", 2: "SHA256", 4: "SHA384"}
 
 PARENT_ERROR_TEXTS = {
@@ -286,21 +290,25 @@ async def check_dnskey_on_ns(zone_norm: str, zone_json: dict, expected_tags: Ite
     """
     expected = {int(t) for t in expected_tags or []}
     ref = prop.extract_reference(zone_json or {}, zone_norm)
-    nameservers: list[str] = ref["nameservers"]
+    # hoechstens MAX_NS_NAMES Namen (W3-L2); der Rest erscheint als "nicht geprueft" und setzt truncated
+    nameservers: list[str] = ref["nameservers"][:MAX_NS_NAMES]
+    skipped_names: list[str] = ref["nameservers"][MAX_NS_NAMES:]
     glue: dict[str, list[str]] = ref["glue"]
     loop = asyncio.get_running_loop()
     deadline = loop.time() + total
+    resolve_sem = asyncio.Semaphore(NS_RESOLVE_CONCURRENCY)
 
     async def resolve(ns: str) -> tuple[list[str], Optional[str]]:
         if ns in glue:
             return list(glue[ns]), None
-        budget = max(0.05, min(NS_RESOLVE_TIMEOUT, deadline - loop.time()))
-        return await prop.resolve_ns_addresses(ns, ipv6=settings.ipv6, timeout=budget)
+        async with resolve_sem:
+            budget = max(0.05, min(NS_RESOLVE_TIMEOUT, deadline - loop.time()))
+            return await prop.resolve_ns_addresses(ns, ipv6=settings.ipv6, timeout=budget)
 
     resolved = await _gather_budget({ns: resolve(ns) for ns in nameservers}, max(0.05, deadline - loop.time()))
     plan: dict[str, list[tuple[Optional[str], Optional[str]]]] = {}
     ips: list[str] = []
-    truncated = False
+    truncated = bool(skipped_names)
     for ns in nameservers:
         got = resolved.get(ns)
         addrs, err = got if got is not None else ([], "ns_unresolvable")
@@ -331,6 +339,10 @@ async def check_dnskey_on_ns(zone_norm: str, zone_json: dict, expected_tags: Ite
         result = _evaluate_ns(rows, expected)
         if not rows and truncated:
             result["error"] = "Nicht geprüft (zu viele Nameserver-Adressen)"
+        out[ns] = result
+    for ns in skipped_names:
+        result = _evaluate_ns([], expected)
+        result["error"] = MSG_TOO_MANY_NS_NAMES
         out[ns] = result
     return out, truncated
 
