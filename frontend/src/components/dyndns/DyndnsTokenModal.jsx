@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Loader2, Plus, Router, X } from 'lucide-react'
 import api from '../../api'
 import ModalErrorBanner from '../ModalErrorBanner'
+import { useDialogFocus } from '../../lib/useDialogFocus'
 
 // Anlegen/Bearbeiten eines DynDNS-Tokens (F9 §2.1/§2.4).
 // Props: { mode: 'create'|'edit', token, zones: [{ name, servers }], limits, onClose, onSaved(result) }
@@ -37,8 +38,6 @@ function isValidHostname(host) {
     return h.split('.').every((label) => LABEL_RE.test(label))
 }
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 function initialForm(mode, token, limits) {
     if (mode === 'edit' && token) {
         return {
@@ -69,7 +68,6 @@ export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawL
     const titleId = useId()
     const zoneListId = useId()
     const ttlListId = useId()
-    const dialogRef = useRef(null)
     const formRef = useRef(null)
     const nameRef = useRef(null)
     const [form, setForm] = useState(() => initialForm(mode, token, limits))
@@ -83,41 +81,20 @@ export default function DyndnsTokenModal({ mode, token, zones = [], limits: rawL
     const zoneKnown = zoneNames.includes(stripDot(zoneInput))
     const preview = zoneKnown ? buildHostname(subInput, zoneInput) : ''
 
-    // Fokus: Namensfeld beim Oeffnen, beim Schliessen zurueck auf das ausloesende Element
-    useEffect(() => {
-        const previous = document.activeElement
-        nameRef.current?.focus()
-        return () => {
-            if (previous && typeof previous.focus === 'function' && document.contains(previous)) previous.focus()
-        }
-    }, [])
+    // Fokus (Namensfeld), Tab-Falle, ESC (nicht waehrend des Speicherns) und Fokus-Rueckgabe: lib/useDialogFocus
+    const dialogRef = useDialogFocus({ onClose, canClose: !saving, initialFocusRef: nameRef })
 
-    // ESC schliesst (nicht waehrend des Speicherns), Strg/Cmd+Enter speichert, Tab bleibt im Dialog
+    // Strg/Cmd+Enter speichert
     useEffect(() => {
         function onKey(e) {
-            if (e.key === 'Escape' && !saving) {
-                e.preventDefault()
-                onClose()
-            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !saving) {
                 e.preventDefault()
                 formRef.current?.requestSubmit()
-            } else if (e.key === 'Tab' && dialogRef.current) {
-                const items = Array.from(dialogRef.current.querySelectorAll(FOCUSABLE))
-                if (items.length === 0) return
-                const first = items[0]
-                const last = items[items.length - 1]
-                if (e.shiftKey && document.activeElement === first) {
-                    e.preventDefault()
-                    last.focus()
-                } else if (!e.shiftKey && document.activeElement === last) {
-                    e.preventDefault()
-                    first.focus()
-                }
             }
         }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
-    }, [saving, onClose])
+    }, [saving])
 
     function setField(key, value) {
         setForm((f) => ({ ...f, [key]: value }))
