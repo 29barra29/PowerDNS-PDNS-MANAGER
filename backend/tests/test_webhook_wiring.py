@@ -264,7 +264,12 @@ def test_record_endpoints_enqueue_after_audit(pdns, recorder, monkeypatch):
     # F6 5.3 (F7-BE [D8]): changes/fanout zusaetzlich zu den v1-Feldern
     assert {"ttl", "added", "changes", "fanout"} <= set(recorder.calls[0]["data"])
     assert recorder.calls[1]["data"]["content"] == "192.0.2.1" and "changes" in recorder.calls[1]["data"]
-    assert recorder.calls[2]["data"] == {"server": "srv1", "zone": z, "created": 1, "deleted": 0}
+    # record.bulk (F1 3.3 / F6 5.3): v1-Felder bleiben, dazu source/mode/changes/changes_total/fanout
+    bulk_data = recorder.calls[2]["data"]
+    assert {k: bulk_data[k] for k in ("server", "zone", "created", "deleted")} == {
+        "server": "srv1", "zone": z, "created": 1, "deleted": 0}
+    assert bulk_data["source"] == "api" and bulk_data["mode"] is None and bulk_data["changes_total"] == 1
+    assert bulk_data["changes"][0]["name"] == f"www.{z}" and bulk_data["fanout"] == {"srv1": "saved"}
     assert [a[0][0] for a in recorder.detached] == ["UPDATE"]  # Fehler-Audit detached
 
 

@@ -32,6 +32,17 @@ def _reject_generic_type(v: str) -> str:
     return v
 
 
+def validate_allowed_type(v: str) -> str:
+    """Record-Typ normalisieren (strip, upper) und gegen ``ALLOWED_RECORD_TYPES`` pruefen.
+
+    Gemeinsame Pruefung fuer ``RecordCreate`` und die Bulk-Schemas (``schemas/bulk.py``, F1 3.1).
+    """
+    v = _reject_generic_type((v or "").strip().upper())
+    if v not in ALLOWED_RECORD_TYPES:
+        raise ValueError(f"Unknown record type: {v}")  # Text bleibt (Skript-Kompatibilitaet)
+    return v
+
+
 # ========================
 # Zone Schemas
 # ========================
@@ -170,10 +181,7 @@ class RecordCreate(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        v = _reject_generic_type(v.strip().upper())
-        if v not in ALLOWED_RECORD_TYPES:
-            raise ValueError(f"Unknown record type: {v}")  # Text bleibt (Skript-Kompatibilitaet)
-        return v
+        return validate_allowed_type(v)
 
     @model_validator(mode="after")
     def _validate_lua(self):
@@ -239,11 +247,8 @@ class RecordUpdate(BaseModel):
         return self
 
 
-class BulkRecordUpdate(BaseModel):
-    """Schema for bulk record operations."""
-    create: list[RecordCreate] = Field(default_factory=list)
-    delete: list[RecordDelete] = Field(default_factory=list)
-    manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
+# Bulk-Schemas (BulkRecordUpdate, Vorschau, Limits) liegen seit 3.0 in schemas/bulk.py (F1 3.1); sie werden
+# unten ueber das Modul-__getattr__ re-exportiert (``from app.schemas.dns import BulkRecordUpdate`` bleibt gueltig).
 
 
 # ========================
@@ -314,3 +319,24 @@ class ErrorResponse(BaseModel):
     error: str
     server: Optional[str] = None
     details: Optional[str] = None
+
+
+# ========================
+# Re-Export der Bulk-Schemas (F1)
+# ========================
+# schemas/bulk.py importiert RecordCreate/RecordDelete/RecordItem aus diesem Modul. Ein Import von bulk.py hier
+# oben bzw. am Dateiende waere zyklisch, je nachdem welches Modul zuerst geladen wird – daher lazy (PEP 562).
+_BULK_EXPORTS = frozenset({
+    "BULK_MAX_OPS", "BULK_MAX_CHANGED_RRSETS", "BULK_MAX_TEXT_CHARS", "BULK_MAX_TEXT_LINES",
+    "RRsetKey", "BulkTtlChange", "BulkDisabledChange", "BulkMergeItem", "BulkExpectation", "BulkRecordUpdate",
+    "BulkTextInput", "BulkPreviewRequest", "RRsetSnapshot", "BulkIssue", "BulkChange", "BulkSummary",
+    "BulkPreviewResponse",
+})
+
+
+def __getattr__(name: str):
+    if name in _BULK_EXPORTS:
+        from app.schemas import bulk as _bulk
+
+        return getattr(_bulk, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

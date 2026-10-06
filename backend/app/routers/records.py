@@ -10,12 +10,14 @@ Schreibende Endpunkte (Bauplan B.5/B.7, F7 5.4):
   Primary-Payload beruht (``PrimaryCapture``), der Nachher-Zustand per Re-Read (Fallback: berechnet).
   ``primary_outcome`` steht in den Details. Commit vor der Antwort per ``DbWrite``.
 - Webhook-Ereignis per ``await enqueue_event`` (Outbox, B.8) mit den Daten aus F6 5.3 (``changes``, ``fanout``;
-  die v1-Felder bleiben). ``record.bulk`` behaelt bis zum Umbau durch F1 die v1-Daten.
-
-Erweiterungspunkte fuer spaetere Wellen: ``_run_fanout`` + ``describe_change`` liefern ``RecordChange`` mit
-``before``/``after`` je RRset (z. B. PTR-Pflege F11: ``change.before[key]`` auch beim Loeschen ohne ``content``).
+  die v1-Felder bleiben).
+- PTR-Pflege (F11, Plan B.6a) an allen vier Einhaengepunkten (create/update/delete/bulk) ueber
+  ``bulk_service.sync_ptr_for_changes`` -> ``ptr.sync_for_changes`` mit den Audit-v2-``changes``: nur nach
+  Primary-Erfolg, vor dem Erfolgs-Audit; Ergebnis in ``details.ptr`` (Antwort: vollstaendig, Audit/Webhook:
+  kompakt).
+- Bulk-Editor (F1): ``POST …/bulk/preview`` (Trockenlauf) und ``POST …/bulk`` delegieren an ``services/bulk.py``
+  (Plan je Server, Betriebsart B, ``expected``-Sperre, Audit ``BULK_UPDATE`` v2, Webhook ``record.bulk``).
 """
-import copy
 import logging
 from typing import Any, Iterable, Optional
 
@@ -26,9 +28,9 @@ from app.core.auth import get_current_user, assert_zone_access
 from app.core.database import DbRead, DbWrite
 from app.core.names import normalize_zone_name
 from app.models.models import AuditLog, User
-from app.schemas.dns import (
-    RecordCreate, RecordDelete, BulkRecordUpdate, MessageResponse, RecordUpdate
-)
+from app.schemas.bulk import BulkPreviewRequest, BulkPreviewResponse, BulkRecordUpdate
+from app.schemas.dns import RecordCreate, RecordDelete, MessageResponse, RecordUpdate
+from app.services import bulk as bulk_service
 from app.services import fanout
 from app.services.audit import write_audit
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
@@ -146,58 +148,31 @@ def _missing_value_detail(zone_json: Any, value_deletes: Iterable[Any]) -> str:
     return "Zu löschender Wert nicht vorhanden"
 
 
-def _bulk_builder(rrsets: list[dict], value_deletes: list[Any]) -> fanout.RRsetBuilder:
-    """2.4.1-Bulk je Server in EINEM PATCH: erst Einzelwert-Loeschungen (aus dem Stand dieses Servers), dann die
-    REPLACE/DELETE-RRsets des Requests unveraendert.
-
-    Fehlt ein zu loeschender Wert bzw. sein RRset -> ``None`` (``skipped (no matching content)``; am Primary 404
-    wie 2.4.1). Wird ein RRset zusaetzlich per REPLACE/DELETE gesetzt, entfaellt der Zwischenstand der
-    Wert-Loeschung (sonst doppelter Schluessel im PATCH). TTL, disabled-Flags und Kommentare bleiben erhalten.
-    """
-    replaced = {rr_key(r["name"], r["type"]) for r in rrsets}
-
-    def build(server_name: str, zone_json: dict) -> Optional[list[dict]]:
-        pending: dict[RRKey, dict] = {}
-        order: list[RRKey] = []
-        for vd in value_deletes:
-            key = rr_key(vd.name, vd.type)
-            if key not in pending:
-                rr = _find_rrset(zone_json, vd.name, vd.type)
-                if rr is None:
-                    return None
-                pending[key] = {
-                    "name": vd.name, "type": vd.type, "ttl": rr.get("ttl"),
-                    "records": [{"content": r.get("content"), "disabled": bool(r.get("disabled", False))}
-                                for r in rr.get("records") or []],
-                    "comments": list(rr.get("comments") or []),
-                }
-                order.append(key)
-            st = pending[key]
-            remaining = [r for r in st["records"] if r["content"] != vd.content]
-            if len(remaining) == len(st["records"]):
-                return None
-            st["records"] = remaining
-        out: list[dict] = []
-        for key in order:
-            if key in replaced:
-                continue
-            st = pending[key]
-            if not st["records"]:
-                out.append({"name": st["name"], "type": st["type"], "changetype": "DELETE"})
-                continue
-            rr = {"name": st["name"], "type": st["type"], "ttl": st["ttl"], "changetype": "REPLACE",
-                  "records": st["records"]}
-            if st["comments"]:
-                rr["comments"] = st["comments"]
-            out.append(rr)
-        out.extend(copy.deepcopy(rrsets))
-        return out
-
-    return build
-
-
 def _primary_payload(fan: fanout.FanoutResult, server_name: str) -> list[dict]:
     return list(fan.per_server_rrsets.get(server_name) or [])
+
+
+async def _ptr_hook(db: AsyncSession, user: User, server_name: str, requested: Optional[bool], change: Any, *,
+                    ttl_default: int = 3600) -> Optional[bulk_service.PtrOutcome]:
+    """PTR-Pflege nach Primary-Erfolg (F11 5.12, B.6a); traegt das kompakte Ergebnis in die Audit-Details ein."""
+    ptr = await bulk_service.sync_ptr_for_changes(db, user, server_name, requested, change.changes,
+                                                  ttl_default=ttl_default)
+    if ptr is not None:
+        change.details["ptr"] = ptr.compact
+    return ptr
+
+
+def _ptr_data(ptr: Optional[bulk_service.PtrOutcome]) -> dict:
+    """Webhook-Zusatz ``data.ptr`` (kompakt) – leer ohne PTR-Pflege."""
+    return {"ptr": ptr.compact} if ptr is not None else {}
+
+
+def _with_ptr(summary: dict, ptr: Optional[bulk_service.PtrOutcome]) -> dict:
+    """Antwort-``details``: Fan-out-Map plus ``ptr`` (Liste der PtrResults), falls PTR-Pflege lief."""
+    out = dict(summary)
+    if ptr is not None:
+        out["ptr"] = ptr.results
+    return out
 
 
 # =============================================================================
@@ -243,8 +218,25 @@ async def list_records(
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
-# WICHTIG: /bulk muss VOR der allgemeinen POST-Route stehen. Starlette nimmt den ersten
-# passenden Treffer, und {zone_id:path} wuerde sonst auch ".../bulk" als Zonennamen schlucken.
+# WICHTIG: /bulk/preview und /bulk muessen VOR der allgemeinen POST-Route stehen. Starlette nimmt den ersten
+# passenden Treffer, und {zone_id:path} wuerde sonst auch ".../bulk" bzw. ".../bulk/preview" als Zonennamen
+# schlucken (F1 3.0). /bulk/preview kollidiert nicht mit /bulk (dessen Muster endet auf "/bulk").
+@router.post("/{server_name}/{zone_id:path}/bulk/preview", response_model=BulkPreviewResponse)
+async def preview_bulk_records(
+    server_name: str,
+    zone_id: str,
+    req: BulkPreviewRequest,
+    db: DbWrite,
+    current_user: User = Depends(get_current_user),
+):
+    """Vorschau einer Bulk-Aenderung (F1 3.2): Diff je RRset, Probleme, fertiger Request-Body fuer ``/bulk``.
+
+    Nur mit Schreibrecht auf die Zone (keine Probe-Requests fuer Leser); schreibt nichts, kein Audit/Webhook.
+    """
+    await assert_zone_access(db, current_user, zone_id, write=True)
+    return await bulk_service.preview_bulk(db, current_user, server_name, zone_id, req)
+
+
 @router.post("/{server_name}/{zone_id:path}/bulk", response_model=MessageResponse)
 async def bulk_update_records(
     server_name: str,
@@ -253,85 +245,14 @@ async def bulk_update_records(
     db: DbWrite,
     current_user: User = Depends(get_current_user),
 ):
-    """Bulk record operations (2.4.1-Semantik, Primary zuerst; je Server ein atomarer PATCH).
+    """Bulk-Aenderung (F1 3.3): je Server ein Plan und ein atomarer PATCH, Primary zuerst.
 
-    Audit ``BULK_UPDATE`` im v2-Format (eine Zeile, ``changes`` fuer alle beruehrten RRsets, Vorher-Zustand vor
-    dem Schreiben gelesen). Den Umbau mit Vorschau und strikter Peer-Planung liefert F1.
+    ``create`` = REPLACE, ``delete`` (RRset oder Wert), ``merge``, ``set_ttl``, ``set_disabled``; ``expected``
+    -> 409 bei zwischenzeitlicher Aenderung (``force`` nur per API). Audit ``BULK_UPDATE`` v2 mit allen
+    ``changes``, Webhook ``record.bulk``, PTR-Pflege ueber ``manage_ptr``.
     """
     await assert_zone_access(db, current_user, zone_id, write=True)
-    await _assert_lua_allowed(db, current_user, [r.type for r in bulk.create])
-    zone_norm = normalize_zone_name(zone_id)
-
-    rrsets = []
-    for record in bulk.create:
-        rrsets.append({
-            "name": record.name,
-            "type": record.type,
-            "ttl": record.ttl,
-            "changetype": "REPLACE",
-            "records": [
-                {"content": r.content, "disabled": r.disabled}
-                for r in record.records
-            ],
-        })
-    value_deletes = []  # Einzelwerte (mit content) werden je Server aus dessen Stand berechnet
-    for record in bulk.delete:
-        if record.content is not None:
-            value_deletes.append(record)
-            continue
-        rrsets.append({
-            "name": record.name,
-            "type": record.type,
-            "changetype": "DELETE",
-        })
-
-    if not rrsets and not value_deletes:
-        raise HTTPException(status_code=400, detail="No records to process")
-
-    targets, info = await _writable_targets_for_zone(db, zone_id, server_name)
-    if not targets:
-        raise _read_only_error(server_name)
-
-    keys = [rr_key(r.name, r.type) for r in bulk.create] + [rr_key(r.name, r.type) for r in bulk.delete]
-    fan, capture, primary_client = await _run_fanout(
-        db, server_name=server_name, zone_id=zone_id, targets=targets, info=info, keys=keys,
-        builder=_bulk_builder(rrsets, value_deletes),
-    )
-    legacy = {"created": len(bulk.create), "deleted": len(bulk.delete)}
-    change = await describe_change(fan, capture, primary_client, zone_id, zone_norm, legacy=legacy,
-                                   extra={"source": "api"})
-
-    if not fan.primary_success:
-        exc = _primary_failure(
-            fan, zone_id=zone_id, server_name=server_name,
-            not_found_detail=_missing_value_detail(capture.zone_json, value_deletes) if value_deletes else None,
-        )
-        await _log_action(
-            db, "BULK_UPDATE", zone_id, server_name, change.details, status="error",
-            error_message=str(exc.detail), user_id=current_user.id, zone_name=zone_norm,
-        )
-        raise exc
-
-    audit = await _log_action(
-        db, "BULK_UPDATE", zone_id, server_name, change.details,
-        user_id=current_user.id, zone_name=zone_norm,
-    )
-
-    from app.services.webhook_outbox import enqueue_event
-    await enqueue_event(
-        db, "record.bulk", actor=current_user, zone=zone_norm, server=server_name,
-        data={"server": server_name, "zone": zone_id, "created": len(bulk.create), "deleted": len(bulk.delete)},
-        audit_log_id=audit.id if audit else None,
-    )
-
-    return MessageResponse(
-        message=f"Bulk update completed: {len(bulk.create)} created/updated, {len(bulk.delete)} deleted",
-        details={
-            "created": len(bulk.create),
-            "deleted": len(bulk.delete),
-            "fanout": fan.summary,
-        },
-    )
+    return await bulk_service.apply_bulk(db, current_user, server_name, zone_id, bulk)
 
 
 @router.post("/{server_name}/{zone_id:path}", response_model=MessageResponse)
@@ -375,6 +296,7 @@ async def create_record(
         )
         raise exc
 
+    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change, ttl_default=record.ttl)
     audit = await _log_action(
         db, "CREATE", record.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,
@@ -391,13 +313,14 @@ async def create_record(
     await enqueue_event(
         db, "record.created", actor=current_user, zone=zone_norm, server=server_name,
         data={"server": server_name, "zone": zone_id, "name": record.name, "type": record.type,
-              "ttl": record.ttl, "added": added, **webhook_changes(change.changes), "fanout": fan.summary},
+              "ttl": record.ttl, "added": added, **webhook_changes(change.changes), "fanout": fan.summary,
+              **_ptr_data(ptr)},
         audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(
         message=f"Record '{record.name}' ({record.type}) created/updated in zone '{zone_id}'",
-        details=fan.summary,
+        details=_with_ptr(fan.summary, ptr),
     )
 
 
@@ -440,6 +363,7 @@ async def delete_record(
         )
         raise exc
 
+    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change)
     audit = await _log_action(
         db, "DELETE", record.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,
@@ -449,7 +373,8 @@ async def delete_record(
     await enqueue_event(
         db, "record.deleted", actor=current_user, zone=zone_norm, server=server_name,
         data={"server": server_name, "zone": zone_id, "name": record.name, "type": record.type,
-              "content": record.content, **webhook_changes(change.changes), "fanout": fan.summary},
+              "content": record.content, **webhook_changes(change.changes), "fanout": fan.summary,
+              **_ptr_data(ptr)},
         audit_log_id=audit.id if audit else None,
     )
 
@@ -459,7 +384,7 @@ async def delete_record(
             if record.content is not None
             else f"Record '{record.name}' ({record.type}) deleted from zone '{zone_id}'"
         ),
-        details=fan.summary,
+        details=_with_ptr(fan.summary, ptr),
     )
 
 
@@ -498,6 +423,7 @@ async def update_record(
         )
         raise exc
 
+    ptr = await _ptr_hook(db, current_user, server_name, update.manage_ptr, change, ttl_default=update.ttl)
     audit = await _log_action(
         db, "UPDATE", update.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,
@@ -508,11 +434,11 @@ async def update_record(
         db, "record.updated", actor=current_user, zone=zone_norm, server=server_name,
         data={"server": server_name, "zone": zone_id, "name": update.name, "type": update.type,
               "ttl": update.ttl, "old_content": update.old_content, "new_content": update.new_content,
-              **webhook_changes(change.changes), "fanout": fan.summary},
+              **webhook_changes(change.changes), "fanout": fan.summary, **_ptr_data(ptr)},
         audit_log_id=audit.id if audit else None,
     )
 
     return MessageResponse(
         message=f"Record '{update.name}' ({update.type}) updated in zone '{zone_id}'",
-        details=fan.summary,
+        details=_with_ptr(fan.summary, ptr),
     )
