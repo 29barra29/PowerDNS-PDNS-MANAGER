@@ -80,6 +80,51 @@ def test_normalization_type_and_chunks():
     assert lr.normalize_lua_content("a  \"x(\"   \")\" ") == 'A "x(" ")"'
 
 
+# --------------------------------------------------------------------------- Review Welle 3: ReDoS
+def _timed(fn, *args):
+    import time
+
+    t = time.perf_counter()
+    res = fn(*args)
+    return res, time.perf_counter() - t
+
+
+@pytest.mark.parametrize("bad", [
+    "A x" + " " * 1_000_000 + "y",  # frueher quadratisch (lazy (.*?) + \\s*$): 32 KB ~4,5 s
+    "A x" + " " * 60_000 + "y",  # knapp unter LUA_NORMALIZE_MAX_LENGTH: echter Normalisierungs-Pfad
+    "A " + '"a" ' * 16_000 + "x",
+    'A "' + "\\" * 60_000,
+    "A" * 60_000 + " " * 5_000 + "y",
+])
+def test_normalize_lua_content_linear_time(bad):
+    _, dt = _timed(lr.normalize_lua_content, bad)
+    assert dt < 0.05, f"normalize_lua_content zu langsam: {dt:.3f} s"
+
+
+def test_normalize_lua_content_semantics_unchanged():
+    n = lr.normalize_lua_content
+    assert n("  a \t \"x()\"   ") == 'A "x()"'
+    assert n('a  "x("   ")" ') == 'A "x(" ")"'
+    assert n("A x   y  ") == "A x   y"  # keine gueltige Abschnittsfolge: Rest nur getrimmt
+    assert n("A") == "A" and n("   A   ") == "A"
+    assert n('A-B "x"') == 'A-B "x"'  # Typ nicht alphanumerisch -> nur strip()
+    assert n('\u00e4 "x"') == '\u00e4 "x"'  # Nicht-ASCII-Typ wie bisher nicht normalisiert
+    assert n('a\u00a0"x"') == 'A "x"'  # Unicode-Leerraum wie \\s im frueheren Regex
+    big = "a " + "x" * (lr.LUA_NORMALIZE_MAX_LENGTH + 1)
+    assert n("  " + big + "  ") == big  # oberhalb der Grenze nur strip()
+
+
+def test_bulk_delete_with_pathological_lua_content_is_fast():
+    """Der gemeldete Pfad: Bulk-Loeschung (ohne bestehendes LUA-RRset) -> content_key -> normalize_lua_content."""
+    from app.schemas.bulk import BulkRecordUpdate
+    from app.services.bulk import build_plan
+
+    zone = make_zone(Z, [rr(Z, "SOA", "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600")])
+    ops = BulkRecordUpdate(delete=[{"name": f"www.{Z}", "type": "LUA", "content": "A x" + " " * 60_000 + "y"}])
+    _, dt = _timed(lambda: build_plan(Z, zone, ops, strict=True))
+    assert dt < 0.5, f"build_plan zu langsam: {dt:.3f} s"
+
+
 def test_long_strings_and_comments_valid():
     assert lr.validate_lua_content("A \"[[ ( ]] .. pickrandom({'1.2.3.4'}) -- ( kommentar\"")
 

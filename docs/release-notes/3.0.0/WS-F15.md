@@ -21,7 +21,9 @@
 - **Filter in der Zonenansicht** (für alle Typen): Name, Typ oder Wert durchsuchen, Typ auswählen, „x von y Einträgen“;
   ESC leert das Feld. Ausgewählte, aber ausgeblendete Einträge (Bulk-Editor) werden gemeldet.
 - **Zonen-Import**: Die Vorschau versteht LUA- und ALIAS-Zeilen (vorher Parse-Fehler), zeigt die Anzahl der
-  LUA-Records und Auffälligkeiten je Zeile. Ist LUA deaktiviert, sperrt das Panel den Import solcher Dateien.
+  LUA-Records und Auffälligkeiten je Zeile. Ist LUA deaktiviert, sperrt das Panel den Import solcher Dateien und
+  nennt die betroffenen Zeilen. Geprüft wird streng so, wie PowerDNS die Datei liest (auch Schreibweisen wie
+  `www 300 IN IN LUA …`, `TYPE65402`, `$GENERATE` und `$INCLUDE`); im Zweifel wird gesperrt.
 - Zonen-Vorlagen: LUA-Zeilen werden beim Speichern geprüft; die Policy gilt beim Anwenden der Vorlage.
 - Audit-Log: neue Aktion „LUA-Einstellungen geändert“ (`LUA_SETTINGS_UPDATE`, alter und neuer Wert).
 - Alle Texte in Deutsch, Englisch, Bosnisch, Kroatisch, Ungarisch und Serbisch.
@@ -43,8 +45,9 @@
 - Record-Endpunkte: Typ `LUA`, Inhalt `<Ziel-Typ> "<Lua-Code>"` (höchstens 4000 Zeichen, keine doppelten
   Anführungszeichen im Code); 403 mit Policy-Text („LUA-Records dürfen nur Administratoren anlegen oder ändern.“ bzw.
   „… sind in diesem Panel deaktiviert …“); Löschen ist immer erlaubt.
-- `POST /api/v1/zones/import/preview`: zusätzlich `lua_count`, `lua_issues`, `lua_policy`, `lua_blocked`;
-  `POST /api/v1/zones/import`: 403, wenn LUA deaktiviert ist und die Datei LUA-Records enthält.
+- `POST /api/v1/zones/import/preview`: zusätzlich `lua_count`, `lua_issues`, `lua_policy`, `lua_blocked`,
+  `lua_blocked_lines`; `POST /api/v1/zones/import`: 403, wenn LUA deaktiviert ist und die Datei LUA-Records enthält
+  (Text endet mit „Betroffene Zeilen: …“).
 
 **Nach dem Update prüfen**
 - Wer LUA-Records nutzen will: `enable-lua-records=yes` (oder `shared`) in die `pdns.conf` **jedes** Servers, der die
