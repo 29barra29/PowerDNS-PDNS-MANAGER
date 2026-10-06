@@ -32,6 +32,9 @@ DEFAULT_LUA_POLICY = "admin"
 LUA_TARGET_TYPES = ("A", "AAAA", "CNAME", "TXT", "MX", "SRV", "PTR", "CAA",
                     "NAPTR", "LOC", "SPF", "HTTPS", "SVCB", "SSHFP", "TLSA")
 LUA_MAX_CONTENT_LENGTH = 4000  # gesamter Inhalt inkl. Ziel-Typ und Anfuehrungszeichen
+# Obergrenze fuer die Vergleichs-Normalisierung (Bulk-Loeschungen, Import-Diff): laengere Inhalte werden nur
+# getrimmt. PowerDNS speichert hoechstens 64000 Zeichen je Inhalt, echte Records liegen also immer darunter.
+LUA_NORMALIZE_MAX_LENGTH = 65536
 LUA_STATUS_CACHE_TTL = 60.0  # Sekunden (Server-Status)
 GEO_FUNCTIONS = ("pickclosest", "country", "countryCode", "continent", "continentCode",
                  "region", "regionCode", "latlon", "latlonloc", "closestMagic", "asnum")
@@ -59,7 +62,6 @@ _CHUNKS = re.compile(r"^" + _CHUNK + r"(?:\s+" + _CHUNK + r")*$", re.S)
 _CHUNK_RE = re.compile(_CHUNK, re.S)
 _CHUNK_CONTENT = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_NORMALIZE_RE = re.compile(r"^\s*([A-Za-z0-9]+)\s+(.*?)\s*$", re.S)
 _GEO_RE = re.compile(r"\b(" + "|".join(GEO_FUNCTIONS) + r")\s*\(")
 LONG_OPEN = re.compile(r"\[(=*)\[")
 _PAIRS = {")": "(", "]": "[", "}": "{"}
@@ -177,15 +179,21 @@ def normalize_lua_content(content: str) -> str:
     """Tolerante Normalisierung fuer Vergleiche (wirft nie): Ziel-Typ gross, genau ein Leerzeichen.
 
     Gueltige ``"…" "…"``-Abschnittsfolgen werden wie bei PowerDNS mit genau einem Leerzeichen verbunden.
+    Laufzeit linear in der Eingabelaenge (kein Backtracking-Regex: der Inhalt kommt ungeprueft aus
+    Bulk-Loeschungen und Importdateien); ab ``LUA_NORMALIZE_MAX_LENGTH`` Zeichen nur ``strip()``.
     """
-    s = content if isinstance(content, str) else str(content or "")
-    m = _NORMALIZE_RE.match(s)
-    if not m:
-        return s.strip()
-    rest = m.group(2)
+    s = (content if isinstance(content, str) else str(content or "")).strip()
+    if len(s) > LUA_NORMALIZE_MAX_LENGTH:
+        return s
+    parts = s.split(None, 1)
+    if len(parts) != 2:
+        return s
+    typ, rest = parts  # rest ist durch strip()/split() an beiden Enden getrimmt
+    if not (typ.isascii() and typ.isalnum()):
+        return s
     if _CHUNKS.match(rest):
         rest = _join_chunks(rest)
-    return f"{m.group(1).upper()} {rest}"
+    return f"{typ.upper()} {rest}"
 
 
 def uses_geo_functions(content: str) -> bool:
