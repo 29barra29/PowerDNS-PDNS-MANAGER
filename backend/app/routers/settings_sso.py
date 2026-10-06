@@ -15,6 +15,10 @@ nicht auf einen fremden Anmeldedienst umbiegen.
   Secret wird nur benutzt, wenn alle Zielfelder unveraendert sind (``guard_secret_retarget`` in
   ``sso_settings.build_test_config``, sonst 400) [S3]. Antwort immer 200 (``success``/``error``). Audit
   ``SSO_SETTINGS_TEST`` mit Ziel, Issuer bzw. Server, Ergebnis – ohne Werte, ohne Testpasswort.
+  Ein LDAP-Test MIT Testpasswort ist eine Passwortpruefung gegen das Verzeichnis: Er laeuft durch die
+  Login-Fehlversuchszaehler (IP und Testbenutzername, wie die Anmeldung [S2]); ein nicht bestaetigtes Passwort zaehlt
+  als Fehlversuch, gesperrt -> 429 (WS-W3-NACHARBEIT, Review-Fund L-1: kein Passwort-Orakel, keine AD-Sperren durch
+  beliebig viele Testversuche).
 """
 from __future__ import annotations
 
@@ -23,13 +27,15 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import get_admin_session_user, verify_step_up
+from app.core.client_ip import get_client_ip
 from app.core.config import settings as app_settings
 from app.core.database import DbRead, DbWrite
+from app.core.login_rate_limit import is_login_rate_limited, record_failed_login
 from app.core.timeutil import utcnow
 from app.models.models import User
 from app.schemas.sso import SsoSettingsUpdate, SsoTestRequest
@@ -44,6 +50,7 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 
 SAVED_MESSAGE = "SSO-Einstellungen gespeichert"
 TEST_FAILED_MESSAGE = "SSO-Test fehlgeschlagen"
+TEST_RATE_LIMIT_DETAIL = "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen."
 
 
 def _settings_out(cfg: sso_settings.SsoConfig, *, linked: dict[str, int]) -> dict:
@@ -107,13 +114,27 @@ def _test_target_details(req: SsoTestRequest, cfg: sso_settings.SsoConfig) -> di
             "password_checked": bool(req.test_password)}
 
 
+def _password_confirmed(result: dict) -> bool:
+    """Hat der LDAP-Test das Testpasswort bestaetigt (``details.user.password_ok is True``)?"""
+    details = result.get("details") if isinstance(result, dict) else None
+    user = details.get("user") if isinstance(details, dict) else None
+    return bool(result.get("success")) and isinstance(user, dict) and user.get("password_ok") is True
+
+
 @router.post("/sso/test")
 async def test_sso_settings(
     req: SsoTestRequest,
+    request: Request,
     db: DbWrite,
     admin: User = Depends(get_admin_session_user),
 ):
-    """Verbindungstest mit den Formularwerten (F10 3.3.3); Antwort immer 200 mit ``success``."""
+    """Verbindungstest mit den Formularwerten (F10 3.3.3); Antwort 200 mit ``success`` (429 bei gesperrtem Zaehler)."""
+    # LDAP mit Testpasswort = Passwortpruefung: Login-Zaehler wie bei der Anmeldung (L-1)
+    password_test = req.target == "ldap" and bool(req.test_password)
+    test_name = (req.test_username or "").strip()
+    client_ip = get_client_ip(request) or "unknown"
+    if password_test and is_login_rate_limited(client_ip, test_name):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TEST_RATE_LIMIT_DETAIL)
     # SecretReentryRequired (Ziel geaendert, Secret nicht neu eingegeben) -> 400 ueber den globalen Handler [S3]
     cfg = await sso_settings.build_test_config(db, req)
     try:
@@ -126,6 +147,9 @@ async def test_sso_settings(
         result = {"success": False, "message": None, "error": f"Unerwarteter Fehler: {type(exc).__name__}",
                   "warnings": [], "details": {}}
     ok = bool(result.get("success"))
+    if password_test and not _password_confirmed(result):
+        # falsches Passwort, unbekannter Benutzer, Verzeichnis gestoert: zaehlt wie ein Fehlversuch [S2]
+        record_failed_login(client_ip, test_name)
     details = _test_target_details(req, cfg)
     details["success"] = ok
     await write_audit(

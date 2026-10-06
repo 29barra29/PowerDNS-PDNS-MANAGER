@@ -155,7 +155,8 @@ _ENUMS: dict[str, frozenset[str]] = {
 # Felder, deren Aenderung einen Step-up verlangt (WS-F10-APP-BE, S8). Plan-Liste plus alles, was Gruppen- bzw.
 # Rollenzuordnung, Vertrauensanker oder Freigaben beeinflusst (strenger als die Mindestliste).
 SENSITIVE_FIELDS: dict[str, frozenset[str]] = {
-    "general": frozenset({"local_login_enabled"}),
+    # require_totp: "2FA nach OIDC" abschalten schwaecht jede SSO-Anmeldung -> Step-up (Review-Fund L-2)
+    "general": frozenset({"local_login_enabled", "require_totp"}),
     "oidc": frozenset({
         "enabled", "issuer", "client_id", "token_auth_method", "jit_enabled", "jit_allow_any_account",
         "role_mode", "admin_groups", "allowed_groups", "allowed_email_domains", "groups_claim",

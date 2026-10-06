@@ -121,7 +121,7 @@ export function isSafeUniqueIdAttr(attr) {
 // Felder, deren Aenderung das Backend nur mit Step-up annimmt (services/sso_settings.SENSITIVE_FIELDS) [S8].
 // Das Frontend fragt bei lokalen Konten vorab; massgeblich bleibt die Antwort des Backends (403 stepup_required).
 export const SENSITIVE_FIELDS = Object.freeze({
-    general: Object.freeze(['local_login_enabled']),
+    general: Object.freeze(['local_login_enabled', 'require_totp']),
     oidc: Object.freeze([
         'enabled', 'issuer', 'client_id', 'token_auth_method', 'jit_enabled', 'jit_allow_any_account',
         'role_mode', 'admin_groups', 'allowed_groups', 'allowed_email_domains', 'groups_claim',

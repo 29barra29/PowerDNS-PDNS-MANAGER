@@ -742,6 +742,43 @@ def test_settings_test_ldap_success_audit_without_values(env, monkeypatch):
     assert "geheim-test-1" not in str(audit.details) and "bind-pw-1" not in str(audit.details)
 
 
+def test_settings_test_ldap_password_counts_as_failed_login(env, monkeypatch):
+    """L-1 (WS-W3-NACHARBEIT): Ein LDAP-Test mit falschem Testpasswort zaehlt im Login-Limiter (IP + Testbenutzer);
+    nach der Sperre 429 ohne Verzeichnis-Abfrage. Ohne Testpasswort und bei bestaetigtem Passwort zaehlt nichts."""
+    env.set_settings(**LDAP_ON)
+    admin = env.add_user("root", role="admin")
+    calls = []
+
+    async def fake_test(cfg, user, password, **_kw):
+        calls.append(password)
+        ok = password == "richtig-1"
+        return {"success": ok, "message": None, "error": None if ok else "Passwort des Testbenutzers falsch",
+                "warnings": [], "details": {"user": {"dn": "CN=t", "password_checked": True, "password_ok": ok}}}
+
+    monkeypatch.setattr(sso_ldap, "test_connection", fake_test)
+    c = env.client()
+
+    def run(password=None, username="t.user"):
+        body = {"target": "ldap", "test_username": username}
+        if password is not None:
+            body["test_password"] = password
+        return c.post("/api/v1/settings/sso/test", headers=session_headers(admin), json=body)
+
+    assert run("richtig-1").json()["success"] is True
+    assert not lrl.is_login_rate_limited("testclient", "t.user")
+    for _ in range(3):
+        assert run().status_code == 200          # nur Benutzersuche: kein Zaehler
+    for i in range(5):
+        r = run(f"falsch-{i}")
+        assert r.status_code == 200 and r.json()["success"] is False
+    assert lrl.is_login_rate_limited("203.0.113.9", "t.user")   # Name gesperrt, auch fuer die Anmeldung
+    before = len(calls)
+    r = run("richtig-1")
+    assert r.status_code == 429 and len(calls) == before
+    assert run().status_code == 200              # ohne Passwort weiter moeglich
+    assert run("x", username="anderer").status_code == 200
+
+
 def test_settings_test_retarget_needs_secret(env, monkeypatch):
     env.set_settings(**LDAP_ON)
     admin = env.add_user("root", role="admin")
