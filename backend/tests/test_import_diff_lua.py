@@ -365,3 +365,72 @@ def test_import_preview_reports_lua_fields(pdns, policy, blocked):
     assert body["lua_policy"] == (policy or "admin")
     assert body["lua_blocked"] is blocked
     assert body["lua_blocked_lines"] == ([3] if blocked else [])
+
+
+# --------------------------------------------------------------------------- WS-W3-NACHARBEIT: W3-L4, W3-L5
+def test_lone_surrogate_line_and_rewrite_never_raises():
+    """W3-L4: einzelne UTF-16-Surrogate (JSON-Escape) -> Zeile bekannt; der Scanner wirft nicht mehr."""
+    text = HEADER + 'www 60 IN LUA A "f(\ud800)"\n'
+    assert zid.lone_surrogate_line(text) == 5
+    assert zid.lone_surrogate_line(HEADER) is None and zid.lone_surrogate_line(None) is None
+    assert zid.lone_surrogate_line("a\nb\n\udfff") == 3
+    out, found = zid.rewrite_passthrough_records(text, "example.com")   # vorher UnicodeEncodeError
+    assert found and found[0].type == "LUA" and "TYPE65402 \\# " in out
+    res = zid.build_import_diff("example.com", text, None)
+    assert res["lua_count"] == 1
+
+
+@pytest.mark.parametrize("path", ["/api/v1/zones/import/preview", "/api/v1/zones/import"])
+def test_import_routes_reject_lone_surrogate_with_400(pdns, path):
+    import json
+
+    body = dict(IMPORT_BODY, content=IMPORT_BODY["content"] + "txt 60 IN TXT \"\udc80\"\n")
+    # wie ein Browser/Skript: JSON-Escape "\\udc80" (json.dumps mit ensure_ascii)
+    r = _admin_client("admin").post(path, content=json.dumps(body), headers={"Content-Type": "application/json"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "Die Zonendatei enthält ein ungültiges Zeichen (einzelnes UTF-16-Surrogat) in Zeile 4."
+    assert pdns.get_client_calls == [] and pdns.calls == []
+
+
+def _lua_wire(rtype_code: int, code: str) -> bytes:
+    raw = code.encode()
+    out = rtype_code.to_bytes(2, "big")
+    for i in range(0, len(raw), 255):
+        chunk = raw[i:i + 255]
+        out += bytes([len(chunk)]) + chunk
+    return out
+
+
+def test_generic_wire_format_read_like_powerdns():
+    """W3-L5: TYPE65402/TYPE65401 im RFC-3597-Wire-Format (z. B. PowerDNS-Export) -> gleicher Text wie PowerDNS."""
+    code = "ifportup(443, {'192.0.2.1', '192.0.2.2'})"
+    lua = _lua_wire(1, code)                                   # Ziel-Typ A
+    long_code = "x" * 300                                      # zwei Zeichenketten (255 + 45)
+    lua_long = _lua_wire(16, long_code)                        # TXT
+    alias = b"\x03www\x07example\x03net\x00"
+    text = (HEADER
+            + f"g IN TYPE65402 \\# {len(lua)} {lua.hex()}\n"
+            + f"h IN TYPE65402 \\# {len(lua_long)} {lua_long.hex()}\n"
+            + f"@ IN TYPE65401 \\# {len(alias)} {alias.hex()}\n")
+    res = zid.build_import_diff("example.com", text, None)
+    assert res["parse_error"] is None and res["lua_count"] == 2
+    adds = {(a["name"], a["type"]): a["content"] for a in res["would_add"]}
+    assert adds[("g.example.com.", "LUA")] == normalize_lua_content(f'A "{code}"')
+    assert adds[("h.example.com.", "LUA")] == normalize_lua_content(f'TXT "{long_code}"')
+    assert adds[("example.com.", "ALIAS")] == "www.example.net."
+    # Panel-Schreibweise (Praesentationstext als Hex) bleibt wie bisher
+    data = LUA_A.encode()
+    res = zid.build_import_diff("example.com", HEADER + f"g IN TYPE65402 \\# {len(data)} {data.hex()}\n", None)
+    assert {"name": "g.example.com.", "type": "LUA", "content": LUA_A} in res["would_add"]
+
+
+@pytest.mark.parametrize("data", [
+    b"\x00\x01\x05ab",           # Laengenbyte zu gross
+    b"\xff\xfe\x01a",            # unbekannter Typ
+    b"\x00\x01",                 # kein Code
+    b"\x00\x01\x02\xff\xfe",     # kein UTF-8
+])
+def test_generic_wire_detection_falls_back(data):
+    assert zid._wire_text("LUA", data) is None
+    assert zid._wire_text("ALIAS", b"\x03www\x00extra") is None
+    assert zid._wire_text("ALIAS", b"\x03www\x00") == "www."
