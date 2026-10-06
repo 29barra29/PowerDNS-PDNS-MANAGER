@@ -15,6 +15,7 @@ Compose-Projekt `pdnsmgr-e2e` und beruehrt eine parallel laufende Produktion nic
 | `webhook-receiver.py` | Webhook-Empfaenger (nur Standardbibliothek) |
 | `pdns.conf` | gemeinsame PowerDNS-Einstellungen beider Testserver |
 | `checks/` | Check-Framework (`__init__.py`), Basis-Checks (`base.py`), Feature-Checks je Workstream, [ctx-API](checks/README.md) |
+| `ui/` | UI-Smoke-Tests (Playwright/Chromium im Container gegen den E2E-Stack), Start ueber `run-e2e.sh --ui`; Details in [ui/README.md](ui/README.md) |
 
 ## Sicherheit: Produktion nicht beruehren
 
@@ -38,12 +39,15 @@ Aus der Wurzel des Checkouts (Worktree):
 ```bash
 scripts/e2e/run-e2e.sh                     # baut pdnsmgr-e2e:local, Neuinstallation, alle check_fresh
 scripts/e2e/upgrade-241-to-30.sh --no-build # nutzt das Image, Upgrade v2.4.1 -> aktueller Stand
+scripts/e2e/upgrade-241-to-30.sh --no-build --with-downgrade # zusaetzlich Downgrade auf 2.4.1 und Re-Upgrade
+scripts/e2e/run-e2e.sh --no-build --ui     # Neuinstallation + UI-Smoke-Tests (Playwright)
 scripts/e2e/static-checks.sh               # statische Regeln (vor Wellenende 0b: --legacy-ok)
 ```
 
 Optionen (beide Lauf-Skripte): `--no-build` (vorhandenes Image), `--keep` (Umgebung stehen lassen,
 Abbau spaeter mit `scripts/e2e/run-e2e.sh --down`), `--only base,f5` (nur diese Check-Module).
-`run-e2e.sh --list` zeigt die gefundenen Module. `upgrade-241-to-30.sh --ref <tag>` waehlt den
+`run-e2e.sh --list` zeigt die gefundenen Module. `run-e2e.sh --ui` fuehrt nach den API-Checks die
+UI-Smoke-Tests aus, `--ui-only` nur diese (Playwright-Argumente per `E2E_UI_ARGS`, siehe `ui/README.md`). `upgrade-241-to-30.sh --ref <tag>` waehlt den
 Altstand (Default `v2.4.1`, braucht die Git-Tags).
 
 Umgebung: `E2E_IMAGE` (Default `pdnsmgr-e2e:local`), `E2E_WORKDIR` (Arbeitsordner, Default `mktemp`),
@@ -72,8 +76,8 @@ aller Module (`base` zuerst, dann alphabetisch) → Abbau.
 Backend des aktuellen Stands starten (erster Start migriert) → `check_upgrade(ctx)` →
 `docker compose restart backend` → `check_upgrade_restart(ctx)` (Module ohne diese Funktion werden
 uebersprungen) → Abbau. Der 2.4.1-Code laeuft dabei im aktuellen Image (gleiche oder neuere
-Paketversionen), nicht in einem echten 2.4.1-Image; ein Downgrade-Test (F5) braucht dafuer ein
-eigenes 2.4.1-Image.
+Paketversionen), nicht in einem echten 2.4.1-Image. `--with-downgrade` prueft zusaetzlich den Weg
+`prepare-downgrade` -> 2.4.1-Code -> erneuter Start des aktuellen Stands (Bauplan A.8, `checks/f5.py`).
 
 ## Webhook-Empfaenger
 
