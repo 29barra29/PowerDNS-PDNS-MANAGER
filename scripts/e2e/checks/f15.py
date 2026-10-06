@@ -36,13 +36,19 @@ def _lua(ip: str) -> str:
 
 
 def _dns_a(ctx, host: str, name: str) -> list[str]:
-    """A-Antwort von ``host`` (pdns1/pdns2, Port 53) fuer ``name``; [] bei leerer Antwort."""
+    """A-Antwort von ``host`` (pdns1/pdns2, Port 53) fuer ``name``; [] bei leerer Antwort oder voruebergehendem
+    Fehler (Timeout, Aufloesung) – ``ctx.wait_until`` wiederholt dann."""
+    import dns.exception
     import dns.message
     import dns.query
     import dns.rdatatype
 
-    ip = socket.gethostbyname(host)
-    resp = dns.query.udp(dns.message.make_query(name, "A"), ip, timeout=5, port=53)
+    try:
+        ip = socket.gethostbyname(host)
+        resp = dns.query.udp(dns.message.make_query(name, "A"), ip, timeout=5, port=53)
+    except (OSError, dns.exception.DNSException) as exc:
+        ctx.log(f"DNS-Abfrage {name} @{host}: {type(exc).__name__}")
+        return []
     return sorted(rd.to_text() for rrset in resp.answer if rrset.rdtype == dns.rdatatype.A for rd in rrset)
 
 
