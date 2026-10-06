@@ -1,0 +1,81 @@
+# UI-Smoke-Tests: Ergaenzung zu ../compose.e2e.yaml (Profil "ui").
+#
+# NUR ueber scripts/e2e/ui/run.sh bzw. scripts/e2e/run-e2e.sh --ui benutzen; die Skripte setzen
+# Projektname, Variablen, Lock und Kapazitaets-Slot:
+#   docker compose -p pdnsmgr-e2e -f scripts/e2e/compose.e2e.yaml -f scripts/e2e/ui/compose.ui.yaml --profile ui ...
+#
+# Relative Pfade gelten vom Projektverzeichnis aus (= Ordner der ERSTEN Datei, scripts/e2e).
+#
+# - ui:            Playwright (Chromium headless) im E2E-Netz; spricht das Backend als http://backend:8000 an.
+#                  Version fest gepinnt (gleiche Version wie @playwright/test in package.json).
+# - setup-backend: zweite Backend-Instanz mit eigener, leerer Datenbank (dns_manager_setup) und
+#                  ENABLE_REGISTRATION=true, nur fuer den Einrichtungsassistenten (frische Installation).
+#                  Kein INITIAL_ADMIN_PASSWORD, keine PowerDNS-Server.
+services:
+  ui:
+    image: ${E2E_UI_IMAGE:-mcr.microsoft.com/playwright:v1.63.0-noble}
+    container_name: pdnsmgr-e2e-ui
+    profiles: ["ui"]
+    restart: "no"
+    networks:
+      - e2e
+    init: true
+    user: "${E2E_UID:-1000}:${E2E_GID:-1000}"
+    working_dir: /out
+    entrypoint: ["bash", "/ui-src/container-run.sh"]
+    volumes:
+      - ./ui:/ui-src:ro
+      # Sprachdateien fuer die Selektoren; E2E_UI_LOCALES_DIR erlaubt einen anderen Stand (z. B. Vorschau-Merge)
+      - ${E2E_UI_LOCALES_DIR:-../../frontend/src/locales}:/locales:ro
+      - ${E2E_UI_OUT:?E2E_UI_OUT fehlt - scripts/e2e/ui/run.sh benutzen}:/out
+      - ${E2E_UI_NPM_CACHE:?E2E_UI_NPM_CACHE fehlt - scripts/e2e/ui/run.sh benutzen}:/npm-cache
+    environment:
+      HOME: /out/home
+      npm_config_cache: /npm-cache
+      npm_config_update_notifier: "false"
+      CI: "${CI:-}"
+      E2E_UI_OUT: /out
+      E2E_UI_LOCALES: /locales
+      E2E_BASE_URL: http://backend:8000
+      E2E_SETUP_URL: ${E2E_UI_SETUP_URL-http://setup-backend:8000}
+      E2E_RECEIVER_URL: http://receiver:8080
+      # PowerDNS direkt (Testwerte aus compose.e2e.yaml), z. B. um einen Peer-Konflikt zu erzeugen
+      E2E_PDNS: "ns1=http://pdns1:8081|${E2E_PDNS1_KEY:-e2ekey},ns2=http://pdns2:8081|${E2E_PDNS2_KEY:-e2ekey2}"
+      # Panel-Datenbank (Testwerte wie Dienst "tools" in compose.e2e.yaml) fuer Zustaende ohne API (fixtures/db.js)
+      E2E_DB_HOST: db
+      E2E_DB_PORT: "3306"
+      E2E_DB_NAME: dns_manager
+      E2E_DB_USER: root
+      E2E_DB_PASSWORD: e2e_root
+      E2E_ADMIN_USER: admin
+      E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-}
+      E2E_UI_PENDING: ${E2E_UI_PENDING:-}
+      E2E_UI_RETRIES: ${E2E_UI_RETRIES:-1}
+    shm_size: "512m"
+    mem_limit: 1536m
+    cpus: 1.0
+
+  setup-backend:
+    image: ${E2E_IMAGE:-pdnsmgr-e2e:local}
+    container_name: pdnsmgr-e2e-api-setup
+    profiles: ["ui"]
+    restart: "no"
+    networks:
+      - e2e
+    environment:
+      DATABASE_URL: mysql+aiomysql://dns_admin:e2e_db_pass@db:3306/dns_manager_setup
+      JWT_SECRET_KEY: ${E2E_SETUP_JWT_SECRET:-}
+      APP_NAME: PDNS Manager E2E Setup
+      LOG_LEVEL: ${E2E_LOG_LEVEL:-info}
+      DEFAULT_LANGUAGE: de
+      ENABLE_REGISTRATION: "true"
+      AUTH_COOKIE_SECURE: "false"
+      TRUST_PROXY_HEADERS: "false"
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\""]
+      interval: 3s
+      timeout: 6s
+      retries: 60
+      start_period: 5s

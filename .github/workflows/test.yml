@@ -12,6 +12,10 @@ on:
         description: 'E2E-Tests (Neuinstallation + Upgrade 2.4.1 -> aktueller Stand) ausfuehren'
         type: boolean
         default: true
+      e2e_ui:
+        description: 'Im E2E-Job zusaetzlich die UI-Smoke-Tests (Playwright/Chromium, scripts/e2e/ui) ausfuehren'
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -142,8 +146,23 @@ jobs:
       - name: Static checks
         run: scripts/e2e/static-checks.sh
 
-      - name: E2E fresh install
-        run: scripts/e2e/run-e2e.sh
+      # Neuinstallation: API-Checks, danach optional UI-Smoke (Playwright-Container im E2E-Netz, scripts/e2e/ui/README.md)
+      - name: E2E fresh install (+ UI smoke)
+        env:
+          E2E_WORKDIR: ${{ runner.temp }}/e2e-fresh
+        run: scripts/e2e/run-e2e.sh ${{ inputs.e2e_ui && '--ui' || '' }}
+
+      # Nur bei Fehlern: HTML-Bericht der UI-Smoke-Tests (Traces/Screenshots; Zugangsdaten sind Wegwerf-Testwerte)
+      - name: Upload UI smoke report
+        if: failure() && inputs.e2e_ui
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-report
+          path: |
+            ${{ runner.temp }}/e2e-fresh/ui/report
+            ${{ runner.temp }}/e2e-fresh/ui/results.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: E2E upgrade 2.4.1 -> current
         run: scripts/e2e/upgrade-241-to-30.sh --no-build
