@@ -3,7 +3,7 @@
 // verlangen (Benutzer-, Token-, Webhook- und Einstellungsverwaltung).
 const crypto = require('node:crypto')
 const { request } = require('@playwright/test')
-const { BASE_URL, ADMIN_USER, ADMIN_PASSWORD, RECEIVER_URL, SERVERS } = require('./env')
+const { BASE_URL, ADMIN_USER, ADMIN_PASSWORD, RECEIVER_URL, SERVERS, PDNS } = require('./env')
 const { totp } = require('./totp')
 
 const API = '/api/v1'
@@ -131,7 +131,7 @@ class PanelApi {
   // ----- Benutzer ------------------------------------------------------------------------------
   async createUser({ username = unique('uiuser'), password = strongPassword(), role = 'user', ...extra } = {}) {
     const res = await this.post('auth/users', {
-      username, password, role, email: `${username}@e2e.test`, display_name: username, ...extra,
+      username, password, role, email: `${username}@example.com`, display_name: username, ...extra,
     })
     const id = res?.id ?? res?.user?.id
     if (!id) throw new Error(`Benutzer angelegt, aber keine ID: ${JSON.stringify(res)}`)
@@ -181,4 +181,25 @@ const receiver = {
   },
 }
 
-module.exports = { PanelApi, ApiError, receiver, unique, uniqueZone, strongPassword, enc }
+// ----- PowerDNS direkt (am Panel vorbei, z. B. fuer Peer-Konflikte) -------------------------
+const pdns = {
+  async patch(server, zone, rrsets) {
+    const cfg = PDNS[server]
+    if (!cfg?.url) throw new Error(`E2E_PDNS kennt Server ${server} nicht`)
+    const ctx = await request.newContext({ baseURL: cfg.url, extraHTTPHeaders: { 'X-API-Key': cfg.key } })
+    try {
+      const res = await ctx.patch(`/api/v1/servers/localhost/zones/${enc(zone)}`, { data: { rrsets } })
+      if (!res.ok()) throw new Error(`PowerDNS ${server} PATCH ${zone}: ${res.status()} ${await res.text()}`)
+    } finally {
+      await ctx.dispose()
+    }
+  },
+  /** RRset (name/type) mit Werten setzen. */
+  replace(server, zone, name, type, contents, ttl = 300) {
+    return pdns.patch(server, zone, [{
+      name, type, ttl, changetype: 'REPLACE', records: [].concat(contents).map((content) => ({ content, disabled: false })),
+    }])
+  },
+}
+
+module.exports = { PanelApi, ApiError, receiver, pdns, unique, uniqueZone, strongPassword, enc }

@@ -51,6 +51,28 @@ function dialog(page, title) {
   return all.filter({ hasText: re }).last()
 }
 
+/** Modal ohne role="dialog" (aeltere Dialoge: Karte .glass-card mit Ueberschrift). */
+function modal(page, title) {
+  const re = title instanceof RegExp ? title : exact(title)
+  return page.locator('.glass-card').filter({ has: page.getByRole('heading', { name: re }) }).last()
+}
+
+/** Tabellenzeile, die einen Text enthaelt (z. B. einen Record-Wert). */
+function rowWith(scope, text) {
+  return scope.locator('tr').filter({ hasText: text })
+}
+
+/** Naechsten window.confirm() annehmen und seinen Text zurueckgeben (Promise). */
+function acceptNextConfirm(page) {
+  return new Promise((resolve) => {
+    page.once('dialog', async (d) => {
+      const msg = d.message()
+      await d.accept()
+      resolve(msg)
+    })
+  })
+}
+
 /** Fokus liegt innerhalb des Locators. */
 async function expectFocusInside(locator) {
   await expect.poll(async () => locator.evaluate((el) => el.contains(document.activeElement)), {
@@ -75,6 +97,6 @@ function activeElementText(page) {
 }
 
 module.exports = {
-  field, checkboxByLabel, zonePath, loginViaUi, expectLoggedIn, dialog, navLink,
+  field, checkboxByLabel, zonePath, loginViaUi, expectLoggedIn, dialog, navLink, modal, rowWith, acceptNextConfirm,
   expectFocusInside, expectFocusTrapped, activeElementText,
 }

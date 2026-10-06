@@ -38,6 +38,8 @@ services:
       E2E_BASE_URL: http://backend:8000
       E2E_SETUP_URL: ${E2E_UI_SETUP_URL-http://setup-backend:8000}
       E2E_RECEIVER_URL: http://receiver:8080
+      # PowerDNS direkt (Testwerte aus compose.e2e.yaml), z. B. um einen Peer-Konflikt zu erzeugen
+      E2E_PDNS: "ns1=http://pdns1:8081|${E2E_PDNS1_KEY:-e2ekey},ns2=http://pdns2:8081|${E2E_PDNS2_KEY:-e2ekey2}"
       E2E_ADMIN_USER: admin
       E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-}
       E2E_UI_PENDING: ${E2E_UI_PENDING:-}

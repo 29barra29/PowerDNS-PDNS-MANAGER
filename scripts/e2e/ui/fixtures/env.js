@@ -16,4 +16,10 @@ module.exports = {
   ADMIN_STATE: path.join(OUT, 'state', 'admin.json'),
   // PowerDNS-Server im E2E-Netz (Panel-Namen)
   SERVERS: ['ns1', 'ns2'],
+  // Direktzugang zu PowerDNS: "ns1=http://pdns1:8081|key,ns2=..."
+  PDNS: Object.fromEntries(String(process.env.E2E_PDNS || '').split(',').filter(Boolean).map((entry) => {
+    const [name, rest] = entry.split('=')
+    const [url, key] = String(rest || '').split('|')
+    return [name.trim(), { url: (url || '').replace(/\/+$/, ''), key: key || '' }]
+  })),
 }
