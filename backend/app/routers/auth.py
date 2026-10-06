@@ -394,9 +394,11 @@ async def _ldap_failure(db: AsyncSession, exc: Exception, *, client_ip: str, use
       unbegrenzt (503 bei falschem, 200 bei richtigem lokalem Passwort) und jeder Versuch ginge als Bind ans
       Verzeichnis. Auch ein LDAP-Konto ist betroffen: ``LdapConfigError`` kann nach einem erfolgreichen
       Benutzer-Bind kommen (fehlendes ID-Attribut) – 503 waere dann ein Passwort-Orakel.
-    - Wurde vorher ein lokales Passwort geprueft (lokales Konto), war es falsch: dieselbe 401-Antwort wie bei
-      jedem anderen Fehlversuch, kein 503.
-    - Sonst 503 mit dem passenden Hinweis (Ausfall bzw. Konfigurationsfehler).
+    - Antwort immer 503 mit dem passenden Hinweis (Ausfall bzw. Konfigurationsfehler) – auch fuer ein lokales Konto,
+      dessen Passwort vorher falsch war (Review-Fund L-3, WS-W3-NACHARBEIT): frueher 401 fuer lokale Konten und 503
+      fuer unbekannte Namen, damit liess sich waehrend einer Stoerung aufzaehlen, welche lokalen Konten es gibt. Ein
+      richtiges lokales Passwort meldet weiter sofort an (ohne LDAP). Das Audit nennt beim lokalen Konto weiter
+      ``bad_credentials`` mit ``ldap_error``.
     """
     from app.services import sso_ldap  # lazy wie im Login-Handler
 
@@ -410,9 +412,9 @@ async def _ldap_failure(db: AsyncSession, exc: Exception, *, client_ip: str, use
         await write_audit(db, "LOGIN_FAILED", "user", username[:255], user_id=user.id, status="error",
                           details={"ip": client_ip, "method": "password", "reason": "bad_credentials",
                                    "ldap_error": reason})
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=BAD_CREDENTIALS_DETAIL)
-    await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
-                      details={"ip": client_ip, "method": "ldap", "reason": reason})
+    else:
+        await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
+                          details={"ip": client_ip, "method": "ldap", "reason": reason})
     return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                          detail=LDAP_UNAVAILABLE_DETAIL if unavailable else LDAP_CONFIG_DETAIL)
 
@@ -454,8 +456,10 @@ async def login(
     method, authed, prov = "password", False, None
     if user is not None and user_guard.is_local_account(user):
         authed = verify_password(password, user.hashed_password)
-    elif not ldap_on:
-        verify_password(password, _dummy_hash())   # unbekannt bzw. extern ohne LDAP: gleiche Laufzeit (f39)
+    else:
+        # unbekannt bzw. extern: gleiche Laufzeit wie ein lokales Konto (f39) – auch bei aktivem LDAP, sonst verriete
+        # die fehlende Hash-Pruefung, ob es ein lokales Konto gibt (Review-Fund L-3)
+        verify_password(password, _dummy_hash())
 
     if not authed and ldap_on and username and password:
         # [S2] erneut vor dem Bind: ein gesperrter Name erreicht das Verzeichnis nie (kein AD-Lockout)

@@ -175,24 +175,45 @@ def test_ldap_unavailable_503_counts_as_failure(env, ldap, detached):
 @pytest.mark.parametrize("error", [sso_ldap.LdapUnavailable("Timeout"), sso_ldap.LdapConfigError("Dienstkonto")],
                          ids=["unavailable", "config"])
 def test_local_password_guessing_with_broken_ldap_is_limited(env, ldap, detached, error):
-    """Review Welle 2 [S2]: LDAP aktiv, aber gestoert – falsches lokales Passwort gibt 401 (kein 503-Orakel) und
-    zaehlt; der 6. Versuch ist 429 ohne weiteren Bind, auch mit dem richtigen Passwort."""
+    """Review Welle 2 [S2]: LDAP aktiv, aber gestoert – falsches lokales Passwort zaehlt; der 6. Versuch ist 429 ohne
+    weiteren Bind, auch mit dem richtigen Passwort. Seit WS-W3-NACHARBEIT (L-3) dieselbe 503 wie fuer unbekannte
+    Namen (keine Aufzaehlung lokaler Konten waehrend der Stoerung)."""
     env.set_settings(**LDAP_ON)
     env.add_user("root", role="admin")
     ldap.error = error
     c = env.client(ip="198.51.100.21")
+    unknown = login(env.client(ip="198.51.100.29"), "gibt-es-nicht", "falsch-123")
     for _ in range(lrl.USER_MAX_FAILS):
         r = login(c, "root", "falsch-123")
-        assert r.status_code == 401 and r.json()["detail"] == "Falscher Benutzername oder Passwort"
-    assert ldap.binds == lrl.USER_MAX_FAILS
+        assert r.status_code == 503 and r.json() == unknown.json()
+    assert ldap.binds == lrl.USER_MAX_FAILS + 1
     assert ip_count("198.51.100.21") == lrl.USER_MAX_FAILS and user_count("root") == lrl.USER_MAX_FAILS
     assert login(c, "root", "falsch-123").status_code == 429
     r = login(env.client(ip="203.0.113.21"), "root", PW)     # richtiges Passwort, andere IP: weiter gesperrt
     assert r.status_code == 429
-    assert ldap.binds == lrl.USER_MAX_FAILS
-    assert set(reasons(detached)) == {"bad_credentials"}
-    ldap_errors = {kw["details"].get("ldap_error") for a, kw in detached if a == "LOGIN_FAILED"}
-    assert ldap_errors == {"ldap_unavailable" if isinstance(error, sso_ldap.LdapUnavailable) else "ldap_config"}
+    assert ldap.binds == lrl.USER_MAX_FAILS + 1
+    reason = "ldap_unavailable" if isinstance(error, sso_ldap.LdapUnavailable) else "ldap_config"
+    local = [kw["details"] for a, kw in detached if a == "LOGIN_FAILED" and kw.get("user_id")]
+    assert len(local) == lrl.USER_MAX_FAILS
+    assert all(d["reason"] == "bad_credentials" and d["ldap_error"] == reason for d in local)
+
+
+def test_ldap_on_unknown_and_external_names_check_dummy_hash(env, ldap, monkeypatch):
+    """L-3 (WS-W3-NACHARBEIT): auch bei aktivem LDAP pruefen unbekannte/externe Namen einen Hash – die Laufzeit
+    verraet nicht, ob es ein lokales Konto gibt."""
+    env.set_settings(**LDAP_ON)
+    env.add_user("ext", auth_source="ldap", ext_id="guid-ext")
+    seen = []
+    real = auth_router.verify_password
+
+    def spy(pw, hashed):
+        seen.append(hashed)
+        return real(pw, hashed)
+
+    monkeypatch.setattr(auth_router, "verify_password", spy)
+    assert login(env.client(ip="198.51.100.31"), "niemand", "egal-123").status_code == 401
+    assert login(env.client(ip="198.51.100.32"), "ext", "egal-123").status_code == 401
+    assert seen == [auth_router._dummy_hash(), auth_router._dummy_hash()]
 
 
 def test_ldap_outage_ip_limit_stops_binds(env, ldap):
