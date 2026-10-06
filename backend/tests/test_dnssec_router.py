@@ -782,7 +782,8 @@ def test_route_order_matches_spec():
     paths = [(sorted(r.methods)[0], r.path) for r in dnssec_router.router.routes]
     P = "/dnssec/{server_name}/{zone_id:path}"
     assert paths == [
-        ("GET", f"{P}/status"), ("GET", f"{P}/ds"), ("GET", f"{P}/keys"), ("POST", f"{P}/keys"),
+        ("GET", f"{P}/status"), ("GET", f"{P}/parent-ds"), ("GET", f"{P}/dnskey-check"),
+        ("GET", f"{P}/ds"), ("GET", f"{P}/keys"), ("POST", f"{P}/keys"),
         ("POST", f"{P}/enable"), ("POST", f"{P}/disable"), ("PUT", f"{P}/nsec3"),
         ("POST", f"{P}/keys/{{key_id}}/activate"), ("POST", f"{P}/keys/{{key_id}}/deactivate"),
         ("GET", f"{P}/keys/{{key_id}}"), ("PUT", f"{P}/keys/{{key_id}}"), ("DELETE", f"{P}/keys/{{key_id}}"),
