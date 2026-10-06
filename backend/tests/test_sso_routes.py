@@ -480,6 +480,63 @@ def test_oidc_link_callback_failures(env, oidc, detached):
     assert failed(detached) == []   # Verknuepfung: kein LOGIN_FAILED
 
 
+def test_oidc_link_callback_rejected_after_access_revocation(env, oidc, detached):
+    """W2-NACHARBEIT 4.1 (WS-W3-NACHARBEIT): Ein Link-Start vor "Alle Zugaenge widerrufen" bzw. einem Admin-Reset
+    laesst sich danach nicht mehr abschliessen (State traegt iat); ein neuer Start nach dem Widerruf klappt."""
+    from datetime import timedelta
+
+    from app.core.timeutil import utcnow_naive
+    from app.services import access_revocation
+
+    env.set_settings(**OIDC_ON)
+    bob = env.add_user("bob")
+    cookie = state_cookie("link", user=bob)   # Start, z. B. mit einer gekaperten Sitzung
+    payload = sso_oidc.decode_oidc_state_token(cookie["Cookie"].split("=", 1)[1])
+    assert isinstance(payload["iat"], int)
+    bob.sessions_revoked_at = access_revocation.session_revocation_time()
+    env.session.commit()
+    oidc.profile = profile("sub-bob", username="robert")
+    r = callback(env.client(), cookie)
+    assert r.status_code == 303 and r.headers["location"] == "/settings?tab=integrations&sso_error=link_failed"
+    assert not has_session_cookie(r)
+    bob = env.reload(bob)
+    assert (bob.auth_source, bob.external_id) == ("local", None)
+    reasons = [kw["details"]["reason"] for a, kw in detached if a == "USER_SSO_LINK"]
+    assert reasons == ["link_failed"]
+    # Widerruf liegt vor dem (neuen) Start -> Verknuepfung moeglich
+    bob.sessions_revoked_at = utcnow_naive().replace(microsecond=0) - timedelta(minutes=1)
+    env.session.commit()
+    r = callback(env.client(), state_cookie("link", state="st-2", user=bob), state="st-2")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_linked=oidc"
+    assert env.reload(bob).auth_source == "oidc"
+
+
+def test_oidc_state_without_iat_fails_closed_only_after_revocation(env, oidc):
+    """Alt-State ohne iat (vor dem Update gestartet, max. 10 min): ohne Widerruf weiter gueltig, nach Widerruf nicht."""
+    from jose import jwt as jose_jwt
+
+    env.set_settings(**OIDC_ON)
+    bob = env.add_user("bob")
+
+    def legacy_cookie(state):
+        tok = state_cookie("link", state=state, user=bob)["Cookie"].split("=", 1)[1]
+        payload = jose_jwt.get_unverified_claims(tok)
+        payload.pop("iat")
+        return {"Cookie": "pdnsmgr_oidc=" + jose_jwt.encode(payload, settings.JWT_SECRET_KEY,
+                                                            algorithm=settings.JWT_ALGORITHM)}
+
+    from app.services import access_revocation
+    bob.sessions_revoked_at = access_revocation.session_revocation_time()
+    env.session.commit()
+    oidc.profile = profile("sub-bob")
+    r = callback(env.client(), legacy_cookie("st-1"), state="st-1")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_error=link_failed"
+    bob.sessions_revoked_at = None
+    env.session.commit()
+    r = callback(env.client(), legacy_cookie("st-2"), state="st-2")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_linked=oidc"
+
+
 # ---------------------------------------------------------------------------------------------
 # Nr. 24 LDAP-Verknuepfung
 # ---------------------------------------------------------------------------------------------
