@@ -13,6 +13,7 @@ import {
     isConflictError, isTextEmpty, isValidBulkTtl, issueI18n, lineIssuesOf, lineOffsets, loadAllPrefill, needsLinePrefix, previewChanges,
     refreshRequest, touchesPtrTypes,
 } from '../../zoneDetail/bulkModel.js'
+import ModalPortal from '../common/ModalPortal'
 
 // Editor-/Vorschau-Modal des Bulk-Editors (F1 2.4/2.5, 6.3.3). Zwei Schritte: "text" (BIND-Text, Modus, Standard-TTL,
 // Zeilenfehler mit Sprung) und "preview" (BulkPreviewView, Pflicht-Checkbox bei Loeschungen, PTR-Option).
@@ -194,220 +195,222 @@ export default function BulkEditorModal({ server, zoneId, zoneKey, records, init
     }
 
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-            onClick={requestClose}
-        >
+        <ModalPortal>
             <div
-                ref={dialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={titleId}
-                className="glass-card p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto"
-                onClick={(e) => e.stopPropagation()}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                onClick={requestClose}
             >
-                <div className="flex items-center justify-between mb-4 gap-3">
-                    <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-accent-light" aria-hidden="true" />
-                        {step === 'text' ? t('bulk.editorTitle') : t('bulk.previewTitle')}
-                    </h2>
-                    <button
-                        type="button"
-                        onClick={requestClose}
-                        disabled={busy}
-                        className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-50"
-                        aria-label={t('common.close')}
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
-                </div>
-
-                <ModalErrorBanner message={error} onClose={busy ? undefined : () => setError('')} />
-
-                {conflict && (
-                    <div className="mb-4 flex justify-end">
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={titleId}
+                    className="glass-card p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between mb-4 gap-3">
+                        <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2">
+                            <FileText className="w-5 h-5 text-accent-light" aria-hidden="true" />
+                            {step === 'text' ? t('bulk.editorTitle') : t('bulk.previewTitle')}
+                        </h2>
                         <button
                             type="button"
-                            onClick={refreshPreview}
+                            onClick={requestClose}
                             disabled={busy}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-border text-text-primary hover:bg-bg-hover disabled:opacity-50"
+                            className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-50"
+                            aria-label={t('common.close')}
                         >
-                            <RefreshCw className="w-4 h-4" aria-hidden="true" /> {t('bulk.refreshPreview')}
+                            <X className="w-5 h-5" />
                         </button>
                     </div>
-                )}
 
-                {step === 'text' && (
-                    <div className="space-y-4">
-                        <fieldset>
-                            <legend className="text-sm font-medium text-text-secondary mb-2">{t('bulk.modeLabel')}</legend>
-                            <div className="grid gap-2 sm:grid-cols-3">
-                                {TEXT_MODES.map((m) => {
-                                    const unavailable = m === 'sync_scope' && !syncAvailable
-                                    return (
-                                        <label
-                                            key={m}
-                                            className={`p-3 rounded-lg border text-sm cursor-pointer ${mode === m ? 'border-accent bg-accent/10' : 'border-border'} ${unavailable ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                        >
-                                            <span className="flex items-center gap-2 font-medium text-text-primary">
-                                                <input
-                                                    type="radio"
-                                                    name={`${titleId}-mode`}
-                                                    value={m}
-                                                    checked={mode === m}
-                                                    disabled={unavailable || busy}
-                                                    onChange={() => setMode(m)}
-                                                />
-                                                {t(MODE_LABELS[m])}
-                                            </span>
-                                            <span className="block mt-1 text-xs text-text-muted">
-                                                {unavailable ? t('bulk.modeSyncUnavailable') : t(MODE_HELP[m])}
-                                            </span>
-                                        </label>
-                                    )
-                                })}
-                            </div>
-                        </fieldset>
+                    <ModalErrorBanner message={error} onClose={busy ? undefined : () => setError('')} />
 
-                        {loadedHint && (
-                            <p className="text-xs text-text-muted" role="status">
-                                {t('bulk.loadedHint', { rrsets: loadedHint.rrsets, values: loadedHint.values })}
-                            </p>
-                        )}
-
-                        <div>
-                            <div className="flex items-center justify-between mb-1 gap-2">
-                                <label htmlFor={`${titleId}-text`} className="text-sm font-medium text-text-secondary">
-                                    {t('bulk.editorTitle')}
-                                </label>
-                                <button
-                                    type="button"
-                                    onClick={loadAll}
-                                    disabled={busy}
-                                    className="text-xs text-accent-light hover:underline disabled:opacity-50"
-                                >
-                                    {t('bulk.loadAll')}
-                                </button>
-                            </div>
-                            <textarea
-                                id={`${titleId}-text`}
-                                ref={textareaRef}
-                                value={text}
-                                onChange={(e) => setText(e.target.value)}
-                                rows={18}
-                                spellCheck={false}
-                                wrap="off"
+                    {conflict && (
+                        <div className="mb-4 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={refreshPreview}
                                 disabled={busy}
-                                className="w-full font-mono text-xs p-3 rounded-lg border border-border bg-bg-primary text-text-primary overflow-auto"
-                            />
+                                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-border text-text-primary hover:bg-bg-hover disabled:opacity-50"
+                            >
+                                <RefreshCw className="w-4 h-4" aria-hidden="true" /> {t('bulk.refreshPreview')}
+                            </button>
                         </div>
+                    )}
 
-                        {lineIssues.length > 0 && (
-                            <div className="p-3 rounded-xl border bg-danger/10 border-danger/30 text-danger" role="alert">
-                                <p className="text-sm font-medium">{t('bulk.parseErrorsTitle')}</p>
-                                <ul className="mt-2 space-y-1">
-                                    {lineIssues.map((issue, i) => {
-                                        const { key, values } = issueI18n(issue)
+                    {step === 'text' && (
+                        <div className="space-y-4">
+                            <fieldset>
+                                <legend className="text-sm font-medium text-text-secondary mb-2">{t('bulk.modeLabel')}</legend>
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    {TEXT_MODES.map((m) => {
+                                        const unavailable = m === 'sync_scope' && !syncAvailable
                                         return (
-                                            <li key={`${issue.line}-${issue.code}-${i}`}>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => jumpToLine(issue.line)}
-                                                    className={`text-left text-xs hover:underline ${issue.severity === 'error' ? '' : 'text-warning'}`}
-                                                >
-                                                    {needsLinePrefix(issue) && (
-                                                        <span className="font-medium">{t('bulk.lineLabel', { line: issue.line })}: </span>
-                                                    )}
-                                                    {t(key, { ...values, defaultValue: issue.message })}
-                                                </button>
-                                            </li>
+                                            <label
+                                                key={m}
+                                                className={`p-3 rounded-lg border text-sm cursor-pointer ${mode === m ? 'border-accent bg-accent/10' : 'border-border'} ${unavailable ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            >
+                                                <span className="flex items-center gap-2 font-medium text-text-primary">
+                                                    <input
+                                                        type="radio"
+                                                        name={`${titleId}-mode`}
+                                                        value={m}
+                                                        checked={mode === m}
+                                                        disabled={unavailable || busy}
+                                                        onChange={() => setMode(m)}
+                                                    />
+                                                    {t(MODE_LABELS[m])}
+                                                </span>
+                                                <span className="block mt-1 text-xs text-text-muted">
+                                                    {unavailable ? t('bulk.modeSyncUnavailable') : t(MODE_HELP[m])}
+                                                </span>
+                                            </label>
                                         )
                                     })}
-                                </ul>
-                            </div>
-                        )}
+                                </div>
+                            </fieldset>
 
-                        <div className="grid gap-4 sm:grid-cols-2">
+                            {loadedHint && (
+                                <p className="text-xs text-text-muted" role="status">
+                                    {t('bulk.loadedHint', { rrsets: loadedHint.rrsets, values: loadedHint.values })}
+                                </p>
+                            )}
+
                             <div>
-                                <label htmlFor={`${titleId}-ttl`} className="block text-sm font-medium text-text-secondary mb-1">
-                                    {t('bulk.defaultTtl')}
-                                </label>
-                                <TtlInput id={`${titleId}-ttl`} value={defaultTtl} onChange={setDefaultTtl} disabled={busy} min={TTL_MIN} max={TTL_MAX} />
+                                <div className="flex items-center justify-between mb-1 gap-2">
+                                    <label htmlFor={`${titleId}-text`} className="text-sm font-medium text-text-secondary">
+                                        {t('bulk.editorTitle')}
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={loadAll}
+                                        disabled={busy}
+                                        className="text-xs text-accent-light hover:underline disabled:opacity-50"
+                                    >
+                                        {t('bulk.loadAll')}
+                                    </button>
+                                </div>
+                                <textarea
+                                    id={`${titleId}-text`}
+                                    ref={textareaRef}
+                                    value={text}
+                                    onChange={(e) => setText(e.target.value)}
+                                    rows={18}
+                                    spellCheck={false}
+                                    wrap="off"
+                                    disabled={busy}
+                                    className="w-full font-mono text-xs p-3 rounded-lg border border-border bg-bg-primary text-text-primary overflow-auto"
+                                />
                             </div>
-                            <details className="text-xs text-text-secondary">
-                                <summary className="cursor-pointer text-sm font-medium text-text-secondary">{t('bulk.syntaxHelpTitle')}</summary>
-                                <p className="mt-2">{t('bulk.syntaxHelpBody')}</p>
-                                <p className="mt-2 font-medium">{t('bulk.syntaxExample')}</p>
-                                <pre className="mt-1 p-2 rounded bg-bg-primary border border-border overflow-x-auto">{SYNTAX_EXAMPLE}</pre>
-                            </details>
+
+                            {lineIssues.length > 0 && (
+                                <div className="p-3 rounded-xl border bg-danger/10 border-danger/30 text-danger" role="alert">
+                                    <p className="text-sm font-medium">{t('bulk.parseErrorsTitle')}</p>
+                                    <ul className="mt-2 space-y-1">
+                                        {lineIssues.map((issue, i) => {
+                                            const { key, values } = issueI18n(issue)
+                                            return (
+                                                <li key={`${issue.line}-${issue.code}-${i}`}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => jumpToLine(issue.line)}
+                                                        className={`text-left text-xs hover:underline ${issue.severity === 'error' ? '' : 'text-warning'}`}
+                                                    >
+                                                        {needsLinePrefix(issue) && (
+                                                            <span className="font-medium">{t('bulk.lineLabel', { line: issue.line })}: </span>
+                                                        )}
+                                                        {t(key, { ...values, defaultValue: issue.message })}
+                                                    </button>
+                                                </li>
+                                            )
+                                        })}
+                                    </ul>
+                                </div>
+                            )}
+
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label htmlFor={`${titleId}-ttl`} className="block text-sm font-medium text-text-secondary mb-1">
+                                        {t('bulk.defaultTtl')}
+                                    </label>
+                                    <TtlInput id={`${titleId}-ttl`} value={defaultTtl} onChange={setDefaultTtl} disabled={busy} min={TTL_MIN} max={TTL_MAX} />
+                                </div>
+                                <details className="text-xs text-text-secondary">
+                                    <summary className="cursor-pointer text-sm font-medium text-text-secondary">{t('bulk.syntaxHelpTitle')}</summary>
+                                    <p className="mt-2">{t('bulk.syntaxHelpBody')}</p>
+                                    <p className="mt-2 font-medium">{t('bulk.syntaxExample')}</p>
+                                    <pre className="mt-1 p-2 rounded bg-bg-primary border border-border overflow-x-auto">{SYNTAX_EXAMPLE}</pre>
+                                </details>
+                            </div>
                         </div>
-                    </div>
-                )}
-
-                {step === 'preview' && (
-                    <div className="space-y-4">
-                        {busy && !preview && (
-                            <div className="flex items-center gap-3 py-8 justify-center text-text-muted text-sm" role="status">
-                                <Loader2 className="w-5 h-5 animate-spin text-accent" aria-hidden="true" /> {t('bulk.previewLoading')}
-                            </div>
-                        )}
-                        <BulkPreviewView
-                            preview={preview}
-                            zoneKey={zoneKey}
-                            confirmRemoval={confirmRemoval}
-                            onConfirmRemovalChange={setConfirmRemoval}
-                            applyIssues={applyIssues}
-                        />
-                        {ptrVisible && (
-                            <PtrSyncOption checked={ptrChecked} onChange={changePtr} values={[]} server={server} lookup={false} />
-                        )}
-                    </div>
-                )}
-
-                <div className="flex flex-wrap justify-end gap-2 mt-6">
-                    <button
-                        type="button"
-                        onClick={requestClose}
-                        disabled={busy}
-                        className="px-4 py-2 rounded-lg text-sm border border-border text-text-secondary hover:bg-bg-hover disabled:opacity-50"
-                    >
-                        {t('common.cancel')}
-                    </button>
-                    {step === 'preview' && textFlow && (
-                        <button
-                            type="button"
-                            onClick={() => { setStep('text'); setError(''); setConflict(false); setApplyIssues([]) }}
-                            disabled={busy}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm border border-border text-text-secondary hover:bg-bg-hover disabled:opacity-50"
-                        >
-                            <ArrowLeft className="w-4 h-4" aria-hidden="true" /> {t('bulk.backToEditor')}
-                        </button>
                     )}
-                    {step === 'text' ? (
-                        <button
-                            ref={primaryRef}
-                            type="button"
-                            onClick={runTextPreview}
-                            disabled={busy}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            {busy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <ChevronRight className="w-4 h-4" aria-hidden="true" />}
-                            {busy ? t('bulk.previewLoading') : t('bulk.preview')}
-                        </button>
-                    ) : (
-                        <button
-                            ref={primaryRef}
-                            type="button"
-                            onClick={apply}
-                            disabled={!applyAllowed}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
-                            {t('bulk.apply', { count: changeCount })}
-                        </button>
+
+                    {step === 'preview' && (
+                        <div className="space-y-4">
+                            {busy && !preview && (
+                                <div className="flex items-center gap-3 py-8 justify-center text-text-muted text-sm" role="status">
+                                    <Loader2 className="w-5 h-5 animate-spin text-accent" aria-hidden="true" /> {t('bulk.previewLoading')}
+                                </div>
+                            )}
+                            <BulkPreviewView
+                                preview={preview}
+                                zoneKey={zoneKey}
+                                confirmRemoval={confirmRemoval}
+                                onConfirmRemovalChange={setConfirmRemoval}
+                                applyIssues={applyIssues}
+                            />
+                            {ptrVisible && (
+                                <PtrSyncOption checked={ptrChecked} onChange={changePtr} values={[]} server={server} lookup={false} />
+                            )}
+                        </div>
                     )}
+
+                    <div className="flex flex-wrap justify-end gap-2 mt-6">
+                        <button
+                            type="button"
+                            onClick={requestClose}
+                            disabled={busy}
+                            className="px-4 py-2 rounded-lg text-sm border border-border text-text-secondary hover:bg-bg-hover disabled:opacity-50"
+                        >
+                            {t('common.cancel')}
+                        </button>
+                        {step === 'preview' && textFlow && (
+                            <button
+                                type="button"
+                                onClick={() => { setStep('text'); setError(''); setConflict(false); setApplyIssues([]) }}
+                                disabled={busy}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm border border-border text-text-secondary hover:bg-bg-hover disabled:opacity-50"
+                            >
+                                <ArrowLeft className="w-4 h-4" aria-hidden="true" /> {t('bulk.backToEditor')}
+                            </button>
+                        )}
+                        {step === 'text' ? (
+                            <button
+                                ref={primaryRef}
+                                type="button"
+                                onClick={runTextPreview}
+                                disabled={busy}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                {busy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <ChevronRight className="w-4 h-4" aria-hidden="true" />}
+                                {busy ? t('bulk.previewLoading') : t('bulk.preview')}
+                            </button>
+                        ) : (
+                            <button
+                                ref={primaryRef}
+                                type="button"
+                                onClick={apply}
+                                disabled={!applyAllowed}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                {busy && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+                                {t('bulk.apply', { count: changeCount })}
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
-        </div>
+        </ModalPortal>
     )
 }

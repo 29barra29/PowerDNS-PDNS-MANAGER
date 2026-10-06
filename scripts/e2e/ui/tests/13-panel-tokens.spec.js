@@ -8,7 +8,7 @@ const { test, expect } = require('../fixtures/test')
 const { BASE_URL } = require('../fixtures/env')
 const { PanelApi, unique, uniqueZone, enc } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
-const { dialog, acceptNextConfirm } = require('../fixtures/ui')
+const { dialog, acceptNextConfirm, expectDialogOnTop } = require('../fixtures/ui')
 const { db } = require('../fixtures/db')
 
 const bare = (zone) => zone.replace(/\.$/, '')
@@ -63,6 +63,7 @@ test.describe('Panel-Tokens', () => {
       await form.getByRole('button', { name: exact(t('panelTokens.submitCreate')) }).click()
 
       const once = dialog(page, t('panelTokens.createdTitle'))
+      await expectDialogOnTop(once) // UI-SMOKE-1: Einmal-Anzeige liegt ueber allen Karten
       const token = (await once.getByLabel(t('secretModal.secretLabel')).innerText()).trim()
       await once.getByRole('button', { name: t('secretModal.done') }).click()
       await expect(once).toBeHidden()

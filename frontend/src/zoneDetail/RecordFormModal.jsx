@@ -17,6 +17,7 @@ import { useZoneDetail } from './zoneDetailContext'
 import {
     collectExtensions, extensionsAt, initialExtStates, mergeRequestBody, notifyExtensions, validateExtensions,
 } from './formExtensions.js'
+import ModalPortal from '../components/common/ModalPortal'
 
 // Record-Dialog (Anlegen / Bearbeiten / Klonen / Schnellvorlage).
 // Wird von der Shell bei jedem Oeffnen neu gemountet (key = request.seq), d. h. jeder Aufruf startet frisch.
@@ -380,261 +381,263 @@ export default function RecordFormModal({ request }) {
     }
 
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-            onClick={() => { if (!saving) closeModal() }}
-        >
+        <ModalPortal>
             <div
-                ref={dialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={titleId}
-                className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
-                onClick={e => e.stopPropagation()}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                onClick={() => { if (!saving) closeModal() }}
             >
-                <div className="flex items-start justify-between mb-4">
-                    <h2 id={titleId} className="text-lg font-bold text-text-primary">
-                        {isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}
-                    </h2>
-                    <button
-                        type="button"
-                        onClick={() => { if (!saving) closeModal() }}
-                        className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
-                        title={t('common.close')}
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
-                </div>
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={titleId}
+                    className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+                    onClick={e => e.stopPropagation()}
+                >
+                    <div className="flex items-start justify-between mb-4">
+                        <h2 id={titleId} className="text-lg font-bold text-text-primary">
+                            {isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}
+                        </h2>
+                        <button
+                            type="button"
+                            onClick={() => { if (!saving) closeModal() }}
+                            className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+                            title={t('common.close')}
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
 
-                {/* Schnellvorlagen-Leiste (nur beim Anlegen) */}
-                {!isEdit && (
-                    <div className="mb-4 rounded-xl border border-accent/20 bg-accent/5 p-3">
-                        <div className="flex items-center gap-2 mb-2">
-                            <Sparkles className="w-4 h-4 text-accent" />
-                            <span className="text-xs font-medium text-text-secondary">{t('zoneDetail.quickTemplates')}</span>
+                    {/* Schnellvorlagen-Leiste (nur beim Anlegen) */}
+                    {!isEdit && (
+                        <div className="mb-4 rounded-xl border border-accent/20 bg-accent/5 p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Sparkles className="w-4 h-4 text-accent" />
+                                <span className="text-xs font-medium text-text-secondary">{t('zoneDetail.quickTemplates')}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {quickTemplates.map(tpl => (
+                                    <button
+                                        key={tpl.id}
+                                        type="button"
+                                        onClick={() => applyQuickTemplate(tpl)}
+                                        disabled={!canEdit}
+                                        className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-primary hover:bg-bg-hover transition-colors disabled:opacity-35 disabled:pointer-events-none"
+                                        title={tpl.note || tpl.label}
+                                    >
+                                        {tpl.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                            {quickTemplates.map(tpl => (
-                                <button
-                                    key={tpl.id}
-                                    type="button"
-                                    onClick={() => applyQuickTemplate(tpl)}
-                                    disabled={!canEdit}
-                                    className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-primary hover:bg-bg-hover transition-colors disabled:opacity-35 disabled:pointer-events-none"
-                                    title={tpl.note || tpl.label}
+                    )}
+
+                    {/* Modal-weiter Fehler (Submit / Backend) */}
+                    <ModalErrorBanner
+                        message={modalError}
+                        title={isEdit ? t('zoneDetail.updateErrorTitle') : t('zoneDetail.createErrorTitle')}
+                        onClose={() => setModalError('')}
+                    />
+
+                    {/* Apex-Warnung (live, nicht erst beim Submit) */}
+                    {apexWarning && (
+                        <div className={`mb-4 p-3 rounded-xl border flex items-start gap-2 ${apexWarning.kind === 'error' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <div className="text-xs">
+                                <p className="font-medium mb-0.5">{t('zoneDetail.apexWarningTitle')}</p>
+                                <p>{apexWarning.text}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    <form ref={formRef} onSubmit={handleAddRecord} className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
+                            <div className="min-w-0 flex flex-col gap-1">
+                                <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.recordType')}</label>
+                                <select
+                                    ref={typeSelectRef}
+                                    value={addType}
+                                    disabled={isEdit}
+                                    onChange={e => {
+                                        const newType = e.target.value
+                                        setFormState(f => ({ ...f, type: newType, fieldsList: [defaultFieldSet(getRecordDef(newType))] }))
+                                    }}
+                                    className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50"
                                 >
-                                    {tpl.label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Modal-weiter Fehler (Submit / Backend) */}
-                <ModalErrorBanner
-                    message={modalError}
-                    title={isEdit ? t('zoneDetail.updateErrorTitle') : t('zoneDetail.createErrorTitle')}
-                    onClose={() => setModalError('')}
-                />
-
-                {/* Apex-Warnung (live, nicht erst beim Submit) */}
-                {apexWarning && (
-                    <div className={`mb-4 p-3 rounded-xl border flex items-start gap-2 ${apexWarning.kind === 'error' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
-                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                        <div className="text-xs">
-                            <p className="font-medium mb-0.5">{t('zoneDetail.apexWarningTitle')}</p>
-                            <p>{apexWarning.text}</p>
-                        </div>
-                    </div>
-                )}
-
-                <form ref={formRef} onSubmit={handleAddRecord} className="space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
-                        <div className="min-w-0 flex flex-col gap-1">
-                            <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.recordType')}</label>
-                            <select
-                                ref={typeSelectRef}
-                                value={addType}
-                                disabled={isEdit}
-                                onChange={e => {
-                                    const newType = e.target.value
-                                    setFormState(f => ({ ...f, type: newType, fieldsList: [defaultFieldSet(getRecordDef(newType))] }))
-                                }}
-                                className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50"
-                            >
-                                {typeOptions.map((k) => {
-                                    const v = getRecordDef(k)
-                                    const label = v.labelKey ? t(v.labelKey) : v.label
-                                    // LUA ohne Schreibrecht: Option gesperrt (ausser beim Bearbeiten eines LUA-Records)
-                                    const luaLocked = k === 'LUA' && !luaWriteOk && !(isEdit && addType === 'LUA')
-                                    return (
-                                        <option key={k} value={k} disabled={luaLocked}>
-                                            {luaLocked ? `${label} ${luaOptionSuffix}` : label}
-                                        </option>
-                                    )
-                                })}
-                            </select>
-                        </div>
-                        <div className="min-w-0 flex flex-col gap-1.5">
-                            <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.nameRelative')}</label>
-                            <input
-                                value={addName}
-                                disabled={isEdit}
-                                onChange={(e) => setAddName(e.target.value)}
-                                className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50"
-                                placeholder="@"
-                                autoComplete="off"
-                                spellCheck={false}
-                            />
-                            <div className={`rounded-lg border px-2.5 py-2 ${nameError ? 'border-danger/40 bg-danger/5' : 'border-accent/25 bg-accent/5'}`}>
-                                <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted mb-0.5">{t('zoneDetail.namePreviewLabel')}</p>
-                                {nameError ? (
-                                    <p className="text-xs text-danger break-words" role="alert">{nameError}</p>
-                                ) : (
-                                    <p className="font-mono text-sm text-accent-light break-all" title={fqdn}>{fqdn}</p>
+                                    {typeOptions.map((k) => {
+                                        const v = getRecordDef(k)
+                                        const label = v.labelKey ? t(v.labelKey) : v.label
+                                        // LUA ohne Schreibrecht: Option gesperrt (ausser beim Bearbeiten eines LUA-Records)
+                                        const luaLocked = k === 'LUA' && !luaWriteOk && !(isEdit && addType === 'LUA')
+                                        return (
+                                            <option key={k} value={k} disabled={luaLocked}>
+                                                {luaLocked ? `${label} ${luaOptionSuffix}` : label}
+                                            </option>
+                                        )
+                                    })}
+                                </select>
+                            </div>
+                            <div className="min-w-0 flex flex-col gap-1.5">
+                                <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.nameRelative')}</label>
+                                <input
+                                    value={addName}
+                                    disabled={isEdit}
+                                    onChange={(e) => setAddName(e.target.value)}
+                                    className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary disabled:opacity-50"
+                                    placeholder="@"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                />
+                                <div className={`rounded-lg border px-2.5 py-2 ${nameError ? 'border-danger/40 bg-danger/5' : 'border-accent/25 bg-accent/5'}`}>
+                                    <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted mb-0.5">{t('zoneDetail.namePreviewLabel')}</p>
+                                    {nameError ? (
+                                        <p className="text-xs text-danger break-words" role="alert">{nameError}</p>
+                                    ) : (
+                                        <p className="font-mono text-sm text-accent-light break-all" title={fqdn}>{fqdn}</p>
+                                    )}
+                                </div>
+                                <p className="text-xs text-text-muted leading-snug">{t('zoneDetail.mainDomainHint')}</p>
+                            </div>
+                            <div className="min-w-0 flex flex-col gap-1">
+                                {renderExtensions('beforeTtl')}
+                                <label htmlFor="record-ttl" className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.ttl')}</label>
+                                <TtlInput id="record-ttl" value={addTTL} onChange={setAddTTL} />
+                                {ttlBelowMin !== null && ttlBelowMin !== undefined && (
+                                    <p className="text-xs text-amber-300 leading-snug">{t('zoneDetail.ttlBelowMinimum', { ttl: ttlBelowMin })}</p>
+                                )}
+                                {showRrsetNote && (
+                                    <p className="text-xs text-text-muted leading-snug">
+                                        {t('zoneDetail.ttlRrsetNote', { name: fqdn.replace(/\.$/, ''), type: addType })}
+                                    </p>
                                 )}
                             </div>
-                            <p className="text-xs text-text-muted leading-snug">{t('zoneDetail.mainDomainHint')}</p>
                         </div>
-                        <div className="min-w-0 flex flex-col gap-1">
-                            {renderExtensions('beforeTtl')}
-                            <label htmlFor="record-ttl" className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.ttl')}</label>
-                            <TtlInput id="record-ttl" value={addTTL} onChange={setAddTTL} />
-                            {ttlBelowMin !== null && ttlBelowMin !== undefined && (
-                                <p className="text-xs text-amber-300 leading-snug">{t('zoneDetail.ttlBelowMinimum', { ttl: ttlBelowMin })}</p>
-                            )}
-                            {showRrsetNote && (
-                                <p className="text-xs text-text-muted leading-snug">
-                                    {t('zoneDetail.ttlRrsetNote', { name: fqdn.replace(/\.$/, ''), type: addType })}
-                                </p>
-                            )}
-                        </div>
-                    </div>
 
-                    {/* Dynamische Werte – ggf. mehrere für Round-Robin */}
-                    <div className="border-t border-border pt-4 space-y-4">
-                        {def.unknown && (
-                            <p className="text-xs text-amber-300 leading-snug">{t('zoneDetail.unknownTypeEditHint', { type: addType })}</p>
-                        )}
-                        {dynFieldsList.map((set, idx) => {
-                            const fldList = def.fields || []
-                            return (
-                                <div key={idx} className={dynFieldsList.length > 1 ? 'rounded-lg border border-border/60 p-3 bg-bg-primary/50' : ''}>
-                                    {dynFieldsList.length > 1 && (
-                                        <div className="flex items-center justify-between mb-2">
-                                            <span className="text-xs font-medium text-text-muted">{t('zoneDetail.valueIndex', { n: idx + 1 })}</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => setDynFieldsList(list => list.filter((_, i) => i !== idx))}
-                                                className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-                                                title={t('zoneDetail.removeValue')}
-                                            >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
+                        {/* Dynamische Werte – ggf. mehrere für Round-Robin */}
+                        <div className="border-t border-border pt-4 space-y-4">
+                            {def.unknown && (
+                                <p className="text-xs text-amber-300 leading-snug">{t('zoneDetail.unknownTypeEditHint', { type: addType })}</p>
+                            )}
+                            {dynFieldsList.map((set, idx) => {
+                                const fldList = def.fields || []
+                                return (
+                                    <div key={idx} className={dynFieldsList.length > 1 ? 'rounded-lg border border-border/60 p-3 bg-bg-primary/50' : ''}>
+                                        {dynFieldsList.length > 1 && (
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-xs font-medium text-text-muted">{t('zoneDetail.valueIndex', { n: idx + 1 })}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setDynFieldsList(list => list.filter((_, i) => i !== idx))}
+                                                    className="p-1 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                                                    title={t('zoneDetail.removeValue')}
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        )}
+                                        <div className={`grid gap-4 ${
+                                            addType === 'SRV'
+                                                ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+                                                : fldList.length === 1 && fldList[0].textarea
+                                                    ? 'grid-cols-1'
+                                                    : 'grid-cols-1 sm:grid-cols-2'
+                                        }`}>
+                                            {fldList.map((f, fi) => {
+                                                // Bearbeiten: Startfokus im ersten Wertfeld (die Typ-Auswahl ist gesperrt)
+                                                const autoFocusField = isEdit && idx === 0 && fi === 0 ? true : undefined
+                                                const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
+                                                const textareaSpan = f.textarea
+                                                    ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
+                                                    : ''
+                                                const value = set[f.id] || ''
+                                                const hint = fieldHint(f.id, value, set)
+                                                const hintText = typeof hint === 'object' && hint?.error ? hint.error : (typeof hint === 'string' ? hint : '')
+                                                const isError = typeof hint === 'object' && !!hint?.error
+                                                return (
+                                                    <div key={f.id} className={`min-w-0 ${textareaSpan}`}>
+                                                        <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
+                                                        {f.select ? (
+                                                            <select
+                                                                data-autofocus={autoFocusField}
+                                                                value={value || f.select[0]}
+                                                                onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
+                                                            >
+                                                                {selectOptions(f.select, value).map(o => <option key={o} value={o}>{o}</option>)}
+                                                            </select>
+                                                        ) : f.textarea ? (
+                                                            <textarea
+                                                                data-autofocus={autoFocusField}
+                                                                value={value}
+                                                                onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                placeholder={f.placeholderKey ? t(f.placeholderKey, { defaultValue: '' }) : f.placeholder}
+                                                                className={`w-full min-h-[100px] rounded-lg border bg-bg-primary px-3 py-2 text-sm font-mono text-[13px] placeholder:font-sans placeholder:text-sm ${isError ? 'border-danger/60' : 'border-border'}`}
+                                                            />
+                                                        ) : (
+                                                            <input
+                                                                data-autofocus={autoFocusField}
+                                                                type={f.type || 'text'}
+                                                                value={value}
+                                                                onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
+                                                                placeholder={f.placeholder}
+                                                                className={`w-full min-w-0 h-10 px-3 text-sm rounded-lg border bg-bg-primary ${isError ? 'border-danger/60' : 'border-border'}`}
+                                                                autoComplete="off"
+                                                                spellCheck={false}
+                                                            />
+                                                        )}
+                                                        {hintText && (
+                                                            <p className={`mt-1 text-xs ${isError ? 'text-danger' : 'text-amber-300'}`}>{hintText}</p>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
                                         </div>
-                                    )}
-                                    <div className={`grid gap-4 ${
-                                        addType === 'SRV'
-                                            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
-                                            : fldList.length === 1 && fldList[0].textarea
-                                                ? 'grid-cols-1'
-                                                : 'grid-cols-1 sm:grid-cols-2'
-                                    }`}>
-                                        {fldList.map((f, fi) => {
-                                            // Bearbeiten: Startfokus im ersten Wertfeld (die Typ-Auswahl ist gesperrt)
-                                            const autoFocusField = isEdit && idx === 0 && fi === 0 ? true : undefined
-                                            const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
-                                            const textareaSpan = f.textarea
-                                                ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
-                                                : ''
-                                            const value = set[f.id] || ''
-                                            const hint = fieldHint(f.id, value, set)
-                                            const hintText = typeof hint === 'object' && hint?.error ? hint.error : (typeof hint === 'string' ? hint : '')
-                                            const isError = typeof hint === 'object' && !!hint?.error
-                                            return (
-                                                <div key={f.id} className={`min-w-0 ${textareaSpan}`}>
-                                                    <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
-                                                    {f.select ? (
-                                                        <select
-                                                            data-autofocus={autoFocusField}
-                                                            value={value || f.select[0]}
-                                                            onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
-                                                            className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
-                                                        >
-                                                            {selectOptions(f.select, value).map(o => <option key={o} value={o}>{o}</option>)}
-                                                        </select>
-                                                    ) : f.textarea ? (
-                                                        <textarea
-                                                            data-autofocus={autoFocusField}
-                                                            value={value}
-                                                            onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
-                                                            placeholder={f.placeholderKey ? t(f.placeholderKey, { defaultValue: '' }) : f.placeholder}
-                                                            className={`w-full min-h-[100px] rounded-lg border bg-bg-primary px-3 py-2 text-sm font-mono text-[13px] placeholder:font-sans placeholder:text-sm ${isError ? 'border-danger/60' : 'border-border'}`}
-                                                        />
-                                                    ) : (
-                                                        <input
-                                                            data-autofocus={autoFocusField}
-                                                            type={f.type || 'text'}
-                                                            value={value}
-                                                            onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
-                                                            placeholder={f.placeholder}
-                                                            className={`w-full min-w-0 h-10 px-3 text-sm rounded-lg border bg-bg-primary ${isError ? 'border-danger/60' : 'border-border'}`}
-                                                            autoComplete="off"
-                                                            spellCheck={false}
-                                                        />
-                                                    )}
-                                                    {hintText && (
-                                                        <p className={`mt-1 text-xs ${isError ? 'text-danger' : 'text-amber-300'}`}>{hintText}</p>
-                                                    )}
-                                                </div>
-                                            )
-                                        })}
                                     </div>
-                                </div>
-                            )
-                        })}
+                                )
+                            })}
 
-                        {/* "+ Weiteren Wert" für Multi-Value-Typen */}
-                        {canMulti && (
-                            <button
-                                type="button"
-                                onClick={() => setDynFieldsList(list => [...list, defaultFieldSet(def)])}
-                                className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-dashed border-border hover:border-accent/60 hover:text-accent-light text-text-muted transition-colors"
-                            >
-                                <Plus className="w-3.5 h-3.5" /> {t('zoneDetail.addValue')}
-                            </button>
-                        )}
+                            {/* "+ Weiteren Wert" für Multi-Value-Typen */}
+                            {canMulti && (
+                                <button
+                                    type="button"
+                                    onClick={() => setDynFieldsList(list => [...list, defaultFieldSet(def)])}
+                                    className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-dashed border-border hover:border-accent/60 hover:text-accent-light text-text-muted transition-colors"
+                                >
+                                    <Plus className="w-3.5 h-3.5" /> {t('zoneDetail.addValue')}
+                                </button>
+                            )}
 
-                        {/* Deaktiviert (F8-F07): Zustand wird beim Bearbeiten/Klonen uebernommen */}
-                        <label className="flex items-start gap-2 cursor-pointer text-sm text-text-secondary">
-                            <input
-                                type="checkbox"
-                                checked={!!addDisabled}
-                                disabled={!canEdit}
-                                onChange={(e) => setAddDisabled(e.target.checked)}
-                                className="w-4 h-4 rounded mt-0.5"
-                            />
-                            <span>{t('zoneDetail.disabledLabel')}</span>
-                        </label>
+                            {/* Deaktiviert (F8-F07): Zustand wird beim Bearbeiten/Klonen uebernommen */}
+                            <label className="flex items-start gap-2 cursor-pointer text-sm text-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={!!addDisabled}
+                                    disabled={!canEdit}
+                                    onChange={(e) => setAddDisabled(e.target.checked)}
+                                    className="w-4 h-4 rounded mt-0.5"
+                                />
+                                <span>{t('zoneDetail.disabledLabel')}</span>
+                            </label>
 
-                        {renderExtensions('afterValues')}
+                            {renderExtensions('afterValues')}
 
-                        <DnsRecordTypeHint recordType={addType} />
-                    </div>
-
-                    {renderExtensions('footer')}
-
-                    <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">
-                        <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
-                        <div className="flex justify-end gap-3">
-                            <button type="button" onClick={closeModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
-                            <button type="submit" disabled={!canEdit || saving || apexWarning?.kind === 'error' || !!nameError} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
-                                {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
-                            </button>
+                            <DnsRecordTypeHint recordType={addType} />
                         </div>
-                    </div>
-                </form>
+
+                        {renderExtensions('footer')}
+
+                        <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">
+                            <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
+                            <div className="flex justify-end gap-3">
+                                <button type="button" onClick={closeModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">{t('common.cancel')}</button>
+                                <button type="submit" disabled={!canEdit || saving || apexWarning?.kind === 'error' || !!nameError} className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
             </div>
-        </div>
+        </ModalPortal>
     )
 }

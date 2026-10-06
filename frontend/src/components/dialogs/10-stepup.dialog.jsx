@@ -7,6 +7,7 @@ import {
     cancelStepUp, getStepUpState, openStepUp, saveReturnPath, submitStepUp, subscribeStepUp, takeReturnPath,
 } from '../sso/stepUpStore'
 import { useDialogFocus } from '../../lib/useDialogFocus'
+import ModalPortal from '../common/ModalPortal'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (components/dialogs/Dialogs.jsx)
 export const dialog = { id: 'stepup' }
@@ -60,17 +61,19 @@ function Frame({ titleId, title, icon: Icon, onCancel, children }) {
     const dialogRef = useDialogFocus({ onClose: onCancel })
 
     return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="glass-card p-6 w-full max-w-md space-y-4">
-                <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center shrink-0">
-                        <Icon className="w-5 h-5 text-warning" aria-hidden="true" />
+        <ModalPortal>
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="glass-card p-6 w-full max-w-md space-y-4">
+                    <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center shrink-0">
+                            <Icon className="w-5 h-5 text-warning" aria-hidden="true" />
+                        </div>
+                        <h2 id={titleId} className="text-lg font-semibold text-text-primary min-w-0 pt-1.5">{title}</h2>
                     </div>
-                    <h2 id={titleId} className="text-lg font-semibold text-text-primary min-w-0 pt-1.5">{title}</h2>
+                    {children}
                 </div>
-                {children}
             </div>
-        </div>
+        </ModalPortal>
     )
 }
 

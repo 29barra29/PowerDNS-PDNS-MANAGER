@@ -7,7 +7,7 @@ const { test, expect } = require('../fixtures/test')
 const { BASE_URL } = require('../fixtures/env')
 const { uniqueZone, unique } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
-const { dialog } = require('../fixtures/ui')
+const { dialog, expectDialogOnTop } = require('../fixtures/ui')
 
 const bare = (zone) => zone.replace(/\.$/, '')
 
@@ -61,6 +61,7 @@ test.describe('DynDNS', () => {
     // Einmal-Anzeige mit Anleitung
     const once = dialog(page, t('dyndns.plaintextTitle'))
     await expect(once).toBeVisible()
+    await expectDialogOnTop(once) // UI-SMOKE-1: Einmal-Anzeige liegt ueber allen Karten
     const token = (await once.getByLabel(t('secretModal.secretLabel')).innerText()).trim()
     expect(token.length).toBeGreaterThan(20)
     await expect(once.getByRole('heading', { name: t('dyndns.guideTitle') })).toBeVisible()

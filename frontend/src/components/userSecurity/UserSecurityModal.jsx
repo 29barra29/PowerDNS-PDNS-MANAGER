@@ -6,6 +6,7 @@ import ModalErrorBanner from '../ModalErrorBanner'
 import OneTimeSecretModal from '../OneTimeSecretModal'
 import { useDialogFocus } from '../../lib/useDialogFocus'
 import { visibleSecuritySections } from './UserSecuritySections'
+import ModalPortal from '../common/ModalPortal'
 
 /*
  * Dialog "Passwort & Sicherheit" eines Benutzers (F3 §2.4/§6.4, Bauplan B.14 und [S9]).
@@ -108,71 +109,73 @@ export default function UserSecurityModal({ user, resetMailAvailable, onClose, o
 
     return (
         <>
-            <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-                onClick={() => { if (canClose) onClose() }}
-            >
+            <ModalPortal>
                 <div
-                    ref={dialogRef}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="user-security-title"
-                    className="glass-card p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
-                    onClick={(e) => e.stopPropagation()}
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                    onClick={() => { if (canClose) onClose() }}
                 >
-                    <div className="flex items-start justify-between gap-3 mb-4">
-                        <div className="flex items-start gap-3 min-w-0">
-                            <KeyRound className="w-5 h-5 text-warning shrink-0 mt-1" aria-hidden="true" />
-                            <div className="min-w-0">
-                                <h2 id="user-security-title" className="text-lg font-bold text-text-primary">{t('users.securityTitle')}</h2>
-                                <p className="text-sm text-text-muted break-all">{t('users.securityFor', { name: userName })}</p>
+                    <div
+                        ref={dialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="user-security-title"
+                        className="glass-card p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                            <div className="flex items-start gap-3 min-w-0">
+                                <KeyRound className="w-5 h-5 text-warning shrink-0 mt-1" aria-hidden="true" />
+                                <div className="min-w-0">
+                                    <h2 id="user-security-title" className="text-lg font-bold text-text-primary">{t('users.securityTitle')}</h2>
+                                    <p className="text-sm text-text-muted break-all">{t('users.securityFor', { name: userName })}</p>
+                                </div>
                             </div>
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                disabled={!canClose}
+                                className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-40"
+                                aria-label={t('common.close')}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            disabled={!canClose}
-                            className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-40"
-                            aria-label={t('common.close')}
-                        >
-                            <X className="w-5 h-5" />
-                        </button>
-                    </div>
 
-                    <ModalErrorBanner message={modalError} onClose={() => setModalError('')} />
-                    {modalInfo && (
-                        <div role="status" className="mb-4 p-3 rounded-xl bg-success/10 border border-success/30 text-success text-sm flex items-start gap-2">
-                            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-                            <p className="flex-1 break-words">{modalInfo}</p>
-                            <button type="button" onClick={() => setModalInfo('')} className="text-xs hover:underline" aria-label={t('common.close')}>×</button>
+                        <ModalErrorBanner message={modalError} onClose={() => setModalError('')} />
+                        {modalInfo && (
+                            <div role="status" className="mb-4 p-3 rounded-xl bg-success/10 border border-success/30 text-success text-sm flex items-start gap-2">
+                                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                                <p className="flex-1 break-words">{modalInfo}</p>
+                                <button type="button" onClick={() => setModalInfo('')} className="text-xs hover:underline" aria-label={t('common.close')}>×</button>
+                            </div>
+                        )}
+
+                        <div className="space-y-4">
+                            {sections.map((entry) => {
+                                const Section = entry.Component
+                                return (
+                                    <section key={entry.id} className="rounded-xl border border-border/60 p-4 space-y-3">
+                                        {entry.titleKey && <h3 className="text-sm font-semibold text-text-primary">{t(entry.titleKey)}</h3>}
+                                        <Section user={local} ctx={ctx} />
+                                    </section>
+                                )
+                            })}
+                            <AccessBlock ctx={ctx} summary={summary} summaryError={summaryError} />
                         </div>
-                    )}
 
-                    <div className="space-y-4">
-                        {sections.map((entry) => {
-                            const Section = entry.Component
-                            return (
-                                <section key={entry.id} className="rounded-xl border border-border/60 p-4 space-y-3">
-                                    {entry.titleKey && <h3 className="text-sm font-semibold text-text-primary">{t(entry.titleKey)}</h3>}
-                                    <Section user={local} ctx={ctx} />
-                                </section>
-                            )
-                        })}
-                        <AccessBlock ctx={ctx} summary={summary} summaryError={summaryError} />
-                    </div>
-
-                    <div className="flex justify-end pt-4 mt-4 border-t border-border">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            disabled={!canClose}
-                            className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50"
-                        >
-                            {t('common.close')}
-                        </button>
+                        <div className="flex justify-end pt-4 mt-4 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                disabled={!canClose}
+                                className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50"
+                            >
+                                {t('common.close')}
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </ModalPortal>
 
             {oneTime && (
                 <OneTimeSecretModal

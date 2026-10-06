@@ -9,6 +9,7 @@ import DnssecParentDsCheck from './DnssecParentDsCheck'
 import {
     bumpSerialValue, currentSepTags, isPrimaryKind, visiblePeers, withForce,
 } from '../../zoneDetail/dnssecModel.js'
+import ModalPortal from '../common/ModalPortal'
 
 // "DNSSEC deaktivieren" (F4 §2.9): Reihenfolge (erst DS beim Registrar entfernen, TTL abwarten), Pflicht-Checkbox.
 // Teil B (WS-F4-C): Knopf "Elternzone pruefen" (GET …/parent-ds); ohne Freigabe der DNS-Pruefungen nur der manuelle
@@ -28,39 +29,41 @@ function DisableDialogFrame({ title, onClose, onSubmit, busy, children }) {
         }
     }
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-            onClick={() => { if (!busy) onClose?.() }}
-        >
+        <ModalPortal>
             <div
-                ref={dialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={titleId}
-                tabIndex={-1}
-                className="glass-card p-5 sm:p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={onKeyDown}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                onClick={() => { if (!busy) onClose?.() }}
             >
-                <div className="flex items-start justify-between gap-3 mb-4">
-                    <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
-                        <ShieldOff className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
-                        <span className="min-w-0">{title}</span>
-                    </h2>
-                    <button
-                        type="button"
-                        onClick={() => { if (!busy) onClose?.() }}
-                        disabled={busy}
-                        className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
-                        aria-label={t('common.close')}
-                        title={t('common.close')}
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={titleId}
+                    tabIndex={-1}
+                    className="glass-card p-5 sm:p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={onKeyDown}
+                >
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                        <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
+                            <ShieldOff className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
+                            <span className="min-w-0">{title}</span>
+                        </h2>
+                        <button
+                            type="button"
+                            onClick={() => { if (!busy) onClose?.() }}
+                            disabled={busy}
+                            className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
+                            aria-label={t('common.close')}
+                            title={t('common.close')}
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    {children}
                 </div>
-                {children}
             </div>
-        </div>
+        </ModalPortal>
     )
 }
 export default function DnssecDisableModal({ server, zoneId, zoneName, status, onClose, onDone, onReload }) {
