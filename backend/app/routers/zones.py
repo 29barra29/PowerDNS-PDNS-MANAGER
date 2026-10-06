@@ -561,6 +561,17 @@ async def export_zone(
 
 
 LUA_IMPORT_BLOCKED_DETAIL = "Die Zonendatei enthält LUA-Records, LUA-Records sind in diesem Panel deaktiviert."
+SURROGATE_DETAIL = "Die Zonendatei enthält ein ungültiges Zeichen (einzelnes UTF-16-Surrogat) in Zeile {line}."
+
+
+def _assert_valid_text(import_data: ZoneImport) -> None:
+    """400 statt 500 bei einzelnen UTF-16-Surrogaten (JSON-Escape wie ``\\ud800``), die sich nicht als UTF-8 senden
+    lassen (Review-Fund W3-L4) – vor Vorschau, Gate und PowerDNS."""
+    from app.services.zone_import_diff import lone_surrogate_line
+
+    line = lone_surrogate_line(import_data.content)
+    if line is not None:
+        raise HTTPException(status_code=400, detail=SURROGATE_DETAIL.format(line=line))
 
 
 @router.post("/import/preview")
@@ -571,6 +582,7 @@ async def import_zone_preview(
 ):
     """Vergleich Zonefile vs. bestehende PDNS-Zone (erster schreibender Server) – kein Schreiben."""
     assert_token_scope(import_data.name, write=False)
+    _assert_valid_text(import_data)
     from app.services.lua_records import get_lua_policy
     from app.services.zone_import_diff import MAX_GATE_LINES, build_import_diff, lua_gate_lines
 
@@ -640,6 +652,7 @@ async def import_zone(
 ):
     """Import a zone from BIND zonefile format (Admin only). Only servers with allow_writes=True are used."""
     assert_token_scope(import_data.name, write=True)
+    _assert_valid_text(import_data)
     await _assert_lua_import_allowed(db, import_data, admin)
     col = _allow_writes_column()
     if col is not None:

@@ -5,6 +5,7 @@ import api from '../../../api'
 import ModalErrorBanner from '../../ModalErrorBanner'
 import { useDialogFocus } from '../../../lib/useDialogFocus'
 import { useSettings } from '../settingsContext'
+import ModalPortal from '../../common/ModalPortal'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'servers', order: 30, labelKey: 'settings.servers', icon: Server, adminOnly: true }
@@ -339,188 +340,190 @@ export default function ServersTab() {
 
         {/* =================== ADD/EDIT SERVER MODAL =================== */}
         {showForm && (
-            <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-                onClick={() => { if (!saving) closeServerModal() }}
-            >
+            <ModalPortal>
                 <div
-                    ref={serverDialogRef}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="server-modal-title"
-                    className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto"
-                    onClick={e => e.stopPropagation()}
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                    onClick={() => { if (!saving) closeServerModal() }}
                 >
-                    <div className="flex items-center justify-between mb-5">
-                        <h2 id="server-modal-title" className="text-lg font-bold text-text-primary">
-                            {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
-                        </h2>
-                        <button type="button" onClick={closeServerModal} disabled={saving} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-50" title={t('common.close')} aria-label={t('common.close')}>
-                            <X className="w-5 h-5" />
-                        </button>
-                    </div>
-
-                    <ModalErrorBanner
-                        message={serverModalError}
-                        title={editId ? t('settingsMore.updateErrorTitle') : t('settingsMore.createErrorTitle')}
-                        onClose={() => setServerModalError('')}
-                    />
-
-                    <form onSubmit={handleSave} className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverName')} *</label>
-                                <input
-                                    type="text" value={form.name}
-                                    onChange={e => setForm({ ...form, name: e.target.value })}
-                                    placeholder="server1" className="w-full px-3 py-2 text-sm"
-                                    required disabled={!!editId} minLength={1}
-                                    data-autofocus={!editId ? true : undefined}
-                                />
-                                <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.serverNameHint')}</p>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverDisplayName')}</label>
-                                <input
-                                    type="text" value={form.display_name}
-                                    onChange={e => setForm({ ...form, display_name: e.target.value })}
-                                    placeholder={t('settings.nameserverPlaceholder')} className="w-full px-3 py-2 text-sm"
-                                    data-autofocus={editId && editKeyStatus === 'set' ? true : undefined}
-                                />
-                            </div>
+                    <div
+                        ref={serverDialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="server-modal-title"
+                        className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-5">
+                            <h2 id="server-modal-title" className="text-lg font-bold text-text-primary">
+                                {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
+                            </h2>
+                            <button type="button" onClick={closeServerModal} disabled={saving} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-50" title={t('common.close')} aria-label={t('common.close')}>
+                                <X className="w-5 h-5" />
+                            </button>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.powerDnsApiUrl')} *</label>
-                            <input
-                                type="url" value={form.url}
-                                onChange={e => setForm({ ...form, url: e.target.value })}
-                                placeholder={t('settings.pdnsApiUrlPlaceholder')} className="w-full px-3 py-2 text-sm"
-                                required
-                            />
-                            <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.powerDnsApiUrlHint')}</p>
-                        </div>
+                        <ModalErrorBanner
+                            message={serverModalError}
+                            title={editId ? t('settingsMore.updateErrorTitle') : t('settingsMore.createErrorTitle')}
+                            onClose={() => setServerModalError('')}
+                        />
 
-                        <div>
-                            <label htmlFor="server-api-key" className="block text-sm font-medium text-text-secondary mb-1">
-                                {t('settingsMore.apiKey')}{!editId || (editKeyStatus !== 'set' && editIsActive) ? ' *' : ''}
-                            </label>
-                            {editId && editKeyStatus !== 'set' && (
-                                <div role="alert" className={`mb-2 p-3 rounded-lg border text-sm flex items-start gap-2 ${editKeyStatus === 'unreadable' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-warning/10 border-warning/30 text-warning'}`}>
-                                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-                                    <div className="space-y-1">
-                                        <p>{editKeyStatus === 'unreadable' ? t('settingsMore.apiKeyUnreadableHint') : t('settingsMore.apiKeyMissingHint')}</p>
-                                        {editIsActive && <p className="text-xs">{t('settingsMore.apiKeyNotLoadedHint')}</p>}
+                        <form onSubmit={handleSave} className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverName')} *</label>
+                                    <input
+                                        type="text" value={form.name}
+                                        onChange={e => setForm({ ...form, name: e.target.value })}
+                                        placeholder="server1" className="w-full px-3 py-2 text-sm"
+                                        required disabled={!!editId} minLength={1}
+                                        data-autofocus={!editId ? true : undefined}
+                                    />
+                                    <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.serverNameHint')}</p>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.serverDisplayName')}</label>
+                                    <input
+                                        type="text" value={form.display_name}
+                                        onChange={e => setForm({ ...form, display_name: e.target.value })}
+                                        placeholder={t('settings.nameserverPlaceholder')} className="w-full px-3 py-2 text-sm"
+                                        data-autofocus={editId && editKeyStatus === 'set' ? true : undefined}
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.powerDnsApiUrl')} *</label>
+                                <input
+                                    type="url" value={form.url}
+                                    onChange={e => setForm({ ...form, url: e.target.value })}
+                                    placeholder={t('settings.pdnsApiUrlPlaceholder')} className="w-full px-3 py-2 text-sm"
+                                    required
+                                />
+                                <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.powerDnsApiUrlHint')}</p>
+                            </div>
+
+                            <div>
+                                <label htmlFor="server-api-key" className="block text-sm font-medium text-text-secondary mb-1">
+                                    {t('settingsMore.apiKey')}{!editId || (editKeyStatus !== 'set' && editIsActive) ? ' *' : ''}
+                                </label>
+                                {editId && editKeyStatus !== 'set' && (
+                                    <div role="alert" className={`mb-2 p-3 rounded-lg border text-sm flex items-start gap-2 ${editKeyStatus === 'unreadable' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-warning/10 border-warning/30 text-warning'}`}>
+                                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                                        <div className="space-y-1">
+                                            <p>{editKeyStatus === 'unreadable' ? t('settingsMore.apiKeyUnreadableHint') : t('settingsMore.apiKeyMissingHint')}</p>
+                                            {editIsActive && <p className="text-xs">{t('settingsMore.apiKeyNotLoadedHint')}</p>}
+                                        </div>
                                     </div>
+                                )}
+                                <div className="relative">
+                                    <input
+                                        id="server-api-key"
+                                        type={showApiKey ? 'text' : 'password'} value={form.api_key}
+                                        onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true); setApiKeyFieldHint('') }}
+                                        placeholder={editId && editKeyStatus === 'set' ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
+                                        className="w-full px-3 py-2 pr-20 text-sm"
+                                        required={!editId || (editKeyStatus !== 'set' && editIsActive)}
+                                        maxLength={500}
+                                        autoComplete="off"
+                                        aria-invalid={apiKeyFieldHint ? true : undefined}
+                                        aria-describedby={apiKeyFieldHint ? 'server-api-key-hint' : undefined}
+                                        data-autofocus={editId && editKeyStatus !== 'set' ? true : undefined}
+                                    />
+                                    <button type="button" onClick={() => setShowApiKey(!showApiKey)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                                        {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
                                 </div>
-                            )}
-                            <div className="relative">
-                                <input
-                                    id="server-api-key"
-                                    type={showApiKey ? 'text' : 'password'} value={form.api_key}
-                                    onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true); setApiKeyFieldHint('') }}
-                                    placeholder={editId && editKeyStatus === 'set' ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
-                                    className="w-full px-3 py-2 pr-20 text-sm"
-                                    required={!editId || (editKeyStatus !== 'set' && editIsActive)}
-                                    maxLength={500}
-                                    autoComplete="off"
-                                    aria-invalid={apiKeyFieldHint ? true : undefined}
-                                    aria-describedby={apiKeyFieldHint ? 'server-api-key-hint' : undefined}
-                                    data-autofocus={editId && editKeyStatus !== 'set' ? true : undefined}
-                                />
-                                <button type="button" onClick={() => setShowApiKey(!showApiKey)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
-                                    {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                </button>
+                                {apiKeyFieldHint && (
+                                    <p id="server-api-key-hint" className="mt-1 text-xs text-warning">{apiKeyFieldHint}</p>
+                                )}
+                                {/* "Anzeigen" nur bei lesbarem Key (unlesbar/fehlend -> Backend 409, F5 §2 D) */}
+                                {editId && editKeyStatus === 'set' && (
+                                    <button
+                                        type="button"
+                                        onClick={handleRevealApiKey}
+                                        disabled={revealingKey}
+                                        className="mt-1 text-xs text-accent-light hover:text-accent flex items-center gap-1"
+                                    >
+                                        {revealingKey ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                                        {t('settings.revealExistingApiKey')}
+                                    </button>
+                                )}
+                                <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.apiKeyHint')}</p>
                             </div>
-                            {apiKeyFieldHint && (
-                                <p id="server-api-key-hint" className="mt-1 text-xs text-warning">{apiKeyFieldHint}</p>
-                            )}
-                            {/* "Anzeigen" nur bei lesbarem Key (unlesbar/fehlend -> Backend 409, F5 §2 D) */}
-                            {editId && editKeyStatus === 'set' && (
-                                <button
-                                    type="button"
-                                    onClick={handleRevealApiKey}
-                                    disabled={revealingKey}
-                                    className="mt-1 text-xs text-accent-light hover:text-accent flex items-center gap-1"
-                                >
-                                    {revealingKey ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-                                    {t('settings.revealExistingApiKey')}
-                                </button>
-                            )}
-                            <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.apiKeyHint')}</p>
-                        </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.description')}</label>
-                            <input
-                                type="text" value={form.description}
-                                onChange={e => setForm({ ...form, description: e.target.value })}
-                                placeholder={t('settings.serverDescriptionPlaceholder')} className="w-full px-3 py-2 text-sm"
-                            />
-                        </div>
-
-                        <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-bg-hover/50 transition-colors">
-                            <input
-                                type="checkbox"
-                                checked={form.allow_writes !== false}
-                                onChange={e => setForm({ ...form, allow_writes: e.target.checked })}
-                                className="w-4 h-4 rounded"
-                            />
                             <div>
-                                <span className="text-sm font-medium text-text-primary">{t('settingsMore.saveOnThisServer')}</span>
-                                <p className="text-xs text-text-muted mt-0.5">{t('settings.writeToServerHint')}</p>
+                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('settingsMore.description')}</label>
+                                <input
+                                    type="text" value={form.description}
+                                    onChange={e => setForm({ ...form, description: e.target.value })}
+                                    placeholder={t('settings.serverDescriptionPlaceholder')} className="w-full px-3 py-2 text-sm"
+                                />
                             </div>
-                        </label>
 
-                        {/* Test Connection */}
-                        <div className="border-t border-border pt-4">
-                            <button
-                                type="button" onClick={handleTest} disabled={testing}
-                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 disabled:opacity-50 transition-all"
-                            >
-                                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                                {t('settingsMore.testConnection')}
-                            </button>
-
-                            {testResult && (
-                                <div className={`mt-3 p-3 rounded-lg text-sm ${testResult.success
-                                    ? 'bg-success/10 border border-success/30 text-success'
-                                    : 'bg-danger/10 border border-danger/30 text-danger'
-                                    }`}>
-                                    {testResult.success ? (
-                                        <div>
-                                            <div className="flex items-center gap-2 font-medium mb-1">
-                                                <CheckCircle2 className="w-4 h-4" /> {t('settingsMore.connectionSuccess')}
-                                            </div>
-                                            <div className="text-xs space-y-0.5 text-text-secondary">
-                                                <p>{t('settingsMore.version')}: {testResult.server_info.version}</p>
-                                                <p>{t('dashboard.type')}: {testResult.server_info.daemon_type}</p>
-                                                <p>{t('settings.zonesCount')}: {testResult.server_info.zone_count}</p>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="flex items-center gap-2">
-                                            <AlertCircle className="w-4 h-4 shrink-0" />
-                                            <span>{testResult.error}</span>
-                                        </div>
-                                    )}
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-bg-hover/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={form.allow_writes !== false}
+                                    onChange={e => setForm({ ...form, allow_writes: e.target.checked })}
+                                    className="w-4 h-4 rounded"
+                                />
+                                <div>
+                                    <span className="text-sm font-medium text-text-primary">{t('settingsMore.saveOnThisServer')}</span>
+                                    <p className="text-xs text-text-muted mt-0.5">{t('settings.writeToServerHint')}</p>
                                 </div>
-                            )}
-                        </div>
+                            </label>
 
-                        <div className="flex justify-end gap-3 pt-2 border-t border-border">
-                            <button type="button" onClick={closeServerModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">
-                                {t('common.cancel')}
-                            </button>
-                            <button type="submit" disabled={saving} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
-                                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                {editId ? t('common.save') : t('settings.add')}
-                            </button>
-                        </div>
-                    </form>
+                            {/* Test Connection */}
+                            <div className="border-t border-border pt-4">
+                                <button
+                                    type="button" onClick={handleTest} disabled={testing}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-accent/40 text-accent-light rounded-lg hover:bg-accent/10 disabled:opacity-50 transition-all"
+                                >
+                                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                                    {t('settingsMore.testConnection')}
+                                </button>
+
+                                {testResult && (
+                                    <div className={`mt-3 p-3 rounded-lg text-sm ${testResult.success
+                                        ? 'bg-success/10 border border-success/30 text-success'
+                                        : 'bg-danger/10 border border-danger/30 text-danger'
+                                        }`}>
+                                        {testResult.success ? (
+                                            <div>
+                                                <div className="flex items-center gap-2 font-medium mb-1">
+                                                    <CheckCircle2 className="w-4 h-4" /> {t('settingsMore.connectionSuccess')}
+                                                </div>
+                                                <div className="text-xs space-y-0.5 text-text-secondary">
+                                                    <p>{t('settingsMore.version')}: {testResult.server_info.version}</p>
+                                                    <p>{t('dashboard.type')}: {testResult.server_info.daemon_type}</p>
+                                                    <p>{t('settings.zonesCount')}: {testResult.server_info.zone_count}</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center gap-2">
+                                                <AlertCircle className="w-4 h-4 shrink-0" />
+                                                <span>{testResult.error}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex justify-end gap-3 pt-2 border-t border-border">
+                                <button type="button" onClick={closeServerModal} disabled={saving} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-50">
+                                    {t('common.cancel')}
+                                </button>
+                                <button type="submit" disabled={saving} className="px-5 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    {editId ? t('common.save') : t('settings.add')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
-            </div>
+            </ModalPortal>
         )}
         </>
     )

@@ -316,9 +316,12 @@ def create_oidc_state_token(*, state: str, nonce: str, code_verifier: str, issue
     """Signierter Kurzzeit-JWT (10 min) fuer das State-Cookie (Muster wie WebAuthn-Challenge)."""
     if intent not in INTENTS:
         raise ValueError("unbekannter OIDC-Intent")
+    now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "typ": TOKEN_TYPE_OIDC_STATE, "st": state, "n": nonce, "cv": code_verifier, "iss": issuer, "it": intent,
-        "exp": datetime.now(timezone.utc) + timedelta(seconds=STATE_TTL_SECONDS),
+        # iat: Startzeit – der Abschluss einer Verknuepfung prueft damit den Sitzungs-Widerruf (W2-NACHARBEIT 4.1)
+        "iat": int(now.timestamp()),
+        "exp": now + timedelta(seconds=STATE_TTL_SECONDS),
     }
     if user_id is not None:
         payload["uid"] = int(user_id)

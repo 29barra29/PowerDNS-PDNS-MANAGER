@@ -1,0 +1,12 @@
+{
+  "set": {
+    "dyndns.secretRevokedActivate": "The token cannot be enabled because its secret was revoked. Generate a new secret first.",
+    "dyndns.secretRevokedBadge": "Secret revoked",
+    "dyndns.secretRevokedForeignHint": "Only the owner can generate a new secret.",
+    "dyndns.secretRevokedHint": "The secret was revoked for security reasons (the token appeared in a URL or access was revoked). Generate a new secret and enable the token again afterwards – the old secret stays invalid.",
+    "dyndns.secretRevokedRotate": "Generate new secret",
+    "layout.menu": "Main menu",
+    "lua.settings.loadError": "The LUA settings could not be loaded ({{error}}). Saving is only possible after they have loaded."
+  },
+  "remove": []
+}

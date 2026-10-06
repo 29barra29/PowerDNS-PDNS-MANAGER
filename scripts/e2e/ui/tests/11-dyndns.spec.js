@@ -1,15 +1,27 @@
 // DynDNS-Karte (F9F11-FE): Token anlegen (zwei Hostnamen, nur A, TTL, PTR) -> Einmal-Anzeige mit Anleitung
 // (FRITZ!Box-URL ohne <pass>, ESC schliesst nicht, Kopieren) -> Liste mit Chips; echtes Update ueber /nic/update mit
-// dem Token -> letzter Abruf/Ergebnis in der Karte; Admin-Bereich "Alle DynDNS-Tokens".
-// Quellen: WS-F9F11-FE Abschnitt 2 Nr. 1-4.
+// dem Token -> letzter Abruf/Ergebnis in der Karte; Admin-Bereich "Alle DynDNS-Tokens". Gesperrtes Secret (Token
+// stand in der URL): Hinweis, kein "Aktivieren", "Neues Secret erzeugen" macht ihn wieder aktivierbar.
+// Quellen: WS-F9F11-FE Abschnitt 2 Nr. 1-4, A2 (WS-F9F11-BE-fix2, umgesetzt von WS-W3-NACHARBEIT).
 const { request } = require('@playwright/test')
 const { test, expect } = require('../fixtures/test')
 const { BASE_URL } = require('../fixtures/env')
 const { uniqueZone, unique } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
-const { dialog } = require('../fixtures/ui')
+const { dialog, expectDialogOnTop, acceptNextConfirm } = require('../fixtures/ui')
 
 const bare = (zone) => zone.replace(/\.$/, '')
+
+/** Token im Query-String (wie ein falsch konfigurierter Router): das Backend lehnt ab und sperrt das Secret. */
+async function nicUpdateWithTokenInQuery(token, hostname, ip) {
+  const ctx = await request.newContext({ baseURL: BASE_URL })
+  try {
+    const res = await ctx.get(`/nic/update?hostname=${encodeURIComponent(hostname)}&myip=${ip}&password=${encodeURIComponent(token)}`)
+    return (await res.text()).trim()
+  } finally {
+    await ctx.dispose()
+  }
+}
 
 async function nicUpdate(token, hostname, ip) {
   const ctx = await request.newContext({ baseURL: BASE_URL })
@@ -61,6 +73,7 @@ test.describe('DynDNS', () => {
     // Einmal-Anzeige mit Anleitung
     const once = dialog(page, t('dyndns.plaintextTitle'))
     await expect(once).toBeVisible()
+    await expectDialogOnTop(once) // UI-SMOKE-1: Einmal-Anzeige liegt ueber allen Karten
     const token = (await once.getByLabel(t('secretModal.secretLabel')).innerText()).trim()
     expect(token.length).toBeGreaterThan(20)
     await expect(once.getByRole('heading', { name: t('dyndns.guideTitle') })).toBeVisible()
@@ -94,5 +107,46 @@ test.describe('DynDNS', () => {
     // Admin: alle DynDNS-Tokens
     await card.getByRole('button', { name: t('dyndns.adminAllTokens') }).click()
     await expect(card.locator('table').getByText(name)).toBeVisible()
+  })
+
+  test('Gesperrtes Secret: Hinweis, kein Aktivieren, neues Secret macht den Token wieder nutzbar (A2)', async ({ page, adminApi }) => {
+    const zone = uniqueZone('ui-dyn-rev')
+    zones.push(zone)
+    await adminApi.createZone(zone)
+    const name = unique('ui-dyn-rev')
+    const created = await adminApi.post('dyndns/tokens', { name, hostnames: [`rev.${bare(zone)}`], allowed_types: ['A'], ttl: 300 })
+    expect(await nicUpdateWithTokenInQuery(created.plaintext_token, `rev.${bare(zone)}`, '192.0.2.81')).not.toMatch(/^good/)
+    const tok = (await adminApi.get('dyndns/tokens')).tokens.find((x) => x.id === created.token.id)
+    expect(tok.secret_revoked).toBe(true)
+    expect(tok.is_active).toBe(false)
+
+    await page.goto('/settings?tab=integrations')
+    const card = page.locator('.glass-card').filter({ has: page.getByRole('heading', { name: t('dyndns.title') }) })
+    const item = card.locator('li').filter({ has: page.getByRole('button', { name: `${t('common.edit')}: ${name}` }) })
+    await expect(item.getByText(t('dyndns.secretRevokedBadge'), { exact: true })).toBeVisible()
+    await expect(item.getByRole('note')).toContainText(t('dyndns.secretRevokedHint'))
+    await expect(item.getByRole('button', { name: `${t('dyndns.activate')}: ${name}` })).toHaveCount(0)
+
+    // Bearbeiten: "Aktiv" gesperrt, mit Hinweis
+    await item.getByRole('button', { name: `${t('common.edit')}: ${name}` }).click()
+    const edit = dialog(page, t('dyndns.editToken'))
+    await expect(edit.getByLabel(t('dyndns.fieldActive'))).toBeDisabled()
+    await expect(edit.getByText(t('dyndns.secretRevokedHint'))).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(edit).toBeHidden()
+
+    // Neues Secret -> Einmal-Anzeige -> danach wieder aktivierbar
+    const confirm = acceptNextConfirm(page)
+    await item.getByRole('button', { name: t('dyndns.secretRevokedRotate') }).click()
+    await confirm
+    const once = dialog(page, t('dyndns.plaintextTitle'))
+    await expect(once).toBeVisible()
+    const fresh = (await once.getByLabel(t('secretModal.secretLabel')).innerText()).trim()
+    await once.getByRole('button', { name: t('dyndns.plaintextDone') }).click()
+    await expect(once).toBeHidden()
+    await expect(item.getByText(t('dyndns.secretRevokedBadge'), { exact: true })).toHaveCount(0)
+    await item.getByRole('button', { name: `${t('dyndns.activate')}: ${name}` }).click()
+    await expect(item.getByRole('button', { name: `${t('dyndns.deactivate')}: ${name}` })).toBeVisible()
+    expect(await nicUpdate(fresh, `rev.${bare(zone)}`, '192.0.2.82')).toBe('good 192.0.2.82')
   })
 })

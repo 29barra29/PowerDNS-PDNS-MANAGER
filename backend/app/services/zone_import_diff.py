@@ -177,8 +177,64 @@ def _record_type_token(ll: LogicalLine) -> Optional[Tuple[int, str]]:
     return k, toks[k].upper()
 
 
-def _generic_rdata_text(rest: str) -> Optional[str]:
-    """``\\# <len> <hex …>`` (RFC 3597) -> Text (UTF-8, Ersatzzeichen bei Fehlern); sonst ``None``."""
+# Einzelne UTF-16-Surrogate (aus JSON-Escapes wie "\\ud800") lassen sich nicht als UTF-8 kodieren (W3-L4)
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def lone_surrogate_line(content: Optional[str]) -> Optional[int]:
+    """Erste (physische) Zeile mit einem einzelnen UTF-16-Surrogat oder ``None``. Fuer eine 400 statt 500 (W3-L4)."""
+    if not content:
+        return None
+    m = _LONE_SURROGATE_RE.search(content)
+    if m is None:
+        return None
+    return content.count("\n", 0, m.start()) + 1
+
+
+def _wire_text(rtype: str, data: bytes) -> Optional[str]:
+    """RFC-3597-Daten im Wire-Format von PowerDNS -> Praesentationstext; ``None``, wenn es kein Wire-Format ist (W3-L5).
+
+    LUA (65402): 2 Byte Ziel-Typ + Zeichenketten mit Laengenbyte -> ``<Typ> "<Code>"``. ALIAS (65401): Domainname im
+    Wire-Format. Die Panel-eigene Schreibweise (Praesentationstext als Hex, siehe ``rewrite_passthrough_records``)
+    beginnt mit einem ASCII-Buchstaben (Typ-Code >= 0x4100, kein bekannter Typ) und faellt hier durch.
+    """
+    if rtype == "LUA":
+        if len(data) < 3:
+            return None
+        mnemonic = dns.rdatatype.to_text(int.from_bytes(data[:2], "big"))
+        if mnemonic.startswith("TYPE"):
+            return None
+        parts: List[bytes] = []
+        i = 2
+        while i < len(data):
+            n = data[i]
+            i += 1
+            if i + n > len(data):
+                return None
+            parts.append(data[i:i + n])
+            i += n
+        try:
+            code = b"".join(parts).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return f'{mnemonic} "{code}"'
+    if rtype == "ALIAS":
+        try:
+            name, used = dns.name.from_wire(data, 0)
+        except Exception:  # noqa: BLE001 - kein gueltiger Name im Wire-Format
+            return None
+        if used != len(data):
+            return None
+        return name.to_text()
+    return None
+
+
+def _generic_rdata(rest: str, rtype: str) -> Optional[Tuple[str, bool]]:
+    """``\\# <len> <hex …>`` (RFC 3597) -> (Text, war Wire-Format) bzw. ``None``.
+
+    Wire-Format (z. B. aus einem PowerDNS-Export) wird wie PowerDNS gelesen (W3-L5); sonst die Panel-Schreibweise:
+    UTF-8-Text, Ersatzzeichen bei Fehlern.
+    """
     parts = rest.split()
     if len(parts) < 2 or parts[0] != "\\#":
         return None
@@ -186,7 +242,16 @@ def _generic_rdata_text(rest: str) -> Optional[str]:
         data = bytes.fromhex("".join(parts[2:]))
     except ValueError:
         return None
-    return data.decode("utf-8", "replace")
+    wire = _wire_text(rtype, data)
+    if wire is not None:
+        return wire, True
+    return data.decode("utf-8", "replace"), False
+
+
+def _generic_line(code: int, text: str) -> str:
+    """Panel-Schreibweise fuer dnspython: ``TYPE<code> \\# <len> <hex(UTF-8-Text)>``. Wirft nie (W3-L4)."""
+    data = text.encode("utf-8", "surrogatepass")
+    return f"TYPE{code} \\# {len(data)} {data.hex()}" if data else f"TYPE{code} \\# 0"
 
 
 def rewrite_passthrough_records(content: str, zone_name: str) -> Tuple[str, List[PassthroughLine]]:
@@ -195,7 +260,8 @@ def rewrite_passthrough_records(content: str, zone_name: str) -> Tuple[str, List
     Rueckgabe: (umgeschriebener Text mit gleicher Zeilenzahl, gefundene Zeilen). Zeilen mit Klammerfehler
     bleiben unveraendert (dnspython meldet den Fehler selbst). ``$ORIGIN`` wird fuer relative ALIAS-Ziele
     verfolgt; Owner, TTL und Klasse der Zeile bleiben stehen. Bereits generisch geschriebene Zeilen
-    (``TYPE65402 \\# …``) bleiben stehen und zaehlen als LUA bzw. ALIAS.
+    (``TYPE65402 \\# …``) zaehlen als LUA bzw. ALIAS; in der Panel-Schreibweise bleiben sie stehen, echtes
+    Wire-Format (z. B. aus einem PowerDNS-Export) wird in die Panel-Schreibweise umgeschrieben (W3-L5).
     """
     text = content or ""
     lines = text.splitlines()
@@ -226,10 +292,18 @@ def rewrite_passthrough_records(content: str, zone_name: str) -> Tuple[str, List
         toks = list(_TOKEN_RE.finditer(ll.text))
         rest = ll.text[toks[k].end():].strip()
         if rtype in _GENERIC_TO_PASSTHROUGH:
-            decoded = _generic_rdata_text(rest)
-            if decoded is not None:
-                t = _GENERIC_TO_PASSTHROUGH[rtype]
-                found.append(PassthroughLine(ll.start, t, normalize_passthrough_content(t, decoded)))
+            t = _GENERIC_TO_PASSTHROUGH[rtype]
+            got = _generic_rdata(rest, t)
+            if got is None:
+                continue
+            decoded, wire = got
+            found.append(PassthroughLine(ll.start, t, normalize_passthrough_content(t, decoded)))
+            if wire and ll.start - 1 < len(lines):
+                # Wire-Format in die Panel-Schreibweise bringen, damit die Vorschau denselben Text vergleicht (W3-L5)
+                lines[ll.start - 1] = (("\t" if ll.leading_ws else "") + ll.text[:toks[k].start()]
+                                       + _generic_line(PASSTHROUGH_TYPE_CODES[t], decoded))
+                for x in range(ll.start, min(ll.end, len(lines))):
+                    lines[x] = ""
             continue
         if rtype not in PASSTHROUGH_TYPE_CODES:
             continue
@@ -238,9 +312,7 @@ def rewrite_passthrough_records(content: str, zone_name: str) -> Tuple[str, List
                 rest = dns.name.from_text(rest, origin).to_text().lower()
             except Exception:  # noqa: BLE001 - PowerDNS meldet ungueltige Ziele selbst
                 pass
-        data = rest.encode("utf-8")
-        code = PASSTHROUGH_TYPE_CODES[rtype]
-        generic = f"TYPE{code} \\# {len(data)} {data.hex()}" if data else f"TYPE{code} \\# 0"
+        generic = _generic_line(PASSTHROUGH_TYPE_CODES[rtype], rest)
         if ll.start - 1 >= len(lines):
             continue
         lines[ll.start - 1] = ("\t" if ll.leading_ws else "") + ll.text[:toks[k].start()] + generic

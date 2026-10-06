@@ -1,6 +1,6 @@
 // Gemeinsame Fokus-Verwaltung fuer modale Dialoge (role="dialog" + aria-modal="true"), WAI-ARIA Dialog Pattern.
 //
-//   const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef })
+//   const dialogRef = useDialogFocus({ onClose, canClose: !busy, initialFocusRef, onSubmitShortcut })
 //   <div role="dialog" aria-modal="true" ref={dialogRef} ...>
 //
 // Leistet:
@@ -9,8 +9,16 @@
 //   Fokus schon im Dialog (z. B. per `autoFocus`), bleibt er dort.
 // - Tab-Falle: Tab/Umschalt+Tab wandern nur innerhalb des Dialogs (vom letzten zum ersten Element und umgekehrt).
 // - ESC ruft `onClose()` auf, solange `canClose` wahr ist (z. B. nicht waehrend des Speicherns).
+// - Strg/Cmd+Enter ruft `onSubmitShortcut()` auf (falls angegeben) – nur im obersten Dialog. Frueher hingen diese
+//   Listener global am window/document: lag ein Step-up- oder Einmal-Dialog darueber, sendete Strg+Enter den
+//   darunterliegenden Dialog ab (WS-W2-NACHARBEIT 4.4, behoben in WS-W3-NACHARBEIT). Dialoge haengen deshalb
+//   keine eigenen keydown-Listener mehr an window/document (statische Pruefung tests/a11y-dialogs.test.mjs).
 // - Fokus-Rueckgabe: Beim Schliessen (Unmount bzw. `active` -> false) bekommt das zuvor fokussierte Element den
 //   Fokus zurueck, sofern es noch im Dokument ist und der Fokus nicht inzwischen woanders gesetzt wurde.
+//   Ist der Ausloeser beim Schliessen (noch) deaktiviert – z. B. ein Speichern-Knopf, der waehrend eines Step-ups
+//   `disabled` ist –, wartet die Rueckgabe, bis er wieder aktiv ist (hoechstens RESTORE_WAIT_MS; UI-SMOKE-3).
+//   War beim Oeffnen kein Element fokussiert, weil der Browser dem gerade deaktivierten Ausloeser den Fokus genommen
+//   hat, gilt dieses zuletzt fokussierte, jetzt deaktivierte Element als Ausloeser (nur innerhalb OPENER_GRACE_MS).
 // - Verschachtelung: Nur der zuletzt geoeffnete Dialog (Stapel) reagiert auf ESC/Tab. Tastendruecke aus einem
 //   anderen aria-modal-Dialog, der den Hook (noch) nicht nutzt und darueber liegt (z. B. OneTimeSecretModal),
 //   werden ignoriert – der Hook stiehlt dort keinen Fokus und schliesst nichts darunter.
@@ -113,24 +121,110 @@ function focusElement(el) {
     }
 }
 
+// Wie lange die Fokus-Rueckgabe auf einen deaktivierten Ausloeser wartet bzw. wie frisch der zuletzt fokussierte
+// Ausloeser sein muss, wenn beim Oeffnen nichts fokussiert ist.
+export const RESTORE_WAIT_MS = 5000
+export const OPENER_GRACE_MS = 10000
+
+// Ausloeser beim Oeffnen: das fokussierte Element. Ist nichts fokussiert (body), das zuletzt fokussierte Element –
+// aber nur, wenn es noch im Dokument ist, jetzt deaktiviert ist (der Browser hat ihm deshalb den Fokus genommen) und
+// den Fokus erst vor hoechstens OPENER_GRACE_MS verloren hat. Sonst bleibt es beim bisherigen Verhalten (keine
+// Rueckgabe), damit der Fokus nicht zu einem alten Element springt und die Seite verschiebt.
+export function resolveOpener(active, body, last, now = Date.now()) {
+    if (active && active !== body) return active
+    const el = last && last.el
+    if (!el || el === body || el.isConnected === false || el.disabled !== true) return active || null
+    if (typeof last.blurredAt !== 'number' || now - last.blurredAt > OPENER_GRACE_MS) return active || null
+    return el
+}
+
+// Soll die Rueckgabe warten? Nur fuer einen Ausloeser, der noch im Dokument ist und gerade deaktiviert ist.
+export function shouldDeferRestore(previous) {
+    return Boolean(previous && previous.isConnected !== false && previous.disabled === true)
+}
+
+// zuletzt fokussiertes Element (ein Listener-Paar fuer alle Dialoge, beim Laden des Moduls im Browser angemeldet,
+// damit auch der allererste Dialog seinen Ausloeser kennt)
+const lastFocus = { el: null, blurredAt: null }
+let focusTracking = false
+
+function trackFocus() {
+    if (focusTracking || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return
+    focusTracking = true
+    document.addEventListener('focusin', (e) => {
+        lastFocus.el = e.target
+        lastFocus.blurredAt = null
+    }, true)
+    document.addEventListener('focusout', (e) => {
+        if (e.target === lastFocus.el) lastFocus.blurredAt = Date.now()
+    }, true)
+}
+
+trackFocus()
+
+// Gibt den Fokus an `previous` zurueck – sofort oder, wenn der Ausloeser gerade deaktiviert ist, sobald er wieder
+// aktiv wird (MutationObserver auf `disabled`, sonst kurzes Nachsehen). Bedingung bleibt jeweils shouldRestoreFocus.
+function restoreFocus(previous, node) {
+    const attempt = () => {
+        if (shouldRestoreFocus(previous, document.activeElement, node, document.body)) focusElement(previous)
+    }
+    if (!shouldDeferRestore(previous)) {
+        attempt()
+        return
+    }
+    let done = false
+    let observer = null
+    let poll = null
+    let timer = null
+    const finish = () => {
+        done = true
+        if (observer) observer.disconnect()
+        clearInterval(poll)
+        clearTimeout(timer)
+    }
+    const check = () => {
+        if (done) return
+        if (previous.isConnected === false) { finish(); return }
+        if (previous.disabled) return
+        finish()
+        attempt()
+    }
+    if (typeof MutationObserver === 'function') {
+        observer = new MutationObserver(check)
+        observer.observe(previous, { attributes: true, attributeFilter: ['disabled'] })
+    } else {
+        poll = setInterval(check, 50)
+    }
+    timer = setTimeout(finish, RESTORE_WAIT_MS)
+}
+
+/** Strg/Cmd+Enter (ohne Alt, nicht waehrend einer IME-Eingabe)? */
+export function isSubmitShortcut(e) {
+    return Boolean(e && (e.key === 'Enter') && (e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing)
+}
+
 /**
  * Fokus-Management fuer einen modalen Dialog. Liefert den Ref fuer das Element mit role="dialog".
- * @param {{ onClose?: () => void, canClose?: boolean, initialFocusRef?: { current: any }, active?: boolean }} [options]
+ * @param {{ onClose?: () => void, canClose?: boolean, initialFocusRef?: { current: any }, active?: boolean,
+ *           onSubmitShortcut?: () => void }} [options]
  */
-export function useDialogFocus({ onClose, canClose = true, initialFocusRef = null, active = true } = {}) {
+export function useDialogFocus({
+    onClose, canClose = true, initialFocusRef = null, active = true, onSubmitShortcut = null,
+} = {}) {
     const dialogRef = useRef(null)
-    const latest = useRef({ onClose, canClose })
+    const latest = useRef({ onClose, canClose, onSubmitShortcut })
 
     // immer die aktuellen Callbacks/Flags verwenden, ohne den Fokus-Effekt neu zu starten
     useEffect(() => {
-        latest.current = { onClose, canClose }
+        latest.current = { onClose, canClose, onSubmitShortcut }
     })
 
     useEffect(() => {
         if (!active || typeof document === 'undefined') return undefined
         const node = dialogRef.current
         if (!node) return undefined
-        const previous = document.activeElement
+        trackFocus()
+        const previous = resolveOpener(document.activeElement, document.body, lastFocus)
         const token = {}
         const pop = pushDialog(token)
 
@@ -142,6 +236,13 @@ export function useDialogFocus({ onClose, canClose = true, initialFocusRef = nul
 
         function onKeyDown(e) {
             if (!isTopDialog(token) || belongsToOtherModal(e.target, node)) return
+            if (isSubmitShortcut(e)) {
+                const { onSubmitShortcut: submit } = latest.current
+                if (e.defaultPrevented || typeof submit !== 'function') return
+                e.preventDefault()
+                submit()
+                return
+            }
             if (e.key === 'Escape' || e.key === 'Esc') {
                 if (e.defaultPrevented || e.isComposing) return
                 const { onClose: close, canClose: allowed } = latest.current
@@ -169,7 +270,7 @@ export function useDialogFocus({ onClose, canClose = true, initialFocusRef = nul
         return () => {
             document.removeEventListener('keydown', onKeyDown)
             pop()
-            if (shouldRestoreFocus(previous, document.activeElement, node, document.body)) focusElement(previous)
+            restoreFocus(previous, node)
         }
     }, [active, initialFocusRef])
 

@@ -518,7 +518,7 @@ def test_build_test_config_uses_stored_secret_only_for_same_target(db):
     ({"oidc": {"display_name": "X"}}, False),
     ({"oidc": {"scopes": "openid profile"}}, False),
     ({"ldap": {"timeout": 5}}, False),
-    ({"general": {"require_totp": False}}, False),
+    ({"general": {"require_totp": False}}, True),   # L-2 (WS-W3-NACHARBEIT): 2FA-Pflicht nur mit Step-up
     ({"oidc": {"admin_groups": ["a"]}}, True),
     ({"oidc": {"allowed_groups": ["a"]}}, True),
     ({"oidc": {"groups_claim": "roles"}}, True),

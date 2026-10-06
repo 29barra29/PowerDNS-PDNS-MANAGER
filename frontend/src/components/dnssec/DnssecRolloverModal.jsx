@@ -12,6 +12,7 @@ import {
     recommendedDs, rolloverActionAllowed, rolloverKinds, rolloverNewKeyBody, rolloverStepIndex, sinceSeconds,
     soaTimings, withForce,
 } from '../../zoneDetail/dnssecModel.js'
+import ModalPortal from '../common/ModalPortal'
 
 // Rollover-Assistent (F4 §2.5 KSK/CSK, §2.6 ZSK) – zustandslos: die Phase kommt aus status.rollover, Zeitstempel aus
 // status.key_history, Wartezeiten aus den geladenen Records. Plan WS-F4-B/WS-F4-C [D10]:
@@ -30,38 +31,40 @@ function RolloverDialogFrame({ title, onClose, busy, children }) {
     const titleId = useId()
     const dialogRef = useDialogFocus({ onClose, canClose: !busy })
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-            onClick={() => { if (!busy) onClose?.() }}
-        >
+        <ModalPortal>
             <div
-                ref={dialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={titleId}
-                tabIndex={-1}
-                className="glass-card p-5 sm:p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
-                onClick={(e) => e.stopPropagation()}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                onClick={() => { if (!busy) onClose?.() }}
             >
-                <div className="flex items-start justify-between gap-3 mb-4">
-                    <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
-                        <RefreshCw className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
-                        <span className="min-w-0">{title}</span>
-                    </h2>
-                    <button
-                        type="button"
-                        onClick={() => { if (!busy) onClose?.() }}
-                        disabled={busy}
-                        className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
-                        aria-label={t('common.close')}
-                        title={t('common.close')}
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={titleId}
+                    tabIndex={-1}
+                    className="glass-card p-5 sm:p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                        <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
+                            <RefreshCw className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
+                            <span className="min-w-0">{title}</span>
+                        </h2>
+                        <button
+                            type="button"
+                            onClick={() => { if (!busy) onClose?.() }}
+                            disabled={busy}
+                            className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
+                            aria-label={t('common.close')}
+                            title={t('common.close')}
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    {children}
                 </div>
-                {children}
             </div>
-        </div>
+        </ModalPortal>
     )
 }
 
@@ -407,6 +410,7 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
         content = (
             <div className="space-y-3">
                 <p className="text-sm text-text-secondary">{t('dnssec.rolloverDeactivateBody')}</p>
+                {dnskeyCheck('dnskey')}
                 {kind === 'sep' && (
                     <Confirm checked={checks.ds} onChange={(v) => setCheck('ds', v)} disabled={locked}>
                         {t('dnssec.rolloverConfirmDsAdded')}

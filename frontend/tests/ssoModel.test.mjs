@@ -149,6 +149,8 @@ test('changedSensitiveFields: nur sensible, tatsaechlich geaenderte Felder [S8]'
     assert.deepEqual(changedSensitiveFields('oidc', saved, { issuer: 'https://b', allowed_groups: ['g', 'h'], enabled: true }), ['issuer', 'allowed_groups'])
     assert.deepEqual(changedSensitiveFields('general', { local_login_enabled: true }, { local_login_enabled: false, require_totp: false }), ['local_login_enabled'])
     assert.ok(!SENSITIVE_FIELDS.oidc.includes('client_secret'), 'reines Secret-Rotieren ist nicht sensibel')
+    // L-2 (WS-W3-NACHARBEIT): "2FA nach SSO" abschalten nur mit Step-up – wie im Backend
+    assert.deepEqual(changedSensitiveFields('general', { local_login_enabled: true, require_totp: true }, { local_login_enabled: true, require_totp: false }), ['require_totp'])
 })
 
 test('sessionLifetimeHours: Warnung erst ueber 24 h (E-F10-2)', () => {

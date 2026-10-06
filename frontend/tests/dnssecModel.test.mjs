@@ -250,8 +250,15 @@ test('rolloverStepIndex/rolloverActionAllowed KSK/CSK: DNSKEY-Pruefung vor DS-Ta
     assert.equal(rolloverActionAllowed('sep', pre, { ds: true }), false)
     assert.equal(rolloverActionAllowed('sep', pre, { dnskey: true }), false)
     assert.equal(rolloverActionAllowed('sep', pre, { dnskey: true, ds: true }), true)
-    assert.equal(rolloverActionAllowed('sep', { phase: 'both_active' }, {}), false)
-    assert.equal(rolloverActionAllowed('sep', { phase: 'both_active' }, { ds: true }), true)
+    // both_active (W3-L6, WS-W3-NACHARBEIT): DNSKEY-Pruefung und DS vor dem Abschalten des alten Schluessels
+    const both = { phase: 'both_active' }
+    assert.equal(rolloverActionAllowed('sep', both, {}), false)
+    assert.equal(rolloverActionAllowed('sep', both, { ds: true }), false)
+    assert.equal(rolloverActionAllowed('sep', both, { dnskey: true }), false)
+    assert.equal(rolloverActionAllowed('sep', both, { dnskey: true, ds: true }), true)
+    assert.equal(rolloverStepIndex('sep', both, {}), idx('dnskeyCheck'))
+    assert.equal(rolloverStepIndex('sep', both, { dnskey: true }), idx('dsAdd'))
+    assert.equal(rolloverStepIndex('sep', both, { dnskey: true, ds: true }), idx('switch'))
     const retired = { phase: 'old_retired' }
     assert.equal(rolloverStepIndex('sep', retired, {}), idx('dsRemove'))
     assert.equal(rolloverStepIndex('sep', retired, { dsRemoved: true }), idx('dnskeyCheckDelete'))
@@ -276,7 +283,11 @@ test('rolloverStepIndex/rolloverActionAllowed ZSK: Wartezeit + DNSKEY-Pruefung, 
     assert.equal(rolloverStepIndex('zsk', pre, { waited: true, dnskey: true }), idx('switch'))
     assert.equal(rolloverActionAllowed('zsk', pre, { waited: true }), false)
     assert.equal(rolloverActionAllowed('zsk', pre, { waited: true, dnskey: true }), true)
-    assert.equal(rolloverActionAllowed('zsk', { phase: 'both_active' }, {}), true)
+    // both_active (W3-L6): nicht mehr ohne Bedingung – DNSKEY-Pruefung (bzw. Bestaetigung) noetig
+    assert.equal(rolloverActionAllowed('zsk', { phase: 'both_active' }, {}), false)
+    assert.equal(rolloverActionAllowed('zsk', { phase: 'both_active' }, { dnskey: true }), true)
+    assert.equal(rolloverStepIndex('zsk', { phase: 'both_active' }, {}), idx('dnskeyCheck'))
+    assert.equal(rolloverStepIndex('zsk', { phase: 'both_active' }, { dnskey: true }), idx('switch'))
     const retired = { phase: 'old_retired' }
     assert.equal(rolloverStepIndex('zsk', retired, {}), idx('waitMaxTtl'))
     assert.equal(rolloverActionAllowed('zsk', retired, { waited: true, dnskeyDelete: true }), true)

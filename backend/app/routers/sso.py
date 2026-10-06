@@ -43,6 +43,7 @@ from app.core.auth import (
     decode_oidc_state_token,
     get_session_user,
     password_version,
+    session_revoked,
     totp_secret_state,
     totp_verify_once,
     verify_password,
@@ -425,7 +426,13 @@ async def _callback(request: Request, db, ctx: _CallbackCtx, payload: Optional[d
 
 
 async def _complete_link(request: Request, db, ctx: _CallbackCtx, payload: dict, cfg, profile, policy):
-    """Abschluss einer OIDC-Verknuepfung (F10 3.1.6) – Beweis: Re-Auth beim Start + State-Cookie + unveraendertes pwv."""
+    """Abschluss einer OIDC-Verknuepfung (F10 3.1.6) – Beweis: Re-Auth beim Start + State-Cookie + unveraendertes pwv.
+
+    Ausserdem darf seit dem Start kein Sitzungs-Widerruf liegen ("Alle Zugaenge widerrufen", Admin-Passwort-Reset;
+    ``users.sessions_revoked_at``, W2-NACHARBEIT 4.1): Eine Verknuepfung, die eine gekaperte Sitzung vor dem Widerruf
+    begonnen hat, laesst sich innerhalb der State-TTL sonst noch abschliessen. Bestehende Verknuepfungen bleiben
+    beim Widerruf bestehen (Entscheidung Orchestrator); nur ausstehende Verknuepfungen werden so ungueltig.
+    """
     uid = payload.get("uid")
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none() if uid else None
     if user is not None:
@@ -433,6 +440,8 @@ async def _complete_link(request: Request, db, ctx: _CallbackCtx, payload: dict,
     if user is None or not user.is_active or not user_guard.is_local_account(user) \
             or payload.get("pwv") != password_version(user.hashed_password):
         raise _CallbackFail("link_failed", "Konto fehlt, ist nicht mehr lokal oder das Passwort wurde geaendert")
+    if session_revoked(payload, user):
+        raise _CallbackFail("link_failed", "Verknuepfung vor einem Widerruf der Zugaenge gestartet")
     if not sso_settings.public_providers(cfg)["linking"]["oidc"]:
         raise _CallbackFail("link_failed", "Verknuepfung mit OIDC ist nicht aktiviert")
     try:

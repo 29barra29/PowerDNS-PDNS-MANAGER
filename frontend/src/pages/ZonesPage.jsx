@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -7,6 +7,8 @@ import {
 import api from '../api'
 import ModalErrorBanner from '../components/ModalErrorBanner'
 import DnssecOptionsFields from '../components/dnssec/DnssecOptionsFields'
+import ModalPortal from '../components/common/ModalPortal'
+import { useDialogFocus } from '../lib/useDialogFocus'
 import {
     DEFAULT_DNSSEC_OPTIONS, NSEC3_MAX_ITERATIONS, buildDnssecPayload, dnssecServerOf, hasDnssecWarning,
     parseCreateResult, validateDnssecOptions,
@@ -138,20 +140,22 @@ export default function ZonesPage() {
         return () => clearTimeout(timer)
     }, [success])
 
-    /** ESC schließt Modal, Strg/Cmd+Enter speichert */
-    useEffect(() => {
-        if (!showCreate) return
-        function onKey(e) {
-            if (e.key === 'Escape') {
-                if (!creating) closeCreateModal()
-            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault()
-                if (formRef.current && !creating) formRef.current.requestSubmit()
-            }
-        }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-    }, [showCreate, creating])  
+    /** Dialoge "Neue Zone" und "Zone importieren": Fokus, Tab-Falle, ESC (nicht waehrend des Speicherns),
+     *  Fokus-Rueckgabe und Strg/Cmd+Enter (nur im obersten Dialog) ueber lib/useDialogFocus (WS-W3-NACHARBEIT;
+     *  vorher eigener ESC-Listener ohne role="dialog" – reagierte auch unter einem darueberliegenden Dialog). */
+    const createTitleId = useId()
+    const importTitleId = useId()
+    const createDialogRef = useDialogFocus({
+        active: showCreate,
+        onClose: () => closeCreateModal(),
+        canClose: !creating,
+        onSubmitShortcut: () => { if (formRef.current && !creating) formRef.current.requestSubmit() },
+    })
+    const importDialogRef = useDialogFocus({
+        active: showImport && isAdmin,
+        onClose: () => closeImportModal(),
+        canClose: !imBusy,
+    })
 
     async function loadTemplates() {
         try {
@@ -590,362 +594,381 @@ export default function ZonesPage() {
 
             {/* Create Zone Modal */}
             {showCreate && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-                    onClick={() => { if (!creating) closeCreateModal() }}
-                >
-                    <div className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-start justify-between mb-4">
-                            <h2 className="text-lg font-bold text-text-primary">{t('zones.createZone')}</h2>
-                            <button
-                                type="button"
-                                onClick={() => { if (!creating) closeCreateModal() }}
-                                className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
-                                title={t('common.close')}
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-
-                        <ModalErrorBanner message={createError} title={t('zones.createError')} onClose={() => setCreateError('')} />
-
-                        {createResult?.details && Object.keys(createResult.details).length > 0 && (
-                            <div className="mb-4 p-4 rounded-xl bg-bg-hover/50 border border-border">
-                                <p className="text-sm font-medium text-text-primary mb-2">{t('zones.resultPerServer')}</p>
-                                <ul className="space-y-1.5 text-sm">
-                                    {Object.entries(createResult.details).map(([srv, status]) => {
-                                        const result = parseCreateResult(status)
-                                        const isError = result.kind === 'error'
-                                        const isWarning = result.kind === 'dnssecError' || result.kind === 'dnssecSkipped'
-                                        let text = String(status)
-                                        if (result.kind === 'error') text = result.detail
-                                        else if (result.kind === 'created') text = t('zones.created')
-                                        else if (result.kind === 'synced') text = t('zones.synced')
-                                        else if (result.kind === 'dnssecError') text = t('zones.dnssecFailedOnServer', { detail: result.detail })
-                                        else if (result.kind === 'dnssecSkipped') {
-                                            text = t('zones.dnssecSkippedOnServer', { server: dnssecServerOf(createResult.details) || '—' })
-                                        }
-                                        return (
-                                            <li key={srv} className="flex items-start gap-2">
-                                                {isError ? (
-                                                    <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
-                                                ) : isWarning ? (
-                                                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                                                ) : (
-                                                    <CheckCircle className="w-4 h-4 text-success shrink-0 mt-0.5" />
-                                                )}
-                                                <span className="text-text-secondary shrink-0">{srv}:</span>
-                                                <span className={`min-w-0 break-words ${isError ? 'text-danger' : isWarning ? 'text-warning' : 'text-text-primary'}`}>
-                                                    {text}
-                                                </span>
-                                            </li>
-                                        )
-                                    })}
-                                </ul>
-                                <button type="button" onClick={closeCreateModal} className="mt-3 text-xs text-accent hover:underline">{t('zones.doneClose')}</button>
+                <ModalPortal>
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                        onClick={() => { if (!creating) closeCreateModal() }}
+                    >
+                        <div
+                            ref={createDialogRef}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby={createTitleId}
+                            className="glass-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <div className="flex items-start justify-between mb-4">
+                                <h2 id={createTitleId} className="text-lg font-bold text-text-primary">{t('zones.createZone')}</h2>
+                                <button
+                                    type="button"
+                                    onClick={() => { if (!creating) closeCreateModal() }}
+                                    className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+                                    title={t('common.close')}
+                                    aria-label={t('common.close')}
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
                             </div>
-                        )}
 
-                        <form ref={formRef} onSubmit={handleCreate} className="space-y-4">
-                            {/* Template Selector + Vorschau */}
-                            {templates.length > 0 && (
-                                <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('zones.template')}</label>
-                                    <select
-                                        value={selectedTemplateId}
-                                        onChange={handleTemplateChange}
-                                        className="w-full px-3 py-2 text-sm"
-                                    >
-                                        <option value="">{t('zones.noTemplate')}</option>
-                                        {templates.map(tt => (
-                                            <option key={tt.id} value={tt.id}>
-                                                {tt.name} {tt.is_default ? '⭐' : ''} {(tt.records || []).length > 0 ? t('zones.templateRecordCount', { count: (tt.records || []).length }) : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    {selectedTemplate && (selectedTemplate.records || []).length > 0 && (
-                                        <div className="mt-2 rounded-lg border border-accent/20 bg-accent/5 p-3">
-                                            <p className="text-xs font-medium text-text-secondary mb-1.5">{t('zones.templatePreviewTitle')}</p>
-                                            <ul className="space-y-1 text-xs font-mono">
-                                                {selectedTemplate.records.slice(0, 8).map((rec, i) => (
-                                                    <li key={i} className="text-text-secondary">
-                                                        <span className="inline-block min-w-[3.5rem] text-accent-light">{rec.type}</span>
-                                                        <span className="text-text-primary">{rec.name === '@' ? '@' : `${rec.name}`}</span>
-                                                        <span className="text-text-muted"> → </span>
-                                                        <span>{rec.type === 'MX' && rec.prio != null ? `${rec.prio} ${rec.content}` : rec.content}</span>
-                                                    </li>
-                                                ))}
-                                                {selectedTemplate.records.length > 8 && (
-                                                    <li className="text-text-muted">…{t('zones.templateMoreRecords', { count: selectedTemplate.records.length - 8 })}</li>
-                                                )}
-                                            </ul>
-                                        </div>
-                                    )}
-                                    <p className="text-xs text-text-muted mt-1">
-                                        {t('zones.templateHint')}{' '}
-                                        <Link to="/settings" className="text-accent hover:underline">{t('zones.manageTemplates')}</Link>
-                                    </p>
+                            <ModalErrorBanner message={createError} title={t('zones.createError')} onClose={() => setCreateError('')} />
+
+                            {createResult?.details && Object.keys(createResult.details).length > 0 && (
+                                <div className="mb-4 p-4 rounded-xl bg-bg-hover/50 border border-border">
+                                    <p className="text-sm font-medium text-text-primary mb-2">{t('zones.resultPerServer')}</p>
+                                    <ul className="space-y-1.5 text-sm">
+                                        {Object.entries(createResult.details).map(([srv, status]) => {
+                                            const result = parseCreateResult(status)
+                                            const isError = result.kind === 'error'
+                                            const isWarning = result.kind === 'dnssecError' || result.kind === 'dnssecSkipped'
+                                            let text = String(status)
+                                            if (result.kind === 'error') text = result.detail
+                                            else if (result.kind === 'created') text = t('zones.created')
+                                            else if (result.kind === 'synced') text = t('zones.synced')
+                                            else if (result.kind === 'dnssecError') text = t('zones.dnssecFailedOnServer', { detail: result.detail })
+                                            else if (result.kind === 'dnssecSkipped') {
+                                                text = t('zones.dnssecSkippedOnServer', { server: dnssecServerOf(createResult.details) || '—' })
+                                            }
+                                            return (
+                                                <li key={srv} className="flex items-start gap-2">
+                                                    {isError ? (
+                                                        <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                                                    ) : isWarning ? (
+                                                        <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                                                    ) : (
+                                                        <CheckCircle className="w-4 h-4 text-success shrink-0 mt-0.5" />
+                                                    )}
+                                                    <span className="text-text-secondary shrink-0">{srv}:</span>
+                                                    <span className={`min-w-0 break-words ${isError ? 'text-danger' : isWarning ? 'text-warning' : 'text-text-primary'}`}>
+                                                        {text}
+                                                    </span>
+                                                </li>
+                                            )
+                                        })}
+                                    </ul>
+                                    <button type="button" onClick={closeCreateModal} className="mt-3 text-xs text-accent hover:underline">{t('zones.doneClose')}</button>
                                 </div>
                             )}
 
-                            <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1">{t('zones.domain')}</label>
-                                <input
-                                    type="text"
-                                    value={createForm.name}
-                                    onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                                    onBlur={(e) => {
-                                        if (parseCidrToArpa(e.target.value)) return
-                                        const cleaned = cleanupDomainInput(e.target.value)
-                                        if (cleaned && cleaned !== e.target.value.trim().toLowerCase()) {
-                                            setCreateForm(prev => ({ ...prev, name: cleaned }))
-                                        }
-                                    }}
-                                    placeholder={t('zones.domainPlaceholder')}
-                                    className="w-full px-3 py-2 text-sm"
-                                    required
-                                    autoFocus
-                                    autoComplete="off"
-                                    spellCheck={false}
-                                />
-                                {createForm.name.trim() !== '' && (
-                                    domainInfo.error
-                                        ? <p className="mt-1 text-xs text-danger flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {domainInfo.error}</p>
-                                        : <p className="mt-1 text-xs text-success flex items-center gap-1"><CheckCircle className="w-3 h-3" /> {domainInfo.hint}</p>
+                            <form ref={formRef} onSubmit={handleCreate} className="space-y-4">
+                                {/* Template Selector + Vorschau */}
+                                {templates.length > 0 && (
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('zones.template')}</label>
+                                        <select
+                                            value={selectedTemplateId}
+                                            onChange={handleTemplateChange}
+                                            className="w-full px-3 py-2 text-sm"
+                                        >
+                                            <option value="">{t('zones.noTemplate')}</option>
+                                            {templates.map(tt => (
+                                                <option key={tt.id} value={tt.id}>
+                                                    {tt.name} {tt.is_default ? '⭐' : ''} {(tt.records || []).length > 0 ? t('zones.templateRecordCount', { count: (tt.records || []).length }) : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {selectedTemplate && (selectedTemplate.records || []).length > 0 && (
+                                            <div className="mt-2 rounded-lg border border-accent/20 bg-accent/5 p-3">
+                                                <p className="text-xs font-medium text-text-secondary mb-1.5">{t('zones.templatePreviewTitle')}</p>
+                                                <ul className="space-y-1 text-xs font-mono">
+                                                    {selectedTemplate.records.slice(0, 8).map((rec, i) => (
+                                                        <li key={i} className="text-text-secondary">
+                                                            <span className="inline-block min-w-[3.5rem] text-accent-light">{rec.type}</span>
+                                                            <span className="text-text-primary">{rec.name === '@' ? '@' : `${rec.name}`}</span>
+                                                            <span className="text-text-muted"> → </span>
+                                                            <span>{rec.type === 'MX' && rec.prio != null ? `${rec.prio} ${rec.content}` : rec.content}</span>
+                                                        </li>
+                                                    ))}
+                                                    {selectedTemplate.records.length > 8 && (
+                                                        <li className="text-text-muted">…{t('zones.templateMoreRecords', { count: selectedTemplate.records.length - 8 })}</li>
+                                                    )}
+                                                </ul>
+                                            </div>
+                                        )}
+                                        <p className="text-xs text-text-muted mt-1">
+                                            {t('zones.templateHint')}{' '}
+                                            <Link to="/settings" className="text-accent hover:underline">{t('zones.manageTemplates')}</Link>
+                                        </p>
+                                    </div>
                                 )}
-                                <p className="mt-1 text-xs text-text-muted">{t('zones.domainCleanupHint')}</p>
-                            </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('dashboard.type')}</label>
-                                    <select
-                                        value={createForm.kind}
-                                        onChange={(e) => setCreateForm({ ...createForm, kind: e.target.value })}
+                                    <label className="block text-sm font-medium text-text-secondary mb-1">{t('zones.domain')}</label>
+                                    <input
+                                        type="text"
+                                        value={createForm.name}
+                                        onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                                        onBlur={(e) => {
+                                            if (parseCidrToArpa(e.target.value)) return
+                                            const cleaned = cleanupDomainInput(e.target.value)
+                                            if (cleaned && cleaned !== e.target.value.trim().toLowerCase()) {
+                                                setCreateForm(prev => ({ ...prev, name: cleaned }))
+                                            }
+                                        }}
+                                        placeholder={t('zones.domainPlaceholder')}
                                         className="w-full px-3 py-2 text-sm"
-                                    >
-                                        <option value="Native">{t('zones.nativeRecommended')}</option>
-                                        <option value="Master">Master</option>
-                                        <option value="Slave">Slave</option>
-                                    </select>
-                                    <p className="text-xs text-text-muted mt-1 leading-relaxed">
-                                        <strong className="text-text-secondary">Native:</strong> {t('zones.typeHintNative')}<br/>
-                                        <strong className="text-text-secondary">Master/Slave:</strong> {t('zones.typeHintMasterSlave')}
-                                    </p>
+                                        required
+                                        data-autofocus
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                    />
+                                    {createForm.name.trim() !== '' && (
+                                        domainInfo.error
+                                            ? <p className="mt-1 text-xs text-danger flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {domainInfo.error}</p>
+                                            : <p className="mt-1 text-xs text-success flex items-center gap-1"><CheckCircle className="w-3 h-3" /> {domainInfo.hint}</p>
+                                    )}
+                                    <p className="mt-1 text-xs text-text-muted">{t('zones.domainCleanupHint')}</p>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-text-secondary mb-1">SOA-EDIT-API</label>
-                                    <select
-                                        value={createForm.soa_edit_api}
-                                        onChange={(e) => setCreateForm({ ...createForm, soa_edit_api: e.target.value })}
-                                        className="w-full px-3 py-2 text-sm"
-                                    >
-                                        <option value="DEFAULT">DEFAULT</option>
-                                        <option value="INCEPTION-INCREMENT">INCEPTION-INCREMENT</option>
-                                        <option value="EPOCH">EPOCH</option>
-                                    </select>
-                                    <p className="text-xs text-text-muted mt-1 leading-relaxed">
-                                        {t('zones.soaEditQuestion')}<br/>
-                                        <strong className="text-text-secondary">DEFAULT:</strong> {t('zones.soaEditDefault')}<br/>
-                                        <strong className="text-text-secondary">INCEPTION-INCREMENT:</strong> {t('zones.soaEditInception')}<br/>
-                                        <strong className="text-text-secondary">EPOCH:</strong> {t('zones.soaEditEpoch')}
-                                    </p>
-                                </div>
-                            </div>
 
-                            {/* Nameserver-Liste */}
-                            <div>
-                                <div className="flex items-center justify-between mb-1">
-                                    <label className="block text-sm font-medium text-text-secondary">{t('templates.nameservers')}</label>
-                                    <button
-                                        type="button"
-                                        onClick={() => setNameservers(list => [...list, ''])}
-                                        className="text-xs flex items-center gap-1 text-accent hover:underline"
-                                    >
-                                        <Plus className="w-3 h-3" /> {t('zones.addNameserver')}
-                                    </button>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">{t('dashboard.type')}</label>
+                                        <select
+                                            value={createForm.kind}
+                                            onChange={(e) => setCreateForm({ ...createForm, kind: e.target.value })}
+                                            className="w-full px-3 py-2 text-sm"
+                                        >
+                                            <option value="Native">{t('zones.nativeRecommended')}</option>
+                                            <option value="Master">Master</option>
+                                            <option value="Slave">Slave</option>
+                                        </select>
+                                        <p className="text-xs text-text-muted mt-1 leading-relaxed">
+                                            <strong className="text-text-secondary">Native:</strong> {t('zones.typeHintNative')}<br/>
+                                            <strong className="text-text-secondary">Master/Slave:</strong> {t('zones.typeHintMasterSlave')}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-text-secondary mb-1">SOA-EDIT-API</label>
+                                        <select
+                                            value={createForm.soa_edit_api}
+                                            onChange={(e) => setCreateForm({ ...createForm, soa_edit_api: e.target.value })}
+                                            className="w-full px-3 py-2 text-sm"
+                                        >
+                                            <option value="DEFAULT">DEFAULT</option>
+                                            <option value="INCEPTION-INCREMENT">INCEPTION-INCREMENT</option>
+                                            <option value="EPOCH">EPOCH</option>
+                                        </select>
+                                        <p className="text-xs text-text-muted mt-1 leading-relaxed">
+                                            {t('zones.soaEditQuestion')}<br/>
+                                            <strong className="text-text-secondary">DEFAULT:</strong> {t('zones.soaEditDefault')}<br/>
+                                            <strong className="text-text-secondary">INCEPTION-INCREMENT:</strong> {t('zones.soaEditInception')}<br/>
+                                            <strong className="text-text-secondary">EPOCH:</strong> {t('zones.soaEditEpoch')}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    {nameservers.map((ns, idx) => {
-                                        const err = validateNameserver(ns, t)
-                                        return (
-                                            <div key={idx}>
-                                                <div className="flex gap-2 items-start">
-                                                    <input
-                                                        type="text"
-                                                        value={ns}
-                                                        onChange={(e) => setNameservers(list => list.map((v, i) => i === idx ? e.target.value : v))}
-                                                        placeholder={`ns${idx + 1}.example.com`}
-                                                        className={`flex-1 px-3 py-2 text-sm ${ns.trim() && err ? 'border-danger/60' : ''}`}
-                                                        autoComplete="off"
-                                                        spellCheck={false}
-                                                    />
-                                                    {nameservers.length > 1 && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setNameservers(list => list.filter((_, i) => i !== idx))}
-                                                            className="p-2 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-                                                            title={t('zones.removeNameserver')}
-                                                        >
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </button>
+
+                                {/* Nameserver-Liste */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-sm font-medium text-text-secondary">{t('templates.nameservers')}</label>
+                                        <button
+                                            type="button"
+                                            onClick={() => setNameservers(list => [...list, ''])}
+                                            className="text-xs flex items-center gap-1 text-accent hover:underline"
+                                        >
+                                            <Plus className="w-3 h-3" /> {t('zones.addNameserver')}
+                                        </button>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {nameservers.map((ns, idx) => {
+                                            const err = validateNameserver(ns, t)
+                                            return (
+                                                <div key={idx}>
+                                                    <div className="flex gap-2 items-start">
+                                                        <input
+                                                            type="text"
+                                                            value={ns}
+                                                            onChange={(e) => setNameservers(list => list.map((v, i) => i === idx ? e.target.value : v))}
+                                                            placeholder={`ns${idx + 1}.example.com`}
+                                                            className={`flex-1 px-3 py-2 text-sm ${ns.trim() && err ? 'border-danger/60' : ''}`}
+                                                            autoComplete="off"
+                                                            spellCheck={false}
+                                                        />
+                                                        {nameservers.length > 1 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setNameservers(list => list.filter((_, i) => i !== idx))}
+                                                                className="p-2 rounded text-text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                                                                title={t('zones.removeNameserver')}
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {ns.trim() && err && (
+                                                        <p className="mt-1 text-xs text-danger flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {err}</p>
                                                     )}
                                                 </div>
-                                                {ns.trim() && err && (
-                                                    <p className="mt-1 text-xs text-danger flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {err}</p>
+                                            )
+                                        })}
+                                    </div>
+                                    <p className="text-xs text-text-muted mt-1">
+                                        {t('zones.nameserverListHint')}{' '}
+                                        <Link to="/settings" className="text-accent hover:underline">{t('zones.defaultInSettings')}</Link>.
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <label className="flex items-start gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={createForm.enable_dnssec}
+                                            onChange={(e) => setCreateForm({ ...createForm, enable_dnssec: e.target.checked })}
+                                            className="w-4 h-4 rounded mt-0.5"
+                                        />
+                                        <div>
+                                            <span className="text-sm text-text-secondary">{t('zones.enableDnssec')}</span>
+                                        </div>
+                                    </label>
+                                    {createForm.enable_dnssec && (
+                                        <div className="mt-2 ml-6 space-y-2">
+                                            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                                                <p className="font-medium mb-1 flex items-center gap-1.5">
+                                                    <Shield className="w-3.5 h-3.5" />
+                                                    {t('zones.dnssecRegistrarTitle')}
+                                                </p>
+                                                <p className="text-amber-100/90 leading-snug">{t('zones.dnssecRegistrarBody')}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-border bg-bg-secondary/30">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowDnssecOpts(v => !v)}
+                                                    aria-expanded={showDnssecOpts}
+                                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
+                                                >
+                                                    {showDnssecOpts ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                    {t('zones.dnssecOptions')}
+                                                </button>
+                                                {showDnssecOpts && (
+                                                    <div className="px-3 pb-3">
+                                                        <DnssecOptionsFields value={dnssecOpts} onChange={setDnssecOpts} disabled={creating} />
+                                                    </div>
                                                 )}
                                             </div>
-                                        )
-                                    })}
-                                </div>
-                                <p className="text-xs text-text-muted mt-1">
-                                    {t('zones.nameserverListHint')}{' '}
-                                    <Link to="/settings" className="text-accent hover:underline">{t('zones.defaultInSettings')}</Link>.
-                                </p>
-                            </div>
-
-                            <div>
-                                <label className="flex items-start gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={createForm.enable_dnssec}
-                                        onChange={(e) => setCreateForm({ ...createForm, enable_dnssec: e.target.checked })}
-                                        className="w-4 h-4 rounded mt-0.5"
-                                    />
-                                    <div>
-                                        <span className="text-sm text-text-secondary">{t('zones.enableDnssec')}</span>
-                                    </div>
-                                </label>
-                                {createForm.enable_dnssec && (
-                                    <div className="mt-2 ml-6 space-y-2">
-                                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-                                            <p className="font-medium mb-1 flex items-center gap-1.5">
-                                                <Shield className="w-3.5 h-3.5" />
-                                                {t('zones.dnssecRegistrarTitle')}
-                                            </p>
-                                            <p className="text-amber-100/90 leading-snug">{t('zones.dnssecRegistrarBody')}</p>
                                         </div>
-                                        <div className="rounded-lg border border-border bg-bg-secondary/30">
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowDnssecOpts(v => !v)}
-                                                aria-expanded={showDnssecOpts}
-                                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                            >
-                                                {showDnssecOpts ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                                                {t('zones.dnssecOptions')}
-                                            </button>
-                                            {showDnssecOpts && (
-                                                <div className="px-3 pb-3">
-                                                    <DnssecOptionsFields value={dnssecOpts} onChange={setDnssecOpts} disabled={creating} />
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">
-                                <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
-                                <div className="flex justify-end gap-3">
-                                    <button type="button" onClick={closeCreateModal} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
-                                        {t('common.cancel')}
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={creating || !!domainInfo.error}
-                                        className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
-                                    >
-                                        {creating && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        {t('settings.create')}
-                                    </button>
+                                    )}
                                 </div>
-                            </div>
-                        </form>
+
+                                <div className="flex justify-between items-center gap-3 pt-2 border-t border-border">
+                                    <p className="text-xs text-text-muted hidden sm:block">{t('zoneDetail.kbdHint')}</p>
+                                    <div className="flex justify-end gap-3">
+                                        <button type="button" onClick={closeCreateModal} className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+                                            {t('common.cancel')}
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            disabled={creating || !!domainInfo.error}
+                                            className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {creating && <Loader2 className="w-4 h-4 animate-spin" />}
+                                            {t('settings.create')}
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
                     </div>
-                </div>
+                </ModalPortal>
             )}
 
             {showImport && isAdmin && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-                    onClick={closeImportModal}
-                >
-                    <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start justify-between mb-4">
-                            <h2 className="text-lg font-bold text-text-primary">{t('zones.importTitle')}</h2>
-                            <button type="button" onClick={closeImportModal} className="p-1 rounded hover:bg-bg-hover" title={t('common.close')} aria-label={t('common.close')}><X className="w-5 h-5" /></button>
-                        </div>
-                        <ModalErrorBanner message={imError} onClose={() => setImError('')} />
-                        <div className="space-y-3 text-sm">
-                            <div>
-                                <label className="block text-text-muted text-xs mb-1">{t('zones.importName')}</label>
-                                <input value={imName} onChange={(e) => setImName(e.target.value)} className="w-full px-3 py-2" placeholder="example.com" />
+                <ModalPortal>
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                        onClick={closeImportModal}
+                    >
+                        <div
+                            ref={importDialogRef}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby={importTitleId}
+                            className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="flex items-start justify-between mb-4">
+                                <h2 id={importTitleId} className="text-lg font-bold text-text-primary">{t('zones.importTitle')}</h2>
+                                <button type="button" onClick={closeImportModal} className="p-1 rounded hover:bg-bg-hover" title={t('common.close')} aria-label={t('common.close')}><X className="w-5 h-5" /></button>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <ModalErrorBanner message={imError} onClose={() => setImError('')} />
+                            <div className="space-y-3 text-sm">
                                 <div>
-                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importKind')}</label>
-                                    <select value={imKind} onChange={(e) => setImKind(e.target.value)} className="w-full px-3 py-2">
-                                        <option value="Native">Native</option>
-                                        <option value="Master">Master</option>
-                                    </select>
+                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importName')}</label>
+                                    <input value={imName} onChange={(e) => setImName(e.target.value)} className="w-full px-3 py-2" placeholder="example.com" data-autofocus />
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-text-muted text-xs mb-1">{t('zones.importKind')}</label>
+                                        <select value={imKind} onChange={(e) => setImKind(e.target.value)} className="w-full px-3 py-2">
+                                            <option value="Native">Native</option>
+                                            <option value="Master">Master</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-text-muted text-xs mb-1">{t('zones.importNs')}</label>
+                                        <input value={imNs} onChange={(e) => setImNs(e.target.value)} className="w-full px-3 py-2" />
+                                    </div>
                                 </div>
                                 <div>
-                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importNs')}</label>
-                                    <input value={imNs} onChange={(e) => setImNs(e.target.value)} className="w-full px-3 py-2" />
+                                    <label className="block text-text-muted text-xs mb-1">{t('zones.importContent')}</label>
+                                    <textarea value={imContent} onChange={(e) => setImContent(e.target.value)} className="w-full min-h-[180px] font-mono text-xs px-3 py-2" spellCheck={false} />
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-text-muted text-xs mb-1">{t('zones.importContent')}</label>
-                                <textarea value={imContent} onChange={(e) => setImContent(e.target.value)} className="w-full min-h-[180px] font-mono text-xs px-3 py-2" spellCheck={false} />
-                            </div>
-                            {imPreview && (
-                                <div className="rounded-lg border border-border p-3 text-xs space-y-1 max-h-48 overflow-y-auto">
-                                    {imPreview.parse_error && (
-                                        <p className="text-danger">{t('zones.importParseError', { err: imPreview.parse_error })}</p>
-                                    )}
-                                    <p>{t('zones.importPreviewExists', { answer: imPreview.zone_exists ? t('common.yes') : t('common.no') })}</p>
-                                    <p>{t('zones.importPreviewCounts', { add: imPreview.would_add_total ?? 0, remove: imPreview.would_remove_total ?? 0 })}</p>
-                                    {/* LUA in der Datei (F15 2.6/6.8): Anzahl, Hinweis, Auffaelligkeiten, Sperre bei Policy "disabled" */}
-                                    {imPreview.lua_count > 0 && (
-                                        <>
-                                            <p className="text-amber-200">{t('lua.import.found', { count: imPreview.lua_count })}</p>
-                                            <p className="text-text-muted">{t('lua.import.enableHint')}</p>
-                                        </>
-                                    )}
-                                    {imPreview.lua_issues?.length > 0 && (
-                                        <div className="text-amber-200">
-                                            <p className="font-medium">{t('lua.import.issues')}</p>
-                                            <ul className="list-disc pl-5">
-                                                {imPreview.lua_issues.map((issue) => (
-                                                    <li key={`${issue.line}:${issue.message}`}>
-                                                        {t('lua.import.issueLine', { line: issue.line, message: issue.message })}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-                                    {imPreview.lua_blocked && (
-                                        <div className="text-danger" role="alert">
-                                            <p className="font-medium">{t('lua.import.blocked')}</p>
-                                            {imPreview.lua_blocked_lines?.length > 0 && (
-                                                <p>{t('lua.import.blockedLines', { lines: imPreview.lua_blocked_lines.join(', ') })}</p>
-                                            )}
-                                        </div>
-                                    )}
+                                {imPreview && (
+                                    <div className="rounded-lg border border-border p-3 text-xs space-y-1 max-h-48 overflow-y-auto">
+                                        {imPreview.parse_error && (
+                                            <p className="text-danger">{t('zones.importParseError', { err: imPreview.parse_error })}</p>
+                                        )}
+                                        <p>{t('zones.importPreviewExists', { answer: imPreview.zone_exists ? t('common.yes') : t('common.no') })}</p>
+                                        <p>{t('zones.importPreviewCounts', { add: imPreview.would_add_total ?? 0, remove: imPreview.would_remove_total ?? 0 })}</p>
+                                        {/* LUA in der Datei (F15 2.6/6.8): Anzahl, Hinweis, Auffaelligkeiten, Sperre bei Policy "disabled" */}
+                                        {imPreview.lua_count > 0 && (
+                                            <>
+                                                <p className="text-amber-200">{t('lua.import.found', { count: imPreview.lua_count })}</p>
+                                                <p className="text-text-muted">{t('lua.import.enableHint')}</p>
+                                            </>
+                                        )}
+                                        {imPreview.lua_issues?.length > 0 && (
+                                            <div className="text-amber-200">
+                                                <p className="font-medium">{t('lua.import.issues')}</p>
+                                                <ul className="list-disc pl-5">
+                                                    {imPreview.lua_issues.map((issue) => (
+                                                        <li key={`${issue.line}:${issue.message}`}>
+                                                            {t('lua.import.issueLine', { line: issue.line, message: issue.message })}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+                                        {imPreview.lua_blocked && (
+                                            <div className="text-danger" role="alert">
+                                                <p className="font-medium">{t('lua.import.blocked')}</p>
+                                                {imPreview.lua_blocked_lines?.length > 0 && (
+                                                    <p>{t('lua.import.blockedLines', { lines: imPreview.lua_blocked_lines.join(', ') })}</p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                                    <button type="button" disabled={imBusy} onClick={runImportPreview} className="px-3 py-2 rounded-lg bg-bg-secondary text-sm">
+                                        {imBusy ? <Loader2 className="w-4 h-4 inline animate-spin" /> : null} {t('zones.importPreview')}
+                                    </button>
+                                    <button type="button" disabled={imBusy || !imPreview || !!imPreview.lua_blocked} onClick={runImportExecute} className="px-3 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm">
+                                        {t('zones.importRun')}
+                                    </button>
                                 </div>
-                            )}
-                            <div className="flex flex-wrap justify-end gap-2 pt-2">
-                                <button type="button" disabled={imBusy} onClick={runImportPreview} className="px-3 py-2 rounded-lg bg-bg-secondary text-sm">
-                                    {imBusy ? <Loader2 className="w-4 h-4 inline animate-spin" /> : null} {t('zones.importPreview')}
-                                </button>
-                                <button type="button" disabled={imBusy || !imPreview || !!imPreview.lua_blocked} onClick={runImportExecute} className="px-3 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm">
-                                    {t('zones.importRun')}
-                                </button>
                             </div>
                         </div>
                     </div>
-                </div>
+                </ModalPortal>
             )}
         </div>
     )

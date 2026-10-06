@@ -480,6 +480,63 @@ def test_oidc_link_callback_failures(env, oidc, detached):
     assert failed(detached) == []   # Verknuepfung: kein LOGIN_FAILED
 
 
+def test_oidc_link_callback_rejected_after_access_revocation(env, oidc, detached):
+    """W2-NACHARBEIT 4.1 (WS-W3-NACHARBEIT): Ein Link-Start vor "Alle Zugaenge widerrufen" bzw. einem Admin-Reset
+    laesst sich danach nicht mehr abschliessen (State traegt iat); ein neuer Start nach dem Widerruf klappt."""
+    from datetime import timedelta
+
+    from app.core.timeutil import utcnow_naive
+    from app.services import access_revocation
+
+    env.set_settings(**OIDC_ON)
+    bob = env.add_user("bob")
+    cookie = state_cookie("link", user=bob)   # Start, z. B. mit einer gekaperten Sitzung
+    payload = sso_oidc.decode_oidc_state_token(cookie["Cookie"].split("=", 1)[1])
+    assert isinstance(payload["iat"], int)
+    bob.sessions_revoked_at = access_revocation.session_revocation_time()
+    env.session.commit()
+    oidc.profile = profile("sub-bob", username="robert")
+    r = callback(env.client(), cookie)
+    assert r.status_code == 303 and r.headers["location"] == "/settings?tab=integrations&sso_error=link_failed"
+    assert not has_session_cookie(r)
+    bob = env.reload(bob)
+    assert (bob.auth_source, bob.external_id) == ("local", None)
+    reasons = [kw["details"]["reason"] for a, kw in detached if a == "USER_SSO_LINK"]
+    assert reasons == ["link_failed"]
+    # Widerruf liegt vor dem (neuen) Start -> Verknuepfung moeglich
+    bob.sessions_revoked_at = utcnow_naive().replace(microsecond=0) - timedelta(minutes=1)
+    env.session.commit()
+    r = callback(env.client(), state_cookie("link", state="st-2", user=bob), state="st-2")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_linked=oidc"
+    assert env.reload(bob).auth_source == "oidc"
+
+
+def test_oidc_state_without_iat_fails_closed_only_after_revocation(env, oidc):
+    """Alt-State ohne iat (vor dem Update gestartet, max. 10 min): ohne Widerruf weiter gueltig, nach Widerruf nicht."""
+    from jose import jwt as jose_jwt
+
+    env.set_settings(**OIDC_ON)
+    bob = env.add_user("bob")
+
+    def legacy_cookie(state):
+        tok = state_cookie("link", state=state, user=bob)["Cookie"].split("=", 1)[1]
+        payload = jose_jwt.get_unverified_claims(tok)
+        payload.pop("iat")
+        return {"Cookie": "pdnsmgr_oidc=" + jose_jwt.encode(payload, settings.JWT_SECRET_KEY,
+                                                            algorithm=settings.JWT_ALGORITHM)}
+
+    from app.services import access_revocation
+    bob.sessions_revoked_at = access_revocation.session_revocation_time()
+    env.session.commit()
+    oidc.profile = profile("sub-bob")
+    r = callback(env.client(), legacy_cookie("st-1"), state="st-1")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_error=link_failed"
+    bob.sessions_revoked_at = None
+    env.session.commit()
+    r = callback(env.client(), legacy_cookie("st-2"), state="st-2")
+    assert r.headers["location"] == "/settings?tab=integrations&sso_linked=oidc"
+
+
 # ---------------------------------------------------------------------------------------------
 # Nr. 24 LDAP-Verknuepfung
 # ---------------------------------------------------------------------------------------------
@@ -683,6 +740,43 @@ def test_settings_test_ldap_success_audit_without_values(env, monkeypatch):
     assert audit.details == {"target": "ldap", "servers": ["ldaps://dc1.example.com"], "unsaved_values": False,
                              "test_user": True, "password_checked": True, "success": True}
     assert "geheim-test-1" not in str(audit.details) and "bind-pw-1" not in str(audit.details)
+
+
+def test_settings_test_ldap_password_counts_as_failed_login(env, monkeypatch):
+    """L-1 (WS-W3-NACHARBEIT): Ein LDAP-Test mit falschem Testpasswort zaehlt im Login-Limiter (IP + Testbenutzer);
+    nach der Sperre 429 ohne Verzeichnis-Abfrage. Ohne Testpasswort und bei bestaetigtem Passwort zaehlt nichts."""
+    env.set_settings(**LDAP_ON)
+    admin = env.add_user("root", role="admin")
+    calls = []
+
+    async def fake_test(cfg, user, password, **_kw):
+        calls.append(password)
+        ok = password == "richtig-1"
+        return {"success": ok, "message": None, "error": None if ok else "Passwort des Testbenutzers falsch",
+                "warnings": [], "details": {"user": {"dn": "CN=t", "password_checked": True, "password_ok": ok}}}
+
+    monkeypatch.setattr(sso_ldap, "test_connection", fake_test)
+    c = env.client()
+
+    def run(password=None, username="t.user"):
+        body = {"target": "ldap", "test_username": username}
+        if password is not None:
+            body["test_password"] = password
+        return c.post("/api/v1/settings/sso/test", headers=session_headers(admin), json=body)
+
+    assert run("richtig-1").json()["success"] is True
+    assert not lrl.is_login_rate_limited("testclient", "t.user")
+    for _ in range(3):
+        assert run().status_code == 200          # nur Benutzersuche: kein Zaehler
+    for i in range(5):
+        r = run(f"falsch-{i}")
+        assert r.status_code == 200 and r.json()["success"] is False
+    assert lrl.is_login_rate_limited("203.0.113.9", "t.user")   # Name gesperrt, auch fuer die Anmeldung
+    before = len(calls)
+    r = run("richtig-1")
+    assert r.status_code == 429 and len(calls) == before
+    assert run().status_code == 200              # ohne Passwort weiter moeglich
+    assert run("x", username="anderer").status_code == 200
 
 
 def test_settings_test_retarget_needs_secret(env, monkeypatch):

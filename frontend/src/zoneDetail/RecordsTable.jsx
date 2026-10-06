@@ -197,8 +197,8 @@ export default function RecordsTable() {
 
     // LUA ohne Schreibrecht (Policy): Bearbeiten/Klonen gesperrt, Loeschen nicht (F15 2.3)
     const luaLocked = (r) => r.type === 'LUA' && luaPolicy?.can_write !== true
-    const luaLockTitle = luaPolicy?.reason
-        || t(luaPolicy?.policy === 'disabled' ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
+    // Text immer aus i18n (nicht luaPolicy.reason: das ist der deutsche Backend-Text, Review-Fund W3-L8)
+    const luaLockTitle = t(luaPolicy?.policy === 'disabled' ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
 
     function renderValue(r) {
         const renderer = valueRenderers.find((entry) => slotApplies(entry, [r, ctx]))

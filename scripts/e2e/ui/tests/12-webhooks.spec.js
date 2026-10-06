@@ -6,7 +6,7 @@
 const { test, expect } = require('../fixtures/test')
 const { receiver, unique, uniqueZone } = require('../fixtures/api')
 const { t, exact, pattern } = require('../fixtures/i18n')
-const { dialog, expectFocusInside, expectFocusTrapped } = require('../fixtures/ui')
+const { dialog, expectFocusInside, expectFocusTrapped, expectDialogOnTop } = require('../fixtures/ui')
 const { db } = require('../fixtures/db')
 
 test.describe('Webhooks', () => {
@@ -33,14 +33,15 @@ test.describe('Webhooks', () => {
     await expect(nameField).toBeFocused()
     await nameField.fill(name)
     await form.getByLabel(t('webhooks.fieldUrl')).fill(receiver.url(name))
-    // BEKANNTER FEHLER (17-dialogs.spec.js, "Dialoge liegen ueber der Seite"): Der Dialog wird innerhalb der Karte
-    // gerendert (.glass-card hat backdrop-filter -> Bezugsrahmen fuer position:fixed); die DynDNS-Karte darunter
-    // verdeckt den Speichern-Knopf. Absenden daher per Enter im Formular (funktioniert auch fuer Nutzer).
-    await form.getByLabel(t('webhooks.fieldUrl')).press('Enter')
+    // UI-SMOKE-1 (behoben): Das Formular haengt per Portal am body und liegt ueber allen Karten – der
+    // Speichern-Knopf ist klickbar (vorher verdeckte ihn die DynDNS-Karte darunter)
+    await expectDialogOnTop(form)
+    await form.getByRole('button', { name: exact(t('common.save')) }).click()
 
     // Secret nur einmal sichtbar; ESC schliesst nicht, Tab bleibt im Dialog
     const secretDlg = dialog(page, t('webhooks.secretTitle'))
     await expect(secretDlg).toBeVisible()
+    await expectDialogOnTop(secretDlg)
     await expectFocusInside(secretDlg)
     await page.keyboard.press('Escape')
     await expect(secretDlg).toBeVisible()
@@ -67,6 +68,7 @@ test.describe('Webhooks', () => {
     const drawer = dialog(page, t('webhooks.drawerTitle', { name }))
     await expect(drawer).toBeVisible()
     await expect(drawer.getByRole('button', { name: exact(t('common.close')) }).first()).toBeFocused()
+    await expectDialogOnTop(drawer)
     const delivered = drawer.locator('tbody tr').filter({ hasText: t('webhooks.status.succeeded') })
     await expect(delivered.first()).toBeVisible()
     await expect(drawer.locator('tbody').getByText(zone.replace(/\.$/, ''), { exact: false }).first()).toBeVisible()
@@ -103,7 +105,7 @@ test.describe('Webhooks', () => {
     await expect(form).toBeVisible()
     await expect(form.getByRole('alert').first()).toBeVisible()
     await url.fill(receiver.url(name))
-    await url.press('Enter') // Speichern-Knopf ggf. verdeckt (UI-SMOKE-1)
+    await form.getByRole('button', { name: exact(t('common.save')) }).click()
     await expect(form).toBeHidden()
     await expect(item.getByText(t('webhooks.urlUnreadableBadge'), { exact: true })).toHaveCount(0)
     await expect(item.getByRole('button', { name: t('webhooks.test') })).toBeEnabled()

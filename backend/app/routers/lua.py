@@ -7,6 +7,8 @@
   wirkt nur fuer effektive Admins (sonst Cache), damit Nutzer die PowerDNS-Server nicht mit Abrufen fluten.
 
 Beide nur lesend (``DbRead``), kein Audit. Eigener Prefix ``/lua`` – kein Konflikt mit ``{zone_id:path}``-Routen.
+``server-status`` gibt die DB-Verbindung vor den PowerDNS-Abfragen frei; gleichzeitige Aufrufe teilen sich eine
+laufende Abfrage je Server (Review-Fund W3-L1).
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from app.core.database import DbRead
 from app.models.models import User
 from app.schemas.lua import LuaPolicyResponse, LuaServerStatusResponse
 from app.services import lua_records
+from app.services.propagation import release_db
 
 ROUTER_ORDER = 75
 
@@ -44,4 +47,6 @@ async def read_lua_server_status(db: DbRead, refresh: bool = False, current_user
     zones = await effective_zone_filter(db, current_user)
     if zones is not None and not zones:
         raise HTTPException(status_code=403, detail=STATUS_NO_ZONE_DETAIL)
-    return await lua_records.get_server_lua_status(bool(refresh) and is_effective_admin(current_user))
+    refresh_ok = bool(refresh) and is_effective_admin(current_user)
+    await release_db(db)  # Rechte geprueft; die PowerDNS-Abfragen (bis zu 5 s) halten keine Pool-Verbindung (W3-L1)
+    return await lua_records.get_server_lua_status(refresh_ok)

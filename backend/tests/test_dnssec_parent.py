@@ -315,6 +315,35 @@ async def test_dnskey_targets_capped(monkeypatch):
     assert len(cut) == 2 and all("zu viele" in r["error"] for r in cut)
 
 
+async def test_dnskey_ns_names_capped_and_resolution_bounded(monkeypatch):
+    """W3-L2 (WS-W3-NACHARBEIT): hoechstens MAX_NS_NAMES Namen, Aufloesung mit begrenzter Parallelitaet."""
+    names = [f"ns{i:02d}.extern.net." for i in range(dp.MAX_NS_NAMES + 5)]
+    zone = make_zone(Z, [rr(Z, "NS", *names)])
+    state = {"active": 0, "peak": 0}
+    resolved = []
+
+    async def resolve(ns, *, ipv6, timeout):
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        resolved.append(ns)
+        await asyncio.sleep(0.01)
+        state["active"] -= 1
+        return [f"192.0.2.{len(resolved)}"], None
+
+    async def q(name, rdtype, server, timeout=3.0, **kw):
+        return prop.DnsAnswer(rcode="NOERROR", aa=True, values=["x"], key_tags=[1])
+
+    monkeypatch.setattr(prop, "resolve_ns_addresses", resolve)
+    monkeypatch.setattr(prop, "query_dns", q)
+    res, truncated = await dp.check_dnskey_on_ns(Z, zone, [1], prop.PropagationSettings(enabled=True))
+    assert truncated is True
+    assert len(resolved) == dp.MAX_NS_NAMES and 1 < state["peak"] <= dp.NS_RESOLVE_CONCURRENCY
+    skipped = [n for n, r in res.items() if r.get("error") == dp.MSG_TOO_MANY_NS_NAMES]
+    assert len(skipped) == 5 and not set(skipped) & set(resolved)
+    assert all(res[n]["ok"] is False for n in skipped)
+    assert sum(1 for r in res.values() if r["ok"]) == dp.MAX_NS_NAMES
+
+
 # =============================================================================================
 # L6: DB-Verbindung vor dem Warten freigeben
 # =============================================================================================
@@ -519,6 +548,50 @@ def test_dnskey_check_against_glue(env):
     prop.reset_for_tests()
     d = c.get(f"{B}/dnskey-check", params={"key_tag": [tag(env.new), tag(env.old)]}).json()
     assert d["all_ok"] is True and d["nameservers"]["ns1.example.com."]["ok"] is True
+
+
+def test_dnskey_check_glue_bounded_and_inside_dns_slot(env, monkeypatch):
+    """W3-L2: Glue-Abfragen bei PowerDNS nur fuer GLUE_MAX_NAMES NS, hoechstens GLUE_CONCURRENCY gleichzeitig, im
+    globalen DNS-Slot; was nach GLUE_TOTAL offen ist, wird abgebrochen (der Check antwortet trotzdem)."""
+    import contextlib
+
+    env.enable()
+    names = [f"ns{i:02d}.{Z}" for i in range(dnssec_router.GLUE_MAX_NAMES + 8)]
+    rrsets = env.pdns.zones[Z]["rrsets"]
+    rrsets[:] = [x for x in rrsets if x["type"] != "NS"] + [rr(Z, "NS", *names)]
+    state = {"active": 0, "peak": 0, "in_slot": False, "outside": 0, "calls": 0}
+    real = env.pdns.get_zone_rrset
+
+    async def slow_rrset(zone_id, name, rtype, *, timeout=30.0):
+        if rtype in ("A", "AAAA"):
+            state["calls"] += 1
+            state["outside"] += 0 if state["in_slot"] else 1
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            try:
+                await asyncio.sleep(0.05)
+            finally:
+                state["active"] -= 1
+        return await real(zone_id, name, rtype, timeout=timeout)
+
+    @contextlib.asynccontextmanager
+    async def slot(db=None):
+        state["in_slot"] = True
+        try:
+            yield
+        finally:
+            state["in_slot"] = False
+
+    monkeypatch.setattr(env.pdns, "get_zone_rrset", slow_rrset)
+    monkeypatch.setattr(prop, "dns_slot", slot)
+    monkeypatch.setattr(dnssec_router, "GLUE_TOTAL", 0.12)   # reicht fuer 2 Runden zu je 4 Abfragen
+    r = env.client().get(f"{B}/dnskey-check")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["truncated"] is True and len(d["nameservers"]) == len(names)
+    assert state["outside"] == 0
+    assert 1 < state["peak"] <= dnssec_router.GLUE_CONCURRENCY
+    assert 0 < state["calls"] <= dnssec_router.GLUE_MAX_NAMES
 
 
 def test_dnskey_check_validates_key_tags(env):

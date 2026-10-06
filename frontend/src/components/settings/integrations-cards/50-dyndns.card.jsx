@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-    AlertTriangle, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Power, RefreshCw, Router, Trash2,
+    AlertTriangle, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Power, RefreshCw, Router, ShieldAlert, Trash2,
 } from 'lucide-react'
 import api from '../../../api'
 import { useDateFormat } from '../../../lib/useDateFormat.js'
 import OneTimeSecretModal from '../../OneTimeSecretModal'
 import DyndnsGuide from '../../dyndns/DyndnsGuide'
 import DyndnsTokenModal from '../../dyndns/DyndnsTokenModal'
+import { canToggleActive, dyndnsActionError, isSecretRevoked } from '../../dyndns/dyndnsRevoked'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
@@ -17,6 +18,8 @@ export const card = { id: 'dyndns', order: 50 }
 // eigene DynDNS-Tokens (Hostnamen-Scope A/AAAA), Einmal-Anzeige mit Anleitung (OneTimeSecretModal, f76),
 // Einrichtungsanleitung; fuer Admins zusaetzlich Schalter (Endpunkt an/aus, private IPs) und "Alle DynDNS-Tokens".
 // Fehler der Karte erscheinen in der Karte (loadErr), Fehler des Dialogs im Dialog.
+// Gesperrtes Secret (`secret_revoked`, A2): kein "Aktivieren", Hinweis mit "Neues Secret" (nur Besitzer); ein
+// trotzdem eintreffender 409 erscheint uebersetzt (components/dyndns/dyndnsRevoked.js).
 
 const STATUS_CLASS = {
     ok: 'bg-success/10 border-success/30 text-success',
@@ -40,6 +43,8 @@ function TokenRow({ token, busy, onEdit, onToggle, onRotate, onDelete }) {
     const statusByHost = new Map((token.hostname_status || []).map((s) => [stripDot(s.hostname), s.status]))
     const code = resultCode(token.last_result)
     const ips = [token.last_ip_v4, token.last_ip_v6].filter(Boolean).join(', ')
+    const revoked = isSecretRevoked(token)
+    const toggleLabel = token.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')
     return (
         <li className="border border-border/60 rounded-lg p-3 space-y-2">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -51,6 +56,11 @@ function TokenRow({ token, busy, onEdit, onToggle, onRotate, onDelete }) {
                                 {t('dyndns.inactive')}
                             </span>
                         )}
+                        {revoked && (
+                            <span className="ml-2 align-middle text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-danger/15 text-danger">
+                                {t('dyndns.secretRevokedBadge')}
+                            </span>
+                        )}
                     </p>
                     <p className="text-xs font-mono text-text-muted break-all">{token.token_prefix}…</p>
                 </div>
@@ -58,9 +68,11 @@ function TokenRow({ token, busy, onEdit, onToggle, onRotate, onDelete }) {
                     <button type="button" disabled={busy} onClick={onEdit} className="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={t('common.edit')} aria-label={`${t('common.edit')}: ${token.name}`}>
                         <Pencil className="w-4 h-4" aria-hidden="true" />
                     </button>
-                    <button type="button" disabled={busy} onClick={onToggle} className="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={token.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')} aria-label={`${token.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')}: ${token.name}`}>
-                        <Power className="w-4 h-4" aria-hidden="true" />
-                    </button>
+                    {canToggleActive(token) && (
+                        <button type="button" disabled={busy} onClick={onToggle} className="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={toggleLabel} aria-label={`${toggleLabel}: ${token.name}`}>
+                            <Power className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                    )}
                     <button type="button" disabled={busy} onClick={onRotate} className="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={t('dyndns.rotate')} aria-label={`${t('dyndns.rotate')}: ${token.name}`}>
                         <RefreshCw className="w-4 h-4" aria-hidden="true" />
                     </button>
@@ -69,6 +81,16 @@ function TokenRow({ token, busy, onEdit, onToggle, onRotate, onDelete }) {
                     </button>
                 </div>
             </div>
+            {revoked && (
+                <div role="note" className="flex flex-wrap items-start gap-2 p-2 rounded-lg bg-danger/10 border border-danger/30 text-xs text-text-primary">
+                    <ShieldAlert className="w-4 h-4 shrink-0 text-danger" aria-hidden="true" />
+                    <p className="flex-1 min-w-[12rem] break-words">{t('dyndns.secretRevokedHint')}</p>
+                    <button type="button" disabled={busy} onClick={onRotate} className="px-2 py-1 rounded bg-accent/20 text-accent-light hover:bg-accent/30 disabled:opacity-50 inline-flex items-center gap-1">
+                        <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                        {t('dyndns.secretRevokedRotate')}
+                    </button>
+                </div>
+            )}
             <ul className="flex flex-wrap gap-1.5" aria-label={t('dyndns.colHostnames')}>
                 {(token.hostnames || []).map((h) => {
                     const status = statusByHost.get(stripDot(h)) || 'ok'
@@ -185,7 +207,7 @@ function AdminBlock({ info, onChanged }) {
             await loadAll()
             onChanged?.()
         } catch (e) {
-            setAllErr(e.message)
+            setAllErr(dyndnsActionError(e, t))
         } finally {
             setRowBusy(null)
         }
@@ -278,13 +300,21 @@ function AdminBlock({ info, onChanged }) {
                                                     {tok.name}
                                                     <span className="block font-mono text-text-muted">{tok.token_prefix}…</span>
                                                     {tok.is_active === false && <span className="text-[10px] uppercase text-text-muted">{t('dyndns.inactive')}</span>}
+                                                    {isSecretRevoked(tok) && (
+                                                        <span className="block text-[10px] uppercase text-danger" title={t('dyndns.secretRevokedForeignHint')}>
+                                                            {t('dyndns.secretRevokedBadge')}
+                                                            <span className="sr-only"> ({t('dyndns.secretRevokedForeignHint')})</span>
+                                                        </span>
+                                                    )}
                                                 </td>
                                                 <td className="py-1.5 pr-3 font-mono text-text-primary break-all">{(tok.hostnames || []).map(stripDot).join(', ')}</td>
                                                 <td className="py-1.5 pr-3 text-text-primary">{tok.last_used_at ? fmtDateTime(tok.last_used_at) : t('dyndns.never')}</td>
                                                 <td className="py-1.5 text-right whitespace-nowrap">
-                                                    <button type="button" disabled={rowBusy === tok.id} onClick={() => toggleForeign(tok)} className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={tok.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')} aria-label={`${tok.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')}: ${tok.name}`}>
-                                                        <Power className="w-4 h-4" aria-hidden="true" />
-                                                    </button>
+                                                    {canToggleActive(tok) && (
+                                                        <button type="button" disabled={rowBusy === tok.id} onClick={() => toggleForeign(tok)} className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover disabled:opacity-50" title={tok.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')} aria-label={`${tok.is_active === false ? t('dyndns.activate') : t('dyndns.deactivate')}: ${tok.name}`}>
+                                                            <Power className="w-4 h-4" aria-hidden="true" />
+                                                        </button>
+                                                    )}
                                                     <button type="button" disabled={rowBusy === tok.id} onClick={() => deleteForeign(tok)} className="p-1 rounded text-danger hover:bg-danger/10 disabled:opacity-50" title={t('common.delete')} aria-label={`${t('common.delete')}: ${tok.name}`}>
                                                         <Trash2 className="w-4 h-4" aria-hidden="true" />
                                                     </button>
@@ -380,7 +410,7 @@ export default function DyndnsCard() {
             await refresh()
             return result
         } catch (e) {
-            setLoadErr(e.message)
+            setLoadErr(dyndnsActionError(e, t))
             return null
         } finally {
             setBusyId(null)

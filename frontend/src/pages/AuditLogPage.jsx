@@ -17,6 +17,7 @@ import {
     AUDIT_PAGE_SIZES, SEARCH_DEBOUNCE_MS, auditSearchObject, buildAuditParams, effectiveSearch, hasActiveFilters,
     isInvalidRange, parseAuditSearch, zoneHistoryHref,
 } from '../components/audit/historyModel.js'
+import ModalPortal from '../components/common/ModalPortal'
 
 // Admin-Audit-Log (F7 §2.5, §6.3; Plan B.16: WS-F7-FE besitzt die Seite komplett).
 // Quelle der Filter sind die URL-Search-Params (inkl. offset/limit); jede Filteraenderung setzt offset=0.
@@ -424,43 +425,45 @@ export default function AuditLogPage() {
 
             {/* Detail-Drawer */}
             {drawerEntry && (
-                <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setDrawerEntry(null)}>
-                    <aside
-                        ref={drawerRef}
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby={drawerTitleId}
-                        className="fixed inset-y-0 right-0 w-full max-w-2xl bg-bg-primary border-l border-border shadow-2xl overflow-y-auto"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-border bg-bg-primary">
-                            <h2 id={drawerTitleId} className="text-lg font-bold text-text-primary">{t('audit.detailTitle', { id: drawerEntry.id })}</h2>
-                            <button
-                                type="button"
-                                onClick={() => setDrawerEntry(null)}
-                                className="p-1 rounded-lg hover:bg-bg-hover text-text-muted"
-                                aria-label={t('common.close')}
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-5 space-y-4">
-                            {drawerError && (
-                                <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm" role="alert">
-                                    {t('audit.detailLoadError', { message: drawerError })}
-                                </div>
-                            )}
-                            <AuditEntryDetails
-                                entry={drawerEntry}
-                                t={t}
-                                showFields
-                                onLoadAll={drawerEntry.details_truncated ? loadFullEntry : undefined}
-                                loadingAll={drawerLoading}
-                                onOpenZoneHistory={zoneHistoryHref(drawerEntry) ? () => navigate(zoneHistoryHref(drawerEntry)) : undefined}
-                            />
-                        </div>
-                    </aside>
-                </div>
+                <ModalPortal>
+                    <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setDrawerEntry(null)}>
+                        <aside
+                            ref={drawerRef}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby={drawerTitleId}
+                            className="fixed inset-y-0 right-0 w-full max-w-2xl bg-bg-primary border-l border-border shadow-2xl overflow-y-auto"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-border bg-bg-primary">
+                                <h2 id={drawerTitleId} className="text-lg font-bold text-text-primary">{t('audit.detailTitle', { id: drawerEntry.id })}</h2>
+                                <button
+                                    type="button"
+                                    onClick={() => setDrawerEntry(null)}
+                                    className="p-1 rounded-lg hover:bg-bg-hover text-text-muted"
+                                    aria-label={t('common.close')}
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <div className="p-5 space-y-4">
+                                {drawerError && (
+                                    <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm" role="alert">
+                                        {t('audit.detailLoadError', { message: drawerError })}
+                                    </div>
+                                )}
+                                <AuditEntryDetails
+                                    entry={drawerEntry}
+                                    t={t}
+                                    showFields
+                                    onLoadAll={drawerEntry.details_truncated ? loadFullEntry : undefined}
+                                    loadingAll={drawerLoading}
+                                    onOpenZoneHistory={zoneHistoryHref(drawerEntry) ? () => navigate(zoneHistoryHref(drawerEntry)) : undefined}
+                                />
+                            </div>
+                        </aside>
+                    </div>
+                </ModalPortal>
             )}
 
             {showRetention && <AuditRetentionModal onClose={() => setShowRetention(false)} />}

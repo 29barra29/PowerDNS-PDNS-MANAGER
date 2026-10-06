@@ -12,6 +12,27 @@ export const LUA_TARGET_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'PTR'
 export const LUA_MAX_CONTENT_LENGTH = 4000
 export const GEO_FUNCTIONS = ['pickclosest', 'country', 'countryCode', 'continent', 'continentCode', 'region', 'regionCode', 'latlon', 'latlonloc', 'closestMagic', 'asnum']
 
+// 403-Texte der LUA-Policy (Backend services/lua_records.MSG_DENIED_*, Sync-Test im Backend): die Oberflaeche zeigt
+// statt des deutschen Backend-Texts den uebersetzten (Review-Fund W3-L8)
+export const LUA_DENIED_MESSAGES = Object.freeze({
+    admin: 'LUA-Records dürfen nur Administratoren anlegen oder ändern.',
+    disabled: 'LUA-Records sind in diesem Panel deaktiviert (Einstellungen → DNS-Optionen).',
+})
+
+/** i18n-Key fuer einen 403-Text der LUA-Policy oder null (anderer Fehler). */
+export function luaDeniedKey(message) {
+    const m = String(message ?? '').trim()
+    if (m === LUA_DENIED_MESSAGES.disabled) return 'lua.notAllowedDisabled'
+    if (m === LUA_DENIED_MESSAGES.admin) return 'lua.notAllowedAdmin'
+    return null
+}
+
+/** Fehlertext einer Record-Aktion: LUA-Policy-Texte uebersetzt, sonst die Meldung selbst. */
+export function translateLuaDenied(message, t) {
+    const key = luaDeniedKey(message)
+    return key ? t(key) : message
+}
+
 const TYPE_RE = /^\s*([A-Za-z0-9]+)\s+([\s\S]*?)\s*$/
 const CHUNK = '"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"'
 const CHUNKS_RE = new RegExp(`^${CHUNK}(?:\\s+${CHUNK})*$`)

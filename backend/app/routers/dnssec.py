@@ -278,23 +278,53 @@ async def _load_keys(client, zone_id: str) -> list[dict]:
         _raise_pdns(e)
 
 
+# Glue-Abfragen bei PowerDNS fuer die DNSKEY-Pruefung (W3-L2): hoechstens so viele Namen (wie die Pruefung selbst),
+# so viele gleichzeitig, insgesamt so lange; was danach offen ist, wird verworfen (der NS wird dann per DNS aufgeloest).
+GLUE_MAX_NAMES = dnssec_parent.MAX_NS_NAMES
+GLUE_CONCURRENCY = 4
+GLUE_TOTAL = 2 * prop.PANEL_TIMEOUT
+
+
 async def _ns_zone_json(client, zone_id: str, zone_norm: str, settings: prop.PropagationSettings) -> dict:
-    """Apex-NS und Glue (A/AAAA der NS innerhalb der Zone) als Zonen-JSON fuer ``propagation.extract_reference``."""
+    """Apex-NS und Glue (A/AAAA der NS innerhalb der Zone) als Zonen-JSON fuer ``propagation.extract_reference``.
+
+    Begrenzt (W3-L2): Glue nur fuer die ersten ``GLUE_MAX_NAMES`` NS-Namen, hoechstens ``GLUE_CONCURRENCY``
+    PowerDNS-Abfragen gleichzeitig, zusammen hoechstens ``GLUE_TOTAL`` Sekunden. Der Aufrufer haelt dabei den globalen
+    DNS-Slot (``prop.dns_slot``).
+    """
     try:
         ns_json = await client.get_zone_rrset(zone_id, zone_norm, "NS", timeout=prop.PANEL_TIMEOUT)
     except PowerDNSAPIError as e:
         _raise_pdns(e)
     rrsets = list((ns_json or {}).get("rrsets") or [])
-    names = prop.extract_reference({"rrsets": rrsets}, zone_norm)["nameservers"]
+    names = prop.extract_reference({"rrsets": rrsets}, zone_norm)["nameservers"][:GLUE_MAX_NAMES]
     inside = [n for n in names if n == zone_norm or n.endswith("." + zone_norm)]
-    jobs = [client.get_zone_rrset(zone_id, n, t, timeout=prop.PANEL_TIMEOUT)
-            for n in inside for t in (("A", "AAAA") if settings.ipv6 else ("A",))]
-    if jobs:
-        try:
-            for part in await asyncio.gather(*jobs):
-                rrsets.extend((part or {}).get("rrsets") or [])
-        except PowerDNSAPIError as e:
-            _raise_pdns(e)
+    sem = asyncio.Semaphore(GLUE_CONCURRENCY)
+
+    async def fetch(name: str, rtype: str):
+        async with sem:
+            return await client.get_zone_rrset(zone_id, name, rtype, timeout=prop.PANEL_TIMEOUT)
+
+    tasks = [asyncio.ensure_future(fetch(n, t))
+             for n in inside for t in (("A", "AAAA") if settings.ipv6 else ("A",))]
+    if not tasks:
+        return {"rrsets": rrsets}
+    done, pending = await asyncio.wait(tasks, timeout=GLUE_TOTAL)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+        logger.warning("DNSKEY-Pruefung %s: %d Glue-Abfragen nach %.0f s abgebrochen", zone_norm, len(pending),
+                       GLUE_TOTAL)
+    for t in tasks:
+        if t not in done or t.cancelled():
+            continue
+        exc = t.exception()
+        if isinstance(exc, PowerDNSAPIError):
+            _raise_pdns(exc)
+        if exc is not None:
+            raise exc
+        rrsets.extend((t.result() or {}).get("rrsets") or [])
     return {"rrsets": rrsets}
 
 
@@ -398,9 +428,9 @@ async def get_dnskey_check(
     if not dnssec_parent.dnskey_check_enabled(settings):
         return dnssec_parent.empty_dnskey_report(zone_norm, expected)
     _consume_rate(current_user)
-    await prop.release_db(db)  # alles Noetige gelesen; PowerDNS- und DNS-Phase ohne DB-Verbindung (L6)
-    zone_json = await _ns_zone_json(client, zone_id, zone_norm, settings)
+    # alles Noetige gelesen; PowerDNS- und DNS-Phase ohne DB-Verbindung (L6) und im globalen DNS-Slot (W3-L2)
     async with prop.dns_slot(db):
+        zone_json = await _ns_zone_json(client, zone_id, zone_norm, settings)
         return await dnssec_parent.dnskey_report(zone_norm, zone_json, expected, settings)
 
 

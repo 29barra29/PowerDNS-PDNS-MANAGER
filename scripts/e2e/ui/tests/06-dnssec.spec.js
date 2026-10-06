@@ -36,8 +36,8 @@ test.describe('DNSSEC', () => {
     const ds = dialog(page, t('zoneDetail.dnssecModalTitle'))
     await expect(ds).toBeVisible()
     await expect(ds.getByText(t('zoneDetail.dnssecModalRecommended'))).toBeVisible()
-    // Hinweis: aria-label "Kopieren" ueberdeckt den sichtbaren Text (Label-in-Name), daher per Text gesucht
-    await ds.getByRole('button').filter({ hasText: t('zoneDetail.dnssecModalCopyDsLine') }).first().click()
+    // UI-SMOKE-2 (behoben): der sichtbare Text ist der zugaengliche Name (WCAG 2.5.3 Label in Name)
+    await ds.getByRole('button', { name: exact(t('zoneDetail.dnssecModalCopyDsLine')) }).first().click()
     await expect(ds.getByText(t('zoneDetail.dnssecCopied'))).toBeVisible()
     const clip = await page.evaluate(() => navigator.clipboard.readText())
     // DS-RDATA (Key-Tag, Algorithmus 13, Digest-Typ 2 = SHA-256, Digest)

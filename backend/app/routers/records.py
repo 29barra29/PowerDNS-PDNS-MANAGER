@@ -153,10 +153,12 @@ def _primary_payload(fan: fanout.FanoutResult, server_name: str) -> list[dict]:
 
 
 async def _ptr_hook(db: AsyncSession, user: User, server_name: str, requested: Optional[bool], change: Any, *,
-                    ttl_default: int = 3600) -> Optional[bulk_service.PtrOutcome]:
-    """PTR-Pflege nach Primary-Erfolg (F11 5.12, B.6a); traegt das kompakte Ergebnis in die Audit-Details ein."""
+                    action: str, zone: str, ttl_default: int = 3600) -> Optional[bulk_service.PtrOutcome]:
+    """PTR-Pflege nach Primary-Erfolg (F11 5.12, B.6a); traegt das kompakte Ergebnis in die Audit-Details ein.
+
+    ``action``/``zone`` erscheinen im ``PTR_SYNC``-Audit und -Webhook (Review-Fund L-5)."""
     ptr = await bulk_service.sync_ptr_for_changes(db, user, server_name, requested, change.changes,
-                                                  ttl_default=ttl_default)
+                                                  ttl_default=ttl_default, action=action, zone=zone)
     if ptr is not None:
         change.details["ptr"] = ptr.compact
     return ptr
@@ -296,7 +298,8 @@ async def create_record(
         )
         raise exc
 
-    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change, ttl_default=record.ttl)
+    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change, action="CREATE", zone=zone_norm,
+                          ttl_default=record.ttl)
     audit = await _log_action(
         db, "CREATE", record.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,
@@ -363,7 +366,7 @@ async def delete_record(
         )
         raise exc
 
-    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change)
+    ptr = await _ptr_hook(db, current_user, server_name, record.manage_ptr, change, action="DELETE", zone=zone_norm)
     audit = await _log_action(
         db, "DELETE", record.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,
@@ -423,7 +426,8 @@ async def update_record(
         )
         raise exc
 
-    ptr = await _ptr_hook(db, current_user, server_name, update.manage_ptr, change, ttl_default=update.ttl)
+    ptr = await _ptr_hook(db, current_user, server_name, update.manage_ptr, change, action="UPDATE", zone=zone_norm,
+                          ttl_default=update.ttl)
     audit = await _log_action(
         db, "UPDATE", update.name, server_name, change.details,
         user_id=current_user.id, zone_name=zone_norm,

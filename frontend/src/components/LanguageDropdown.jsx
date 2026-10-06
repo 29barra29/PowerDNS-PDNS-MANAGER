@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Globe, Check, ChevronDown } from 'lucide-react'
 import { LANGUAGES, applyLanguage, currentLanguage } from '../i18n'
+import { isTopDialog, pushDialog } from '../lib/useDialogFocus'
 
 /**
  * Sprachauswahl als Dropdown mit Flaggen.
@@ -20,21 +21,33 @@ export default function LanguageDropdown({ compact = true, align = 'right', onCh
     const [open, setOpen] = useState(false)
     const [busy, setBusy] = useState(false)
     const ref = useRef(null)
+    const buttonRef = useRef(null)
 
     const activeCode = i18n.resolvedLanguage || i18n.language?.split('-')[0]
     const current = LANGUAGES.find((l) => l.code === activeCode)
         || LANGUAGES.find((l) => l.code === 'en')
         || LANGUAGES[0]
 
+    // Offene Liste liegt auf dem Dialog-Stapel von lib/useDialogFocus (WS-W3-NACHARBEIT, W2-NACHARBEIT 4.3): ESC
+    // schliesst sie nur, wenn kein Dialog darueber liegt, und gibt den Fokus an den Knopf zurueck; offene Dialoge
+    // darunter reagieren solange nicht auf ESC.
     useEffect(() => {
         if (!open) return
+        const token = {}
+        const pop = pushDialog(token)
         const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-        const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+        const onKey = (e) => {
+            if ((e.key !== 'Escape' && e.key !== 'Esc') || e.defaultPrevented || !isTopDialog(token)) return
+            e.preventDefault()
+            setOpen(false)
+            buttonRef.current?.focus()
+        }
         document.addEventListener('mousedown', onClick)
         document.addEventListener('keydown', onKey)
         return () => {
             document.removeEventListener('mousedown', onClick)
             document.removeEventListener('keydown', onKey)
+            pop()
         }
     }, [open])
 
@@ -57,6 +70,7 @@ export default function LanguageDropdown({ compact = true, align = 'right', onCh
     return (
         <div className="relative" ref={ref}>
             <button
+                ref={buttonRef}
                 type="button"
                 onClick={() => setOpen((v) => !v)}
                 aria-haspopup="listbox"

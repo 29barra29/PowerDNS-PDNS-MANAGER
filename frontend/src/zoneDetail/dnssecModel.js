@@ -489,7 +489,10 @@ export function rolloverStepIndex(kind, track, checks = {}) {
         if (!checks.dnskey) return at('dnskeyCheck')
         return checks.ds ? at('switch') : at('dsAdd')
     case 'both_active':
-        return at('switch')
+        // beide aktiv (z. B. von Hand umgeschaltet): vor dem Abschalten des alten Schluessels dieselben Pruefungen
+        // wie vor dem Umschalten (W3-L6)
+        if (!checks.dnskey) return at('dnskeyCheck')
+        return kind === 'zsk' || checks.ds ? at('switch') : at('dsAdd')
     case 'old_retired':
         if (kind === 'zsk') {
             if (!checks.waited) return at('waitMaxTtl')
@@ -516,8 +519,9 @@ export function rolloverActionAllowed(kind, track, checks = {}) {
     case 'new_prepublished':
         return kind === 'zsk' ? !!(checks.waited && checks.dnskey) : !!(checks.dnskey && checks.ds)
     case 'both_active':
-        // KSK/CSK: dieselbe Bestaetigung wie vor dem Umschalten (neuer DS steht beim Registrar)
-        return kind === 'zsk' ? true : !!checks.ds
+        // Alten Schluessel abschalten erst, wenn alle NS den neuen DNSKEY liefern (Pruefung bzw. Bestaetigung) und –
+        // bei KSK/CSK – der neue DS beim Registrar steht; vorher bei ZSK ganz ohne Bedingung (Review-Fund W3-L6)
+        return kind === 'zsk' ? !!checks.dnskey : !!(checks.dnskey && checks.ds)
     case 'old_retired':
         return kind === 'zsk' ? !!(checks.waited && checks.dnskeyDelete) : !!(checks.dsRemoved && checks.dnskeyDelete)
     default:

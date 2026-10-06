@@ -10,8 +10,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-    belongsToOtherModal, getFocusableElements, isFocusable, isTopDialog, nextTrapTarget, openDialogCount,
-    pickInitialFocus, pushDialog, shouldRestoreFocus,
+    OPENER_GRACE_MS, belongsToOtherModal, getFocusableElements, isFocusable, isSubmitShortcut, isTopDialog,
+    nextTrapTarget, openDialogCount, pickInitialFocus, pushDialog, resolveOpener, shouldDeferRestore,
+    shouldRestoreFocus,
 } from '../src/lib/useDialogFocus.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -38,6 +39,8 @@ const REQUIRED = [
     'components/dnssec/DnssecDialog.jsx',
     'components/bulk/BulkEditorModal.jsx',
     'components/bulk/BulkTtlDialog.jsx',
+    // WS-W3-NACHARBEIT (W2-NACHARBEIT 4.3, F15-Antrag): Anlege- und Import-Dialog der Zonenliste
+    'pages/ZonesPage.jsx',
 ]
 
 const ROLE_DIALOG = /role\s*=\s*(?:"dialog"|'dialog'|\{\s*["']dialog["']\s*\})/
@@ -219,3 +222,63 @@ test('Dialog-Stapel: nur der zuletzt geoeffnete Dialog reagiert', () => {
     assert.equal(isTopDialog(a), false)
     assert.equal(openDialogCount(), before)
 })
+
+test('resolveOpener: fokussiertes Element, sonst nur ein gerade deaktivierter, kurz vorher verlassener Ausloeser (UI-SMOKE-3)', () => {
+    const body = el('body')
+    const btn = el('btn')
+    const now = 1_000_000
+    assert.equal(resolveOpener(btn, body, { el: el('alt'), blurredAt: now }, now), btn)
+    // nichts fokussiert, Ausloeser deaktiviert und eben verlassen -> Ausloeser
+    const disabled = el('save', { disabled: true })
+    assert.equal(resolveOpener(body, body, { el: disabled, blurredAt: now - 200 }, now), disabled)
+    // zu alt, nicht deaktiviert, nicht mehr im Dokument oder nie verlassen -> bisheriges Verhalten (body)
+    assert.equal(resolveOpener(body, body, { el: disabled, blurredAt: now - OPENER_GRACE_MS - 1 }, now), body)
+    assert.equal(resolveOpener(body, body, { el: el('aktiv'), blurredAt: now }, now), body)
+    const gone = el('weg', { disabled: true })
+    gone.isConnected = false
+    assert.equal(resolveOpener(body, body, { el: gone, blurredAt: now }, now), body)
+    assert.equal(resolveOpener(body, body, { el: disabled, blurredAt: null }, now), body)
+    assert.equal(resolveOpener(null, body, { el: null, blurredAt: null }, now), null)
+    assert.equal(resolveOpener(body, body, null, now), body)
+})
+
+test('shouldDeferRestore: warten nur bei einem deaktivierten Ausloeser im Dokument', () => {
+    assert.equal(shouldDeferRestore(el('a')), false)
+    assert.equal(shouldDeferRestore(el('b', { disabled: true })), true)
+    const gone = el('c', { disabled: true })
+    gone.isConnected = false
+    assert.equal(shouldDeferRestore(gone), false)
+    assert.equal(shouldDeferRestore(null), false)
+})
+
+// ------------------------------------------------------------------ WS-W3-NACHARBEIT (W2-NACHARBEIT 4.3/4.4)
+const GLOBAL_KEYDOWN = /(?:window|document)\.addEventListener\(\s*['"]keydown['"]/
+
+test('a11y: Dialoge haengen keine eigenen keydown-Listener an window/document (Strg/Cmd+Enter ueber den Hook)', () => {
+    // Globale Listener reagierten auch, wenn ein anderer Dialog (Step-up, Einmal-Anzeige) darueber lag
+    const problems = dialogFiles().filter((file) => GLOBAL_KEYDOWN.test(fs.readFileSync(path.join(SRC, file), 'utf8')))
+    assert.deepEqual(problems, [], 'Dialoge mit globalem keydown-Listener:\n' + problems.join('\n'))
+})
+
+test('a11y: Mobile-Seitenleiste ist als Dialog ueber den Hook versorgt, Sprachliste nutzt den Dialog-Stapel', () => {
+    const layout = fs.readFileSync(path.join(SRC, 'components/Layout.jsx'), 'utf8')
+    assert.match(layout, /useDialogFocus\(\{\s*active:\s*sidebarOpen/)
+    assert.match(layout, /ref=\{sidebarRef\}/)
+    assert.match(layout, /role=\{sidebarOpen \? 'dialog' : undefined\}/)
+    assert.equal(/['"]Escape['"]/.test(layout), false, 'Layout behandelt ESC nicht mehr selbst')
+    assert.equal(GLOBAL_KEYDOWN.test(layout), false)
+    const dropdown = fs.readFileSync(path.join(SRC, 'components/LanguageDropdown.jsx'), 'utf8')
+    assert.match(dropdown, /pushDialog\(token\)/)
+    assert.match(dropdown, /isTopDialog\(token\)/)
+})
+
+test('isSubmitShortcut: Strg/Cmd+Enter ohne Alt und ohne IME-Eingabe', () => {
+    assert.equal(isSubmitShortcut({ key: 'Enter', ctrlKey: true }), true)
+    assert.equal(isSubmitShortcut({ key: 'Enter', metaKey: true }), true)
+    assert.equal(isSubmitShortcut({ key: 'Enter' }), false)
+    assert.equal(isSubmitShortcut({ key: 'Enter', ctrlKey: true, altKey: true }), false)
+    assert.equal(isSubmitShortcut({ key: 'Enter', ctrlKey: true, isComposing: true }), false)
+    assert.equal(isSubmitShortcut({ key: 'a', ctrlKey: true }), false)
+    assert.equal(isSubmitShortcut(null), false)
+})
+
