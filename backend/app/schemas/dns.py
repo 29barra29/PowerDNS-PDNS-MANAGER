@@ -191,6 +191,12 @@ class RecordCreate(BaseModel):
         return self
 
 
+# Obergrenze fuer einzelne Record-Werte in Loesch-/Schalt-Anfragen (F15-fix3, Verteidigung in der Tiefe):
+# PowerDNS speichert hoechstens 64000 Zeichen; 65535 liegt darueber (extern angelegte Werte bleiben loeschbar)
+# und unter lua_records.LUA_NORMALIZE_MAX_LENGTH. Bewusst NICHT die LUA-Grenze 4000.
+RECORD_CONTENT_MAX_LENGTH = 65535
+
+
 class RecordDelete(BaseModel):
     """Schema for deleting a record set or a single value of it.
 
@@ -199,7 +205,7 @@ class RecordDelete(BaseModel):
     """
     name: str
     type: str
-    content: str | None = None
+    content: str | None = Field(None, max_length=RECORD_CONTENT_MAX_LENGTH)
     manage_ptr: Optional[bool] = Field(None, description=MANAGE_PTR_DESCRIPTION)
 
     @field_validator("name")

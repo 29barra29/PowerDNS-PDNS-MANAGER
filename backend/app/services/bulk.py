@@ -316,9 +316,14 @@ def build_plan(
             mark(k, "delete_rrset")
             continue
         st = state(k)
+        removed = removed_here.get(k, set())
+        if st is None and not removed:
+            # RRset fehlt: ohne Normalisierung des (evtl. sehr langen) Werts melden (F15-fix3)
+            missing(k, "value_missing", item.content)
+            continue
         c = ck(k[1], item.content)
         if st is None or c not in st.values:
-            if c not in removed_here.get(k, set()):  # doppelt in derselben Anfrage -> keine Wirkung
+            if c not in removed:  # doppelt in derselben Anfrage -> keine Wirkung
                 missing(k, "value_missing", item.content)
             continue
         del st.values[c]
@@ -344,8 +349,11 @@ def build_plan(
     for item in ops.set_disabled:
         k = _key(item.name, item.type)
         st = state(k)
+        if st is None:
+            missing(k, "value_missing", item.content)
+            continue
         c = ck(k[1], item.content)
-        if st is None or c not in st.values:
+        if c not in st.values:
             missing(k, "value_missing", item.content)
             continue
         st.values[c] = {**st.values[c], "disabled": bool(item.disabled)}

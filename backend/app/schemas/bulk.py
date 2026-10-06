@@ -24,6 +24,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.dns import (
+    RECORD_CONTENT_MAX_LENGTH,
     RecordCreate,
     RecordDelete,
     RecordItem,
@@ -85,7 +86,7 @@ class BulkTtlChange(_NameType):
 
 
 class BulkDisabledChange(_NameType):
-    content: str
+    content: str = Field(..., max_length=RECORD_CONTENT_MAX_LENGTH)  # F15-fix3, siehe schemas/dns.py
     disabled: bool
 
     @field_validator("type")
