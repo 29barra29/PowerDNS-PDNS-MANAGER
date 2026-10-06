@@ -9,7 +9,9 @@
   Admins sehen unter `/api/v1/dyndns/admin/tokens` alle Tokens); gespeichert wird nur ein Hash, der Klartext erscheint
   genau einmal. Hoechstens 50 Tokens je Benutzer und 20 Hostnamen je Token.
 - **Token nie in die URL:** Der Token wird nur als Basic-Auth-Passwort oder Bearer-Header akzeptiert. Steht er im
-  Query-String, wird die Anfrage abgelehnt und der Token sofort gesperrt (Audit `DYNDNS_TOKEN_REVOKED`).
+  Query-String, wird die Anfrage abgelehnt und der Token sofort gesperrt (Audit `DYNDNS_TOKEN_REVOKED`). Das alte
+  Secret ist damit endgueltig ungueltig: Ein so gesperrter Token laesst sich nicht einfach wieder aktivieren, sondern
+  braucht ein neues Secret ("Neues Secret erzeugen").
   Browser-Anfragen von fremden Seiten werden abgewiesen.
 - **Antworten:** `good`/`nochg` mit den gesetzten IPs, `badauth`, `nohost`, `notfqdn`, `numhost`, `badip`, `dnserr`,
   `911`. Unveraenderte Werte erzeugen keinen Schreibzugriff, keine Serial-Erhoehung und kein Audit.

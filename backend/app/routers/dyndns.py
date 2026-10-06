@@ -74,6 +74,8 @@ MSG_INTERNAL = "Interner Fehler – bitte spaeter erneut versuchen"
 MSG_BAD_JSON = "Ungueltiger JSON-Body"
 MSG_TOKEN_NOT_FOUND = "Token nicht gefunden"
 MSG_FOREIGN_TOKEN = "Fremde DynDNS-Tokens koennen nur aktiviert/deaktiviert oder geloescht werden"
+MSG_SECRET_REVOKED = ("Das Secret dieses Tokens wurde aus Sicherheitsgruenden gesperrt (Token stand in einer URL "
+                      "oder Zugaenge wurden widerrufen) – bitte ein neues Secret erzeugen")
 MSG_ONE_TIME = "Dieser Token wird nur einmal angezeigt – bitte sicher speichern."
 
 UPDATE_PARAMS = ("hostname", "myip", "myipv4", "myipv6")
@@ -408,6 +410,9 @@ async def update_dyndns_token(token_id: int, data: DynDnsTokenUpdate, db: DbWrit
     fields = data.model_dump(exclude_unset=True)
     if not owner and any(k != "is_active" for k, v in fields.items() if v is not None):
         raise HTTPException(status_code=403, detail=MSG_FOREIGN_TOKEN)
+    if data.is_active and dyndns_service.is_secret_revoked(token):
+        # Der alte Klartext ist bekannt geworden; Reaktivieren nur ueber ein neues Secret (rotate).
+        raise HTTPException(status_code=409, detail=MSG_SECRET_REVOKED)
 
     changed: dict[str, dict] = {}
 

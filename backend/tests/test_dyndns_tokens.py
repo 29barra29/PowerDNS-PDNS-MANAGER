@@ -161,6 +161,33 @@ async def test_rotate_changes_hash_keeps_id(world):
     assert t.last_result is None and t.token_prefix == dyndns.token_prefix(new_plain)
 
 
+async def test_revoke_secret_marks_and_rotate_clears(world):
+    """Fix-Runde: Sicherheitssperre entwertet das Secret; nur rotate macht den Token wieder nutzbar."""
+    db = TokenDB()
+    t, plain = await dyndns.create_token(db, user=_user(), name="R", hostnames=["home.example.com"],
+                                         allowed_types=["A"], ttl=60, update_ptr=False)
+    assert dyndns.is_secret_revoked(t) is False
+    dyndns.revoke_secret(t)
+    assert t.is_active is False and dyndns.is_secret_revoked(t)
+    assert t.token_hash != dyndns.hash_token(plain) and len(t.token_hash) <= 128
+    assert dyndns.serialize_token(t)["secret_revoked"] is True
+    new_plain = await dyndns.rotate_token(db, t)
+    assert not dyndns.is_secret_revoked(t) and t.token_hash == dyndns.hash_token(new_plain)
+    assert t.is_active is False  # rotate aktiviert nicht implizit
+
+
+async def test_revoke_tokens_of_user_includes_paused_and_skips_revoked(world):
+    db = TokenDB()
+    a = DynDnsToken(id=1, user_id=5, token_hash="h1", is_active=True)
+    b = DynDnsToken(id=2, user_id=5, token_hash="h2", is_active=False)  # pausiert -> trotzdem entwerten
+    c = DynDnsToken(id=3, user_id=5, token_hash=dyndns.REVOKED_HASH_PREFIX + "x", is_active=False)
+    db.select_rows = [a, b, c]
+    assert await dyndns.revoke_tokens_of_user(db, 5) == 2
+    assert all(dyndns.is_secret_revoked(t) and t.is_active is False for t in (a, b, c))
+    assert c.token_hash == dyndns.REVOKED_HASH_PREFIX + "x"
+    assert "dyndns_tokens.user_id" in str(db.executed[0])
+
+
 async def test_delete_tokens_of_user_returns_count(world):
     db = TokenDB()
     db.rowcount = 4
@@ -279,6 +306,28 @@ def test_put_foreign_token_admin_only_is_active(api, world):
     assert "hostname_status" not in r.json()
     (action, _, _, kw) = a.audit[-1]
     assert action == "DYNDNS_TOKEN_UPDATE" and kw["details"]["changed"] == {"is_active": {"from": True, "to": False}}
+
+
+def test_put_is_active_on_revoked_secret_is_409_until_rotate(api, world):
+    """Fix-Runde: aus Sicherheitsgruenden gesperrter Token (Secret entwertet) laesst sich nicht per PUT
+    reaktivieren – weder vom Besitzer noch vom Admin; nach rotate wieder normal."""
+    a = api(_user(1, "admin", "root"))
+    own = a.add(2, user_id=1)
+    foreign = a.add(9, user_id=5)
+    for t in (own, foreign):
+        dyndns.revoke_secret(t)
+    for tid, t in ((2, own), (9, foreign)):
+        r = a.client.put(f"/api/v1/dyndns/tokens/{tid}", json={"is_active": True})
+        assert r.status_code == 409 and "neues Secret" in r.json()["detail"]
+        assert t.is_active is False
+    assert a.audit == []
+    # Deaktivieren/sonstige Felder bleiben erlaubt
+    r = a.client.put("/api/v1/dyndns/tokens/2", json={"name": "Neu", "is_active": False})
+    assert r.status_code == 200 and r.json()["secret_revoked"] is True and own.name == "Neu"
+    r = a.client.post("/api/v1/dyndns/tokens/2/rotate")
+    assert r.status_code == 200 and r.json()["token"]["secret_revoked"] is False
+    r = a.client.put("/api/v1/dyndns/tokens/2", json={"is_active": True})
+    assert r.status_code == 200 and own.is_active is True and r.json()["secret_revoked"] is False
 
 
 def test_put_foreign_token_non_admin_is_404(api, world):
