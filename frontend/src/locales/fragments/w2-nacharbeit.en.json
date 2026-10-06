@@ -1,6 +1,0 @@
-{
-  "set": {
-    "history.blocked.dyndns_repair": "DynDNS repair of an outdated server – cannot be rolled back"
-  },
-  "remove": []
-}
