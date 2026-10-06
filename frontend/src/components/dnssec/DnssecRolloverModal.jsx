@@ -1,22 +1,69 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Check, CheckCircle, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import api from '../../api'
+import { useDialogFocus } from '../../lib/useDialogFocus.js'
 import ModalErrorBanner from '../ModalErrorBanner'
-import DnssecDialog, { CopyButton, FollowUpNotes, SerialBumpOption } from './DnssecDialog'
+import { CopyButton, FollowUpNotes, SerialBumpOption } from './DnssecDialog'
+import DnssecParentDsCheck from './DnssecParentDsCheck'
 import {
-    PHASE_KEYS, ROLLOVER_STEPS, ROLLOVER_STEP_KEYS, algorithmLabel, bumpSerialValue, followUpMessages, formatDuration,
-    isPrimaryKind, keyTypeLabel, maxRecordTtl, recommendedDs, rolloverActionAllowed, rolloverKinds,
-    rolloverNewKeyBody, rolloverStepIndex, sinceSeconds, soaTimings, withForce,
+    PHASE_KEYS, ROLLOVER_STEPS, ROLLOVER_STEP_KEYS, algorithmLabel, bumpSerialValue, dnskeyCheckOutcome,
+    effectiveRolloverChecks, followUpMessages, formatDuration, isPrimaryKind, keyTypeLabel, maxRecordTtl,
+    recommendedDs, rolloverActionAllowed, rolloverKinds, rolloverNewKeyBody, rolloverStepIndex, sinceSeconds,
+    soaTimings, withForce,
 } from '../../zoneDetail/dnssecModel.js'
 
 // Rollover-Assistent (F4 §2.5 KSK/CSK, §2.6 ZSK) – zustandslos: die Phase kommt aus status.rollover, Zeitstempel aus
-// status.key_history, Wartezeiten aus den geladenen Records. Plan WS-F4-B [D10]:
+// status.key_history, Wartezeiten aus den geladenen Records. Plan WS-F4-B/WS-F4-C [D10]:
 //  - jede Aktion mit Schluessel-Statusaenderung sendet bump_serial (Schalter, Standard an bei Master/Producer) und
 //    zeigt serial_bumped/notified; notify_error/serial_error blockieren nicht (gelber Hinweis);
 //  - vor dem DS-Tausch beim Registrar und vor dem Loeschen des alten Schluessels steht der Schritt "DNSKEY auf allen
-//    autoritativen NS pruefen" – bis WS-F4-C als Platzhalter "nicht geprueft" mit Pflicht-Checkbox.
+//    autoritativen NS pruefen" (GET …/dnskey-check): frei erst, wenn alle NS den neuen Schluessel liefern, sonst nur
+//    mit bestaetigtem "Trotzdem fortfahren"; ist die Pruefung nicht freigegeben (capabilities.dnskey_check), zeigt
+//    der Schritt "nicht geprueft" und verlangt die Checkbox;
+//  - DS-Schritte: Elternzonen-Pruefung (GET …/parent-ds) als Information, Pflicht-Checkboxen bleiben.
+// Fokus/ESC/Tab-Falle ueber lib/useDialogFocus (eigener Rahmen statt DnssecDialog).
 // Props: { server, zoneId, zoneName, status, records, loading, onClose, onChanged(details) -> Promise, onFinished(msg) }
+
+function RolloverDialogFrame({ title, onClose, busy, children }) {
+    const { t } = useTranslation()
+    const titleId = useId()
+    const dialogRef = useDialogFocus({ onClose, canClose: !busy })
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => { if (!busy) onClose?.() }}
+        >
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                tabIndex={-1}
+                className="glass-card p-5 sm:p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-start justify-between gap-3 mb-4">
+                    <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
+                        <RefreshCw className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
+                        <span className="min-w-0">{title}</span>
+                    </h2>
+                    <button
+                        type="button"
+                        onClick={() => { if (!busy) onClose?.() }}
+                        disabled={busy}
+                        className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
+                        aria-label={t('common.close')}
+                        title={t('common.close')}
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                {children}
+            </div>
+        </div>
+    )
+}
 
 function Stepper({ steps, current, t }) {
     return (
@@ -78,6 +125,8 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
     const [followUp, setFollowUp] = useState({ info: [], warnings: [] })
     const [finishedTag, setFinishedTag] = useState(null)
     const [checkState, setCheckState] = useState({ key: '', values: {} })
+    // Ergebnisse der DNSKEY-Pruefung je Schritt (dnskey/dnskeyDelete), nur gueltig fuer die aktuelle Phase
+    const [dnskeyState, setDnskeyState] = useState({ key: '', results: {}, errors: {}, busy: '' })
 
     const track = status?.rollover?.[kind] || null
     const phaseKey = `${kind}|${track?.phase}|${track?.old_key_id}|${track?.new_key_id}`
@@ -99,9 +148,16 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
     const bumpSerial = bumpSerialValue(status?.zone_kind, bump)
     const zoneFqdn = status?.zone || zoneId
     const steps = ROLLOVER_STEPS[kind]
-    const stepIndex = rolloverStepIndex(kind, track, checks)
+    const dnskeyCapability = !!status?.capabilities?.dnskey_check
+    const dnskeyCurrent = dnskeyState.key === phaseKey ? dnskeyState : { results: {}, errors: {}, busy: '' }
+    const outcomeFor = (name) => dnskeyCheckOutcome(dnskeyCurrent.results[name] || null, {
+        capability: dnskeyCapability, tag: newKey?.key_tag ?? null, requestError: dnskeyCurrent.errors[name] || '',
+    })
+    const outcomes = { dnskey: outcomeFor('dnskey'), dnskeyDelete: outcomeFor('dnskeyDelete') }
+    const effective = effectiveRolloverChecks(checks, outcomes)
+    const stepIndex = rolloverStepIndex(kind, track, effective)
     const locked = busy || loading
-    const allowed = rolloverActionAllowed(kind, track, checks) && !locked
+    const allowed = rolloverActionAllowed(kind, track, effective) && !locked
     const done = finishedTag !== null && track?.phase === 'idle'
 
     function close() {
@@ -177,17 +233,98 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
         )
     }
 
-    const dnskeyCheck = (name) => (
-        <Section title={t('dnssec.rolloverStepDnskeyCheck')} tone="warning">
-            <p className="text-xs text-warning flex items-start gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
-                {t('dnssec.dnskeyCheckPending', { tag: tag(newKey), zone: zoneFqdn })}
-            </p>
-            <Confirm checked={checks[name]} onChange={(v) => setCheck(name, v)} disabled={locked}>
-                {t('dnssec.dnskeyCheckConfirm')}
-            </Confirm>
-        </Section>
-    )
+    async function runDnskeyCheck(name) {
+        if (locked || dnskeyCurrent.busy) return
+        const key = phaseKey
+        const update = (fn) => setDnskeyState((prev) => fn(prev.key === key ? prev : { key, results: {}, errors: {}, busy: '' }))
+        update((prev) => ({ ...prev, busy: name, errors: { ...prev.errors, [name]: '' } }))
+        try {
+            const res = await api.getDnskeyCheck(server, zoneId, { keyTags: newKey?.key_tag != null ? [newKey.key_tag] : [] })
+            update((prev) => ({ ...prev, busy: '', results: { ...prev.results, [name]: res } }))
+        } catch (err) {
+            const message = t('dnssec.checkRequestFailed', { error: err.message || String(err) })
+            update((prev) => ({ ...prev, busy: '', errors: { ...prev.errors, [name]: message } }))
+        }
+    }
+
+    function confirmForce(name, value) {
+        if (value && !globalThis.window?.confirm(t('dnssec.dnskeyCheckForceConfirm', { tag: tag(newKey) }))) return
+        setCheck(`${name}Force`, value)
+    }
+
+    const dnskeyCheck = (name) => {
+        const outcome = outcomes[name]
+        const running = dnskeyCurrent.busy === name
+        if (outcome.state === 'disabled') {
+            return (
+                <Section title={t('dnssec.rolloverStepDnskeyCheck')} tone="warning">
+                    <p className="text-xs text-warning flex items-start gap-1.5 break-words">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                        <span className="min-w-0">{t('dnssec.dnskeyCheckDisabled', { tag: tag(newKey), zone: zoneFqdn })}</span>
+                    </p>
+                    <Confirm checked={checks[name]} onChange={(v) => setCheck(name, v)} disabled={locked}>
+                        {t('dnssec.dnskeyCheckConfirm')}
+                    </Confirm>
+                </Section>
+            )
+        }
+        const failed = outcome.state === 'failed' || outcome.state === 'error'
+        return (
+            <Section title={t('dnssec.rolloverStepDnskeyCheck')} tone={outcome.state === 'ok' ? 'neutral' : 'warning'}>
+                <p className="text-xs text-text-secondary">{t('dnssec.dnskeyCheckIntro', { tag: tag(newKey) })}</p>
+                <div>
+                    <button
+                        type="button"
+                        onClick={() => runDnskeyCheck(name)}
+                        disabled={locked || running}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-text-primary hover:bg-bg-hover disabled:opacity-50"
+                    >
+                        {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <Search className="w-3.5 h-3.5" aria-hidden="true" />}
+                        {outcome.state === 'unchecked' ? t('dnssec.dnskeyCheckButton') : t('dnssec.checkAgain')}
+                    </button>
+                </div>
+                <div role="status" className="space-y-1">
+                    {outcome.state === 'ok' && (
+                        <p className="text-xs text-success flex items-start gap-1.5">
+                            <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                            {t('dnssec.dnskeyCheckAllOk', { tag: tag(newKey) })}
+                        </p>
+                    )}
+                    {outcome.state === 'failed' && (
+                        <p className="text-xs text-warning flex items-start gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                            {outcome.rows.length ? t('dnssec.dnskeyCheckFailed') : t('dnssec.dnskeyCheckNone')}
+                        </p>
+                    )}
+                    {outcome.state === 'error' && (
+                        <p className="text-xs text-danger flex items-start gap-1.5" role="alert">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                            {outcome.error}
+                        </p>
+                    )}
+                    {outcome.rows.length > 0 && (
+                        <ul className="text-xs font-mono space-y-0.5 break-words">
+                            {outcome.rows.map((r) => (
+                                <li key={r.ns} className={r.ok ? 'text-text-secondary' : 'text-warning'}>
+                                    {r.ok && t('dnssec.dnskeyCheckNsOk', { ns: r.ns, tags: r.serves.join(', ') || '—' })}
+                                    {!r.ok && r.error && !r.serves.length && t('dnssec.dnskeyCheckNsError', { ns: r.ns, error: r.error })}
+                                    {!r.ok && (!r.error || r.serves.length > 0) && t('dnssec.dnskeyCheckNsMissing', {
+                                        ns: r.ns, tag: r.missing.join(', ') || tag(newKey), tags: r.serves.join(', ') || '—',
+                                    })}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {outcome.truncated && <p className="text-xs text-warning">{t('dnssec.dnskeyCheckTruncated')}</p>}
+                </div>
+                {failed && (
+                    <Confirm checked={checks[`${name}Force`]} onChange={(v) => confirmForce(name, v)} disabled={locked}>
+                        <span className="text-warning">{t('dnssec.dnskeyCheckForce')}</span>
+                    </Confirm>
+                )}
+            </Section>
+        )
+    }
 
     const primaryButton = (label, onClick, enabled, danger = false) => (
         <button
@@ -255,7 +392,9 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
                     <Section title={t('dnssec.rolloverStepDsAdd')}>
                         <p className="text-xs text-text-secondary">{t('dnssec.rolloverDsAddBody', { tag: tag(newKey), oldTag: tag(oldKey) })}</p>
                         <p className="text-xs text-text-muted">{t('dnssec.rolloverWaitDs')}</p>
-                        <p className="text-xs text-text-muted break-words">{t('dnssec.parentDsManual', { zone: zoneFqdn })}</p>
+                        <DnssecParentDsCheck server={server} zoneId={zoneId} zone={zoneFqdn} mode="add"
+                            capability={!!status?.capabilities?.parent_ds_check} keyId={newKey?.id ?? null}
+                            tag={newKey?.key_tag ?? null} disabled={locked} />
                         <Confirm checked={checks.ds} onChange={(v) => setCheck('ds', v)} disabled={locked}>
                             {t('dnssec.rolloverConfirmDsAdded')}
                         </Confirm>
@@ -291,7 +430,9 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
                 {kind === 'sep' && (
                     <Section title={t('dnssec.rolloverStepDsRemove')}>
                         <p className="text-xs text-text-secondary">{t('dnssec.rolloverDsRemoveBody', { oldTag: tag(oldKey) })}</p>
-                        <p className="text-xs text-text-muted break-words">{t('dnssec.parentDsManual', { zone: zoneFqdn })}</p>
+                        <DnssecParentDsCheck server={server} zoneId={zoneId} zone={zoneFqdn} mode="remove"
+                            capability={!!status?.capabilities?.parent_ds_check} keyId={oldKey?.id ?? null}
+                            tag={oldKey?.key_tag ?? null} disabled={locked} />
                         <Confirm checked={checks.dsRemoved} onChange={(v) => setCheck('dsRemoved', v)} disabled={locked}>
                             {t('dnssec.rolloverConfirmDsRemoved')}
                         </Confirm>
@@ -305,7 +446,7 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
 
     const showStepper = !kinds.manual && !done && stepIndex >= 0
     return (
-        <DnssecDialog title={t('dnssec.rolloverTitle', { zone: zoneName })} icon={RefreshCw} onClose={close} busy={busy} wide>
+        <RolloverDialogFrame title={t('dnssec.rolloverTitle', { zone: zoneName })} onClose={close} busy={busy}>
             <ModalErrorBanner message={modalError} onClose={() => setModalError('')} />
             <p className="text-sm text-text-secondary mb-3">{t('dnssec.rolloverIntro')}</p>
 
@@ -353,6 +494,6 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
                     {t('common.close')}
                 </button>
             </div>
-        </DnssecDialog>
+        </RolloverDialogFrame>
     )
 }

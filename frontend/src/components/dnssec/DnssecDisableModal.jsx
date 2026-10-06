@@ -1,17 +1,68 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, ShieldOff } from 'lucide-react'
+import { Loader2, ShieldOff, X } from 'lucide-react'
 import api from '../../api'
+import { useDialogFocus } from '../../lib/useDialogFocus.js'
 import ModalErrorBanner from '../ModalErrorBanner'
-import DnssecDialog, { DnssecDialogFooter, SerialBumpOption } from './DnssecDialog'
+import { DnssecDialogFooter, SerialBumpOption } from './DnssecDialog'
+import DnssecParentDsCheck from './DnssecParentDsCheck'
 import {
     bumpSerialValue, currentSepTags, isPrimaryKind, visiblePeers, withForce,
 } from '../../zoneDetail/dnssecModel.js'
 
 // "DNSSEC deaktivieren" (F4 §2.9): Reihenfolge (erst DS beim Registrar entfernen, TTL abwarten), Pflicht-Checkbox.
-// Die Pruefung der Elternzone (Teil B) liefert WS-F4-C; bis dahin steht hier der manuelle Weg (dig).
-// 409 parent_ds_present (ab F4-C) laeuft ueber withForce. Teilfehler -> Fehler im Dialog + Status neu laden.
+// Teil B (WS-F4-C): Knopf "Elternzone pruefen" (GET …/parent-ds); ohne Freigabe der DNS-Pruefungen nur der manuelle
+// Weg (dig). Das Backend sperrt mit 409 parent_ds_present, solange ein Resolver noch einen DS der Zone liefert –
+// die Rueckfrage (force) laeuft ueber withForce. Teilfehler -> Fehler im Dialog + Status neu laden.
+// Fokus/ESC/Tab-Falle ueber lib/useDialogFocus (eigener Rahmen statt DnssecDialog); Strg/Cmd+Enter sendet ab.
 // Props: { server, zoneId, zoneName, status, onClose, onDone(res), onReload() }
+
+function DisableDialogFrame({ title, onClose, onSubmit, busy, children }) {
+    const { t } = useTranslation()
+    const titleId = useId()
+    const dialogRef = useDialogFocus({ onClose, canClose: !busy })
+    function onKeyDown(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && onSubmit && !busy) {
+            e.preventDefault()
+            onSubmit()
+        }
+    }
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => { if (!busy) onClose?.() }}
+        >
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                tabIndex={-1}
+                className="glass-card p-5 sm:p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl outline-none"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={onKeyDown}
+            >
+                <div className="flex items-start justify-between gap-3 mb-4">
+                    <h2 id={titleId} className="text-lg font-bold text-text-primary flex items-center gap-2 leading-snug break-words min-w-0">
+                        <ShieldOff className="w-5 h-5 text-accent-light shrink-0" aria-hidden="true" />
+                        <span className="min-w-0">{title}</span>
+                    </h2>
+                    <button
+                        type="button"
+                        onClick={() => { if (!busy) onClose?.() }}
+                        disabled={busy}
+                        className="p-1.5 rounded-lg hover:bg-bg-hover text-text-muted hover:text-text-primary shrink-0 disabled:opacity-50"
+                        aria-label={t('common.close')}
+                        title={t('common.close')}
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                {children}
+            </div>
+        </div>
+    )
+}
 export default function DnssecDisableModal({ server, zoneId, zoneName, status, onClose, onDone, onReload }) {
     const { t } = useTranslation()
     const [confirmed, setConfirmed] = useState(false)
@@ -46,7 +97,7 @@ export default function DnssecDisableModal({ server, zoneId, zoneName, status, o
     }
 
     return (
-        <DnssecDialog title={t('dnssec.disableTitle', { zone: zoneName })} icon={ShieldOff} onClose={onClose}
+        <DisableDialogFrame title={t('dnssec.disableTitle', { zone: zoneName })} onClose={onClose}
             onSubmit={confirmed ? submit : undefined} busy={busy}>
             <ModalErrorBanner message={modalError} onClose={() => setModalError('')} />
             <ol className="list-decimal pl-5 space-y-2 text-sm text-text-secondary leading-relaxed">
@@ -58,9 +109,10 @@ export default function DnssecDisableModal({ server, zoneId, zoneName, status, o
             {divergent.length > 0 && (
                 <p className="mt-2 text-sm text-warning">{t('dnssec.disablePeersNote', { servers: divergent.join(', ') })}</p>
             )}
-            <div className="mt-4 p-3 rounded-lg border border-border bg-bg-secondary/40 text-xs text-text-muted">
-                <p className="font-medium text-text-secondary mb-1">{t('dnssec.parentDsTitle')}</p>
-                <p className="break-words">{t('dnssec.parentDsManual', { zone })}</p>
+            <div className="mt-4 p-3 rounded-lg border border-border bg-bg-secondary/40 space-y-2">
+                <p className="text-xs font-medium text-text-secondary">{t('dnssec.parentDsTitle')}</p>
+                <DnssecParentDsCheck server={server} zoneId={zoneId} zone={zone} mode="disable"
+                    capability={!!status?.capabilities?.parent_ds_check} disabled={busy} />
             </div>
             {primary && (
                 <div className="mt-4">
@@ -83,6 +135,6 @@ export default function DnssecDisableModal({ server, zoneId, zoneName, status, o
                     {t('dnssec.disableSubmit')}
                 </button>
             </DnssecDialogFooter>
-        </DnssecDialog>
+        </DisableDialogFrame>
     )
 }

@@ -473,6 +473,7 @@ export const ROLLOVER_STEP_KEYS = Object.freeze({
 /**
  * Aktueller Schritt (Index in ROLLOVER_STEPS[kind]) aus Phase und den Haken des Nutzers.
  * checks = { dnskey, ds, waited, dnskeyDelete, dsRemoved }. -1 = kein Assistentenschritt (no_active/complex/kein Track).
+ * `dnskey`/`dnskeyDelete` kommen bei WS-F4-C aus effectiveRolloverChecks (Pruefergebnis statt Checkbox).
  */
 export function rolloverStepIndex(kind, track, checks = {}) {
     const steps = ROLLOVER_STEPS[kind] || ROLLOVER_STEPS.sep
@@ -521,6 +522,103 @@ export function rolloverActionAllowed(kind, track, checks = {}) {
         return kind === 'zsk' ? !!(checks.waited && checks.dnskeyDelete) : !!(checks.dsRemoved && checks.dnskeyDelete)
     default:
         return false
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Teil B (WS-F4-C): DNSKEY-Pruefung auf den autoritativen NS und DS in der Elternzone
+//
+// Freigabe der Rollover-Schritte "DS tauschen"/"Umschalten" und "alten Schluessel loeschen" [D10]:
+//  - Pruefung eingeschaltet (status.capabilities.dnskey_check): frei erst, wenn ALLE Nameserver den neuen Schluessel
+//    liefern (Ergebnis von GET …/dnskey-check); sonst nur mit bestaetigtem "Trotzdem fortfahren" (force).
+//  - Pruefung ausgeschaltet: Schritt zeigt "nicht geprueft" und verlangt die Checkbox "Ich habe geprueft".
+// Haken je Pruefschritt: checks[name] = manuelle Bestaetigung (nur bei ausgeschalteter Pruefung),
+// checks[`${name}Force`] = bestaetigtes Fortfahren trotz Fehlschlag.
+
+export const DNSKEY_CHECK_STEPS = Object.freeze(['dnskey', 'dnskeyDelete'])
+
+/**
+ * Zustand einer DNSKEY-Pruefung fuer den Schluessel `tag`.
+ * result = Antwort von getDnskeyCheck oder null; requestError = Fehlertext der letzten Anfrage.
+ * -> { state: 'disabled'|'unchecked'|'ok'|'failed'|'error', rows: [{ ns, ok, missing, serves, error }], truncated }
+ */
+export function dnskeyCheckOutcome(result, { capability = false, tag = null, requestError = '' } = {}) {
+    if (!capability || result?.enabled === false) return { state: 'disabled', rows: [], truncated: false }
+    if (requestError) return { state: 'error', rows: [], truncated: false, error: requestError }
+    if (!result) return { state: 'unchecked', rows: [], truncated: false }
+    const want = tag === null || tag === undefined || tag === '' ? null : Number(tag)
+    const rows = Object.entries(result.nameservers || {}).map(([ns, r]) => {
+        const serves = Array.isArray(r?.serves_key_tags) ? r.serves_key_tags : []
+        const ok = !!r?.ok && (want === null || serves.includes(want))
+        const missing = want === null ? (r?.missing_tags || []) : (serves.includes(want) ? [] : [want])
+        return { ns, ok, missing, serves, error: r?.error || null }
+    })
+    const allOk = rows.length > 0 && rows.every((r) => r.ok) && !result.truncated
+    return { state: allOk ? 'ok' : 'failed', rows, truncated: !!result.truncated }
+}
+
+/** Ist der DNSKEY-Schritt erfuellt? disabled -> manuelle Checkbox; ok -> automatisch; failed/error -> nur force. */
+export function dnskeyStepPassed(outcome, { confirmed = false, forced = false } = {}) {
+    switch (outcome?.state) {
+    case 'disabled':
+        return !!confirmed
+    case 'ok':
+        return true
+    case 'failed':
+    case 'error':
+        return !!forced
+    default:
+        return false
+    }
+}
+
+/**
+ * Haken fuer rolloverStepIndex/rolloverActionAllowed: `dnskey`/`dnskeyDelete` ergeben sich aus dem Pruefergebnis
+ * (outcomes[name]); ohne Ergebnis (Altaufrufer) gilt die manuelle Checkbox wie bei ausgeschalteter Pruefung.
+ */
+export function effectiveRolloverChecks(checks = {}, outcomes = {}) {
+    const out = { ...checks }
+    for (const name of DNSKEY_CHECK_STEPS) {
+        out[name] = dnskeyStepPassed(outcomes[name] || { state: 'disabled' }, {
+            confirmed: checks[name], forced: checks[`${name}Force`],
+        })
+    }
+    return out
+}
+
+/** Anzeigename eines Resolvers: "Cloudflare (1.1.1.1)" bzw. die IP. */
+export function resolverDisplay(row) {
+    const ip = String(row?.resolver ?? row ?? '')
+    return row?.label ? `${row.label} (${ip})` : ip
+}
+
+/** Resolver-Zeilen der Elternzonen-Pruefung -> [{ resolver, kind: 'ds'|'none'|'error', tags, error }]. */
+export function parentDsRows(result) {
+    return (result?.resolvers || []).map((r) => {
+        const resolver = resolverDisplay(r)
+        if (r.status === 'ok') return { resolver, kind: 'ds', tags: (r.key_tags || []).join(', ') || '?', error: null }
+        if (r.status === 'nodata' || r.status === 'nxdomain') return { resolver, kind: 'none', tags: '', error: null }
+        return { resolver, kind: 'error', tags: '', error: r.error || r.status }
+    })
+}
+
+/**
+ * Sichtbarkeit des DS eines eigenen Schluessels bei den Resolvern.
+ * -> { tag, visibleOn: [Anzeige], missingOn: [Anzeige], visibleAll: bool, answered: bool } oder null.
+ */
+export function parentDsKeySummary(result, keyId) {
+    if (!result?.enabled || keyId === null || keyId === undefined) return null
+    const entry = result.keys?.[String(keyId)]
+    const byIp = Object.fromEntries((result.resolvers || []).map((r) => [r.resolver, resolverDisplay(r)]))
+    const show = (ips) => (ips || []).map((ip) => byIp[ip] || ip)
+    const visibleOn = show(entry?.visible_on)
+    const missingOn = show(entry?.missing_on)
+    return {
+        tag: entry?.key_tag ?? null,
+        visibleOn,
+        missingOn,
+        visibleAll: visibleOn.length > 0 && missingOn.length === 0,
+        answered: visibleOn.length + missingOn.length > 0,
     }
 }
 
