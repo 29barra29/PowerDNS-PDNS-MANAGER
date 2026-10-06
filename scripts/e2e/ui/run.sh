@@ -108,8 +108,12 @@ export E2E_UI_OUT E2E_UI_NPM_CACHE E2E_UID E2E_GID E2E_UI_PENDING
 e2e_verify_config
 
 cleanup_ui() {
+  local c
   e2e_compose rm -sf setup-backend >/dev/null 2>&1 || true
-  docker rm -f pdnsmgr-e2e-ui >/dev/null 2>&1 || true
+  # "compose run" benennt den Playwright-Container pdnsmgr-e2e-ui-run-<id>; nach einem Abbruch (Strg+C) wegraeumen
+  for c in $(docker ps -aq --filter "name=^pdnsmgr-e2e-ui" 2>/dev/null); do
+    docker rm -f "$c" >/dev/null 2>&1 || true
+  done
 }
 trap cleanup_ui EXIT
 trap 'exit 130' INT TERM
