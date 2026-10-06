@@ -61,7 +61,7 @@ def test_every_router_module_has_router_and_exactly_one_order():
 def test_app_includes_routers_in_order():
     names = [m.__name__.rsplit(".", 1)[-1] for m in main.ROUTER_MODULES]
     assert names == sorted(names, key=lambda n: main._router_order(main.ROUTER_MODULES[names.index(n)]))
-    assert names[:5] == ["setup", "auth", "panel_tokens", "webhooks", "servers"]
+    assert names[:6] == ["setup", "auth", "sso", "panel_tokens", "webhooks", "servers"]
     assert set(names) == set(_module_names())
     # Reihenfolge in app.routes entspricht der Discovery (ein _IncludedRouter je Modul, dann Root-Routen)
     included = [getattr(r, "original_router", None) for r in main.app.routes]

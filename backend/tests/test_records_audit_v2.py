@@ -11,11 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from fakes.pdns import FakeDB, FakeResult, fake_db, fake_pdns, make_zone, rr  # noqa: F401 - Fixtures
 from app.models.models import User, Webhook
 from app.routers import records
 from app.schemas.dns import BulkRecordUpdate, RecordCreate, RecordDelete, RecordUpdate
+from app.services import bulk as bulk_service
 from app.services import fanout, webhook_outbox
 from app.services.pdns_client import PowerDNSAPIError
 
@@ -57,6 +59,7 @@ class EventRecorder:
 def audit(monkeypatch):
     rec = AuditRecorder()
     monkeypatch.setattr(records, "write_audit", rec)
+    monkeypatch.setattr(bulk_service, "write_audit", rec)  # Bulk schreibt seit F1 in services/bulk.py
     return rec
 
 
@@ -211,7 +214,7 @@ async def test_primary_without_zone_is_404(fake_pdns, fake_db, admin, audit, eve
     assert fake_pdns.ns2.patches == []
 
 
-# --- Nr. 18: Bulk (bestehender Endpoint) -----------------------------------------------------------------------
+# --- Nr. 18: Bulk (seit F1 services/bulk.py; ausfuehrlich in test_bulk_endpoint.py) ------------------------------
 async def test_bulk_single_audit_with_all_changes(two, fake_db, admin, audit, events):
     two.ns1.add_zone(make_zone(Z, [rr(WWW, "A", "192.0.2.1", "192.0.2.2"), rr("old.example.com.", "TXT", '"x"'),
                                    rr("mail.example.com.", "MX", "10 mx1.example.com.", "20 mx2.example.com.")]))
@@ -234,19 +237,29 @@ async def test_bulk_single_audit_with_all_changes(two, fake_db, admin, audit, ev
     assert [r["content"] for r in by_key[("mail.example.com.", "MX")]["after"]["records"]] == ["10 mx1.example.com."]
     assert len(two.ns1.patches) == 1  # ein atomarer PATCH je Server
     assert events.calls[0]["event"] == "record.bulk"
-    assert events.calls[0]["data"] == {"server": "ns1", "zone": Z, "created": 1, "deleted": 2}
+    data = events.calls[0]["data"]
+    assert {k: data[k] for k in ("server", "zone", "created", "deleted")} == {"server": "ns1", "zone": Z,
+                                                                              "created": 1, "deleted": 2}
+    assert data["changes_total"] == 3 and data["source"] == "api" and data["fanout"] == res.details["fanout"]
 
 
 async def test_bulk_missing_value_on_primary_is_404(two, fake_db, admin, audit, events):
     bulk = BulkRecordUpdate(delete=[{"name": WWW, "type": "A", "content": "192.0.2.42"}])
     with pytest.raises(HTTPException) as ei:
         await records.bulk_update_records("ns1", Z, bulk, fake_db, admin)
-    assert ei.value.status_code == 404 and "192.0.2.42" in ei.value.detail
+    assert ei.value.status_code == 404
+    assert ei.value.detail["issues"][0]["code"] == "value_missing"
+    assert ei.value.detail["issues"][0]["params"]["content"] == "192.0.2.42"
     assert two.ns1.patches == [] and two.ns2.patches == []
 
 
 async def test_bulk_value_delete_and_replace_same_rrset_single_entry(two, fake_db, admin, audit, events):
-    bulk = BulkRecordUpdate(create=[{"name": WWW, "type": "A", "ttl": 60, "records": [{"content": "192.0.2.8"}]}],
+    # REPLACE und Wert-Loeschung desselben RRsets sind seit F1 widerspruechlich (Schema, F1 3.1 Regel 4) ...
+    with pytest.raises(ValidationError, match="widersprüchliche Operationen"):
+        BulkRecordUpdate(create=[{"name": WWW, "type": "A", "ttl": 60, "records": [{"content": "192.0.2.8"}]}],
+                         delete=[{"name": WWW, "type": "A", "content": "192.0.2.1"}])
+    # ... relative Ops auf demselben RRset ergeben weiterhin genau einen PATCH-Eintrag
+    bulk = BulkRecordUpdate(merge=[{"name": WWW, "type": "A", "ttl": 60, "records": [{"content": "192.0.2.8"}]}],
                             delete=[{"name": WWW, "type": "A", "content": "192.0.2.1"}])
     await records.bulk_update_records("ns1", Z, bulk, fake_db, admin)
     (patch,) = two.ns1.patches

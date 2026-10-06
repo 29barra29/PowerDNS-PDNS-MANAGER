@@ -63,7 +63,7 @@ class _SoaClient:
     async def add_record(self, **kw):
         self.writes.append(kw)
 
-    async def enable_dnssec(self, zone_id):
+    async def enable_dnssec(self, zone_id):  # 2.4.1-Weg; darf nicht mehr aufgerufen werden
         self.dnssec.append(zone_id)
 
 
@@ -71,17 +71,18 @@ async def test_update_zone_soa_writes_only_mname_rname():
     client = _SoaClient("a.misconfigured.dns.server.invalid. hostmaster.example.com. 2026100503 10800 3600 604800 3600",
                         ttl=1800)
     data = ZoneCreate(name="example.com", nameservers=["ns1.example.com.", "ns2.example.com."], enable_dnssec=True)
-    await zones._update_zone_soa_and_dnssec(client, "srv1", "example.com.", data)
+    await zones._update_zone_soa(client, "srv1", "example.com.", data)
     (w,) = client.writes
     assert w["record_type"] == "SOA" and w["ttl"] == 1800 and w["name"] == "example.com."
     assert w["content"] == ["ns1.example.com. hostmaster.example.com. 2026100503 10800 3600 604800 3600"]
-    assert client.dnssec == ["example.com."]  # zones.py:139 bleibt client.enable_dnssec (Plan [F7])
+    # DNSSEC richtet create_zone seit F4-B ueber dnssec_service.enable_dnssec_on_new_zone ein (Plan [F7])
+    assert client.dnssec == []
 
 
 async def test_update_zone_soa_skips_write_when_unchanged():
     client = _SoaClient("ns1.example.com. hostmaster.example.com. 2026100503 10800 3600 604800 3600")
     data = ZoneCreate(name="example.com", nameservers=["ns1.example.com."])
-    await zones._update_zone_soa_and_dnssec(client, "srv1", "example.com.", data)
+    await zones._update_zone_soa(client, "srv1", "example.com.", data)
     assert client.writes == [] and client.dnssec == []
 
 
