@@ -117,18 +117,20 @@ def test_schema_statement_order_matches_plan():
         pos("ADD COLUMN IF NOT EXISTS webauthn_user_handle"),          # (1) Ende
         pos("ADD COLUMN IF NOT EXISTS must_change_password"), pos("ADD COLUMN IF NOT EXISTS auth_source"),
         pos("ADD COLUMN IF NOT EXISTS external_issuer"), pos("ADD COLUMN IF NOT EXISTS external_id"),  # (2)
+        pos("users ADD COLUMN IF NOT EXISTS sessions_revoked_at"),                                      # (2b) L3
         pos("MODIFY COLUMN totp_secret"), pos("MODIFY COLUMN totp_pending_secret"),                       # (3)
         pos("MODIFY COLUMN api_key"),                                                                    # (4)
         pos("MODIFY COLUMN secret"), pos("MODIFY COLUMN url"),                                           # (5/5b)
         pos("webhooks ADD COLUMN IF NOT EXISTS scope"), pos("consecutive_failures"),                     # (6)
         pos("audit_logs ADD COLUMN IF NOT EXISTS zone_name"), pos("client_ip"),                          # (7)
-        pos("scope_zones"), pos("revoked_at"),                                                           # (8)
+        pos("scope_zones"), pos("panel_tokens ADD COLUMN IF NOT EXISTS revoked_at"),                     # (8)
         pos("ix_audit_logs_timestamp"), pos("ix_audit_logs_revert_of_id"),                               # (9)
         pos("uq_users_external"),                                                                        # (10)
     ]
     assert order == sorted(order)
     assert order[-1] == len(stmts) - 1
     assert "TEXT NOT NULL" in stmts[pos("MODIFY COLUMN secret")]   # TEXT, nicht VARCHAR(512) (A.3)
+    assert stmts[pos("sessions_revoked_at")] == "ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_revoked_at DATETIME NULL"
     assert [n for n, _ in DATA_MIGRATIONS] == ["f14_panel_token_scope_v1"]
 
 
@@ -486,6 +488,7 @@ def _assert_schema_30(types, indexes):
         assert ("panel_tokens", col) in types
     for col in ("must_change_password", "auth_source", "external_issuer", "external_id"):
         assert ("users", col) in types
+    assert types[("users", "sessions_revoked_at")] == "datetime"   # L3 (WS-W2-NACHARBEIT)
     for col in ("scope", "updated_at", "last_success_at", "last_failure_at", "consecutive_failures"):
         assert ("webhooks", col) in types
     assert types[("webhook_deliveries", "body")] == "mediumtext"
@@ -584,6 +587,7 @@ def test_upgrade_from_241_twice_then_secrets(tmp_path, monkeypatch):
     # Defaults neuer Spalten fuer Bestandszeilen
     assert [tuple(r) for r in asyncio.run(_q("SELECT must_change_password, auth_source, external_id FROM users ORDER BY id"))] == [
         (0, "local", None), (0, "local", None)]
+    assert [r[0] for r in asyncio.run(_q("SELECT sessions_revoked_at FROM users ORDER BY id"))] == [None, None]
     assert tuple(asyncio.run(_q("SELECT scope, consecutive_failures FROM webhooks"))[0]) == ("own", 0)
     # F14-Datenmigration
     tokens = {r[0]: tuple(r[1:]) for r in asyncio.run(_q(

@@ -2,7 +2,8 @@
 
 ``UserDB`` ist eine kleine In-Memory-``AsyncSession`` fuer die Handler aus ``routers/auth.py``: Sie beantwortet die
 dort benutzten SELECTs anhand der gebundenen Parameter (``User`` per id/username/email, ``User.id`` fuer die
-E-Mail-Pruefung, Admin-Zaehlung, Passkeys, Panel-Tokens, Zaehlungen fuer ``access_summary``) und liefert fuer
+E-Mail-Pruefung, Admin-Zaehlung, Passkeys, Panel-Tokens, DynDNS-Tokens je Benutzer, Zaehlungen fuer
+``access_summary``) und liefert fuer
 UPDATE/DELETE konfigurierbare ``rowcount``-Werte je Tabelle. Alle Statements landen in ``executed``.
 """
 from __future__ import annotations
@@ -92,6 +93,7 @@ class UserDB:
         users: list[User] = (),
         *,
         tokens: list[PanelToken] = (),
+        dyndns: list[DynDnsToken] = (),
         creds: list[WebAuthnCredential] = (),
         settings: Optional[dict[str, str]] = None,
         rowcounts: Optional[dict[str, int]] = None,
@@ -100,6 +102,7 @@ class UserDB:
     ):
         self.users = list(users)
         self.tokens = list(tokens)
+        self.dyndns = list(dyndns)
         self.creds = list(creds)
         self.settings = dict(settings or {})
         self.rowcounts = dict(rowcounts or {})
@@ -152,6 +155,9 @@ class UserDB:
             return Result([(u.id,) for u in self.users if u.email and u.email in strs and u.id not in exclude])
         if entity is UserZoneAccess:
             return Result([])
+        if entity is DynDnsToken and names == ["DynDnsToken"]:  # dyndns.revoke_tokens_of_user (WS-W2-NACHARBEIT)
+            ints = {v for v in params.values() if isinstance(v, int) and not isinstance(v, bool)}
+            return Result([t for t in self.dyndns if t.user_id in ints])
         if entity is WebAuthnCredential:
             if names == ["WebAuthnCredential"]:
                 return Result(list(self.creds))

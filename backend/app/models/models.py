@@ -71,6 +71,9 @@ class User(Base):
     # Externe Identitaet: OIDC (iss, sub) bzw. LDAP ("ldap", objectGUID/entryUUID/DN). Binaere Kollation.
     external_issuer = Column(_BIN255, nullable=True)
     external_id = Column(_BIN255, nullable=True)
+    # Sitzungs-Widerruf (naive UTC, volle Sekunden): Browser-Sitzungen (JWT) mit iat davor sind ungueltig.
+    # Gesetzt von access_revocation.revoke_all und beim Admin-Passwort-Reset (L3, WS-W2-NACHARBEIT).
+    sessions_revoked_at = Column(DateTime, nullable=True)
 
 
 class UserZoneAccess(Base):

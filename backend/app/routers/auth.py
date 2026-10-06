@@ -1137,7 +1137,8 @@ async def reset_user_password(
     """Setzt ein neues Zufallspasswort (16 Zeichen) und gibt es genau einmal zurueck. Admin only.
 
     Ohne Body wird der Passwortwechsel beim naechsten Login erzwungen (F3 E6); ``revoke_all_access`` widerruft
-    zusaetzlich alle Zugaenge ([S9]). Bestehende Sitzungen des Nutzers enden ueber die pwv-Bindung.
+    zusaetzlich alle Zugaenge ([S9]). Bestehende Sitzungen des Nutzers enden ueber die pwv-Bindung und zusaetzlich
+    ueber ``users.sessions_revoked_at`` (L3).
     """
     opts = data or AdminPasswordResetBody()
     user = await _get_user_or_404(db, user_id)
@@ -1149,6 +1150,7 @@ async def reset_user_password(
     user.hashed_password = hash_password(new_password)
     user.must_change_password = bool(opts.must_change_password)
     await db.flush()
+    await access_revocation.revoke_sessions(db, user.id)
     revoked = None
     if opts.revoke_all_access:
         revoked = await access_revocation.revoke_all(db, user.id, reason="admin_password_reset")
