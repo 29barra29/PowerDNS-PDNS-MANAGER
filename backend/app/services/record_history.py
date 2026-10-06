@@ -79,6 +79,8 @@ BLOCK_MESSAGES = {
                               "nicht zurückgesetzt."),
     "zone_recreated": ("Die Zone wurde nach dieser Änderung endgültig gelöscht und neu angelegt – Zurücksetzen "
                        "ist nicht möglich."),
+    "dyndns_repair": ("Dieser Eintrag ist eine DynDNS-Reparatur: ein veralteter Server wurde auf den Stand der "
+                      "anderen gebracht. Zurücksetzen würde den Server wieder abweichen lassen und ist nicht möglich."),
     "no_write_permission": "Nur Lese-Zugriff auf diese Zone",
     "server_read_only": "Der Server ist auf 'Speichern: Nein' gesetzt",
 }
@@ -257,7 +259,9 @@ def rollback_block_reason(log: Any, *, recreated_cutoff: Optional[int] = None) -
     """Eintragsbezogener Sperrgrund (Codes in ``BLOCK_MESSAGES``) oder ``None``.
 
     Reihenfolge: failed_action, not_record_change, zone_recreated (Eintrag liegt vor der letzten endgueltigen
-    Zonenloeschung, [D12]), legacy_format, incomplete, no_changes, only_excluded_records.
+    Zonenloeschung, [D12]), dyndns_repair (``DYNDNS_UPDATE`` mit ``details.repair``: Angleichen eines veralteten
+    Servers; ein Rollback wuerde ihn wieder abweichen lassen), legacy_format, incomplete, no_changes,
+    only_excluded_records.
     """
     details = _details_of(log)
     if getattr(log, "status", None) != "success":
@@ -266,6 +270,8 @@ def rollback_block_reason(log: Any, *, recreated_cutoff: Optional[int] = None) -
         return "not_record_change"
     if recreated_cutoff is not None and (getattr(log, "id", None) or 0) <= recreated_cutoff:
         return "zone_recreated"
+    if getattr(log, "action", None) == "DYNDNS_UPDATE" and details.get("repair") is True:
+        return "dyndns_repair"
     if details.get("version") != HISTORY_VERSION:
         return "legacy_format"
     if details.get("history_incomplete") or details.get("history_truncated"):

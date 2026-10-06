@@ -1,0 +1,8 @@
+{
+  "set": {
+    "history.blocked.dyndns_repair": "DynDNS popravak zastarjelog poslužitelja – poništavanje nije moguće",
+    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS token stvoren",
+    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS token izbrisan"
+  },
+  "remove": []
+}

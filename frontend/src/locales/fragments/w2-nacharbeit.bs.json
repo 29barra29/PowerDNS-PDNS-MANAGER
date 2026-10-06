@@ -1,0 +1,6 @@
+{
+  "set": {
+    "history.blocked.dyndns_repair": "DynDNS popravka zastarjelog servera – poništavanje nije moguće"
+  },
+  "remove": []
+}
