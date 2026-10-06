@@ -509,9 +509,24 @@ def prune_unchanged(ops: BulkRecordUpdate, plan: BulkPlan) -> BulkRecordUpdate:
     })
 
 
-def expectations(plan: BulkPlan, zone_norm: str) -> list[BulkExpectation]:
-    return [BulkExpectation(name=c.name, type=c.type, fingerprint=snapshot_fingerprint(c.before, c.type, zone_norm))
-            for c in plan.changes]
+def touched_keys(ops: BulkRecordUpdate) -> list[RRKey]:
+    """Alle (Name, Typ), die irgendeine Op der Anfrage beruehrt (auch solche, die unveraendert bleiben)."""
+    keys: set[RRKey] = set()
+    for lst in (ops.create, ops.delete, ops.merge, ops.set_ttl, ops.set_disabled):
+        keys.update(_key(i.name, i.type) for i in lst)
+    return sorted(keys)
+
+
+def expectations(ops: BulkRecordUpdate, zone_json: Optional[dict], zone_norm: str) -> list[BulkExpectation]:
+    """Fingerprints des Primary-Stands fuer **jedes** von den Ops beruehrte RRset (fehlend -> ``absent``).
+
+    Auch RRsets, die die Vorschau als unveraendert zeigt, bekommen einen Fingerprint: Aendert jemand ein solches
+    RRset zwischen Vorschau und Anwenden, wuerde z. B. ein ``create`` (REPLACE) den neuen Wert sonst ohne 409
+    entfernen (Vorschau == Anwendung).
+    """
+    cur = index_rrsets(zone_json)
+    return [BulkExpectation(name=k[0], type=k[1], fingerprint=snapshot_fingerprint(cur.get(k), k[1], zone_norm))
+            for k in touched_keys(ops)]
 
 
 # =============================================================================
@@ -618,7 +633,7 @@ async def preview_bulk(db, user, server_name: str, zone_id: str, req: BulkPrevie
     if req.text is not None:
         ops = prune_unchanged(ops, plan)
     issues += _lua_static_issues(ops, lua, issues)
-    ops = ops.model_copy(update={"expected": expectations(plan, zone_norm)})
+    ops = ops.model_copy(update={"expected": expectations(ops, zone_json, zone_norm)})
     blocking = has_errors(issues)
     return {
         "zone": zone_norm, "server": server_name, "source": ops.source, "mode": ops.mode, "blocking": blocking,
@@ -724,6 +739,17 @@ class _ApplyState:
             fp = snapshot_fingerprint(rrset_snapshot(zone_json, x.name, x.type), x.type, self.zone_norm)
             if fp != x.fingerprint:
                 conflicts.append({"name": norm_name(x.name), "type": x.type.upper()})
+        plan = build_plan(self.zone_norm, zone_json, ops, strict=True, lua_allowed=self.lua.allowed,
+                          dnssec_enabled=bool((zone_json or {}).get("dnssec")), lua_message=self.lua.message,
+                          lua_policy=self.lua.policy)
+        if ops.expected:
+            # Mit Sperre muss jedes RRset, das jetzt geaendert wuerde, abgedeckt sein: Ein RRset ohne Fingerprint
+            # hat die Vorschau nicht als Aenderung gezeigt (Vorschau == Anwendung) -> wie eine Abweichung behandeln.
+            covered = {_key(x.name, x.type) for x in ops.expected}
+            flagged = {(c["name"], c["type"]) for c in conflicts}
+            for c in plan.changes:
+                if c.key not in covered and c.key not in flagged:
+                    conflicts.append({"name": c.name, "type": c.type})
         if conflicts and not ops.force:
             raise BulkRejected(
                 409, {"message": MSG_CONFLICT, "conflicts": conflicts},
@@ -732,9 +758,6 @@ class _ApplyState:
                 error_message=MSG_CONFLICT_AUDIT,
             )
         self.forced = bool(conflicts) and ops.force
-        plan = build_plan(self.zone_norm, zone_json, ops, strict=True, lua_allowed=self.lua.allowed,
-                          dnssec_enabled=bool((zone_json or {}).get("dnssec")), lua_message=self.lua.message,
-                          lua_policy=self.lua.policy)
         self.plan = plan
         missing = [i for i in plan.issues if i.get("code") in ("value_missing", "rrset_missing")]
         if missing:

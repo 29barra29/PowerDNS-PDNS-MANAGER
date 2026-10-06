@@ -9,7 +9,9 @@ Semantik von ``BulkRecordUpdate`` (je Server ein Plan, ein PATCH, siehe ``servic
 - ``merge``         Werte anhaengen (Einzel-Create-Semantik), ``ttl=None`` behaelt die bestehende TTL
 - ``set_ttl``       TTL eines RRsets setzen (TTL ist in DNS eine RRset-Eigenschaft)
 - ``set_disabled``  einen Wert (de)aktivieren
-- ``expected``      optimistische Sperre gegen den Stand des Primary (409 bei Abweichung, ``force`` uebergeht sie)
+- ``expected``      optimistische Sperre gegen den Stand des Primary (409 bei Abweichung, ``force`` uebergeht sie).
+                    Die Vorschau liefert einen Fingerprint fuer jedes beruehrte RRset (auch unveraenderte). Ist
+                    ``expected`` gesetzt, gilt jedes geaenderte RRset ohne Fingerprint ebenfalls als Abweichung.
 
 "Absolute" Ops (``create``, ``delete`` ohne ``content``) duerfen je (Name, Typ) nur einmal vorkommen und nicht mit
 "relativen" Ops (``delete`` mit ``content``, ``merge``, ``set_ttl``, ``set_disabled``) desselben RRsets kombiniert

@@ -6,6 +6,8 @@
 //           manage_ptr }
 //   Vorschau = { zone, server, source, mode, blocking, issues[], changes[], summary, ops|null, peers[], skipped_servers }
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes.js'
+import { fanoutWarnings, formatFanoutWarnings } from '../lib/fanout.js'
+import { ptrMessages, summarizePtr } from '../lib/ptrResults.js'
 
 // Nicht auswaehlbar: SOA (nur Einzeleditor) und die von PowerDNS erzeugten DNSSEC-Typen.
 export const NON_SELECTABLE_TYPES = new Set(['SOA', 'RRSIG', 'NSEC', 'NSEC3', 'NSEC3PARAM', 'TYPE65534'])
@@ -404,6 +406,40 @@ export function applyOutcome(details) {
 // Betrifft die Vorschau A/AAAA-RRsets? (PTR-Option nur dann anzeigen)
 export function touchesPtrTypes(preview) {
     return previewChanges(preview).some((c) => PTR_FORWARD_TYPES.has(upper(c?.type)))
+}
+
+// Wirksamer Wert der PTR-Checkbox: gemerkte Auswahl (Zone/Browser) oder Admin-Default aus dem /ptr/config-Cache.
+// Anzeige und gesendeter Wert kommen beide hieraus, damit die Checkbox nie vom angewendeten Wert abweicht.
+export function effectivePtrChoice(choice, ptrConfig) {
+    return typeof choice === 'boolean' ? choice : !!ptrConfig?.auto_default
+}
+
+// Body fuer POST /bulk: Body der Vorschau unveraendert plus immer ein explizites `manage_ptr` (Spec F11 §12 Nr. 14).
+// Ohne sichtbare PTR-Option (keine A/AAAA-Aenderung) -> false; das Backend loest dann nie den Admin-Default auf.
+export function bulkApplyBody(preview, { ptrVisible = false, managePtr = false } = {}) {
+    return { ...(preview?.ops || {}), manage_ptr: ptrVisible ? !!managePtr : false }
+}
+
+// Banner-Texte nach 200 von POST /bulk (F1 2.5, F11 §2.6 "Ergebnisanzeige wie 2.5/4"):
+//   success: Erfolgsmeldung + gesetzte/entfernte PTRs (ptr.resultSet/ptr.resultRemoved)
+//   error:   Fan-out-Fehler einzelner Peers
+//   warning: Peer-Drift, nicht geladene Server und PTR-Probleme je IP mit Begruendung (Titel ptr.warningTitle)
+export function appliedBanners(t, details) {
+    const d = details || {}
+    const outcome = applyOutcome(d)
+    const ptr = ptrMessages(t, summarizePtr(d.ptr))
+    let success = outcome.nothing ? t('bulk.nothingApplied') : t('bulk.applied', { count: outcome.count })
+    if (ptr.success) success = `${success} ${ptr.success}`
+    const warnings = []
+    if (outcome.hasDrift) warnings.push(t('bulk.peerDrift', { servers: outcome.driftServers }))
+    const notLoaded = fanoutWarnings(d)
+    if (notLoaded.length) warnings.push(t('zoneDetail.fanoutNotLoaded', { servers: formatFanoutWarnings(notLoaded) }))
+    if (ptr.warning) warnings.push(ptr.warning)
+    return {
+        success,
+        error: outcome.hasErrors ? t('bulk.fanoutErrors', { list: outcome.errorList }) : '',
+        warning: warnings.join('\n'),
+    }
 }
 
 // Konflikt-Antwort (409) von POST /bulk

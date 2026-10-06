@@ -20,9 +20,32 @@ const missing = (f) => (fs.existsSync(f) ? false : `WS-F9F11-FE noch nicht gemer
 test('ptrPreference: getManagePtr/setManagePtr/getDefault', { skip: missing(PREF) }, async () => {
     const mod = await import(pathToFileURL(PREF).href)
     for (const name of ['getManagePtr', 'setManagePtr', 'getDefault']) assert.equal(typeof mod[name], 'function', name)
-    // Ohne gemerkte Auswahl -> null (Bulk-Editor/Papierkorb senden dann kein manage_ptr -> Admin-Default)
+    // Ohne gemerkte Auswahl -> null; der Bulk-Editor zeigt und sendet dann den Admin-Default aus dem Cache
+    // (immer explizit true/false, Spec F11 §12 Nr. 14 – siehe naechster Test)
     assert.equal(mod.getManagePtr('example.com.'), null)
     assert.equal(typeof mod.getDefault(), 'boolean')
+})
+
+test('Bulk-Body: manage_ptr ist bei sichtbarer Option immer ein Boolean = angezeigter Wert', { skip: missing(PREF) }, async () => {
+    const pref = await import(pathToFileURL(PREF).href)
+    const { bulkApplyBody, effectivePtrChoice } = await import(pathToFileURL(path.join(SRC, 'zoneDetail', 'bulkModel.js')).href)
+    const preview = { ops: { source: 'selection', delete: [{ name: 'www.example.com.', type: 'A' }] } }
+    pref.resetPtrConfigForTests()
+    try {
+        const stored = pref.getManagePtr('example.com.')
+        assert.equal(stored, null)
+        // /ptr/config noch nicht geladen bzw. fehlgeschlagen -> Checkbox leer -> explizit false
+        let shown = effectivePtrChoice(stored, pref.getPtrConfig())
+        assert.equal(shown, false)
+        assert.equal(bulkApplyBody(preview, { ptrVisible: true, managePtr: shown }).manage_ptr, false)
+        // Admin-Default true geladen -> Checkbox gesetzt -> explizit true
+        pref.setPtrConfig({ auto_default: true, reverse_zones_available: 1 })
+        shown = effectivePtrChoice(stored, pref.getPtrConfig())
+        assert.equal(shown, true)
+        assert.equal(bulkApplyBody(preview, { ptrVisible: true, managePtr: shown }).manage_ptr, true)
+    } finally {
+        pref.resetPtrConfigForTests()
+    }
 })
 
 test('ptrResults: summarizePtr liefert ok/warnings/errors/lines', { skip: missing(RESULTS) }, async () => {

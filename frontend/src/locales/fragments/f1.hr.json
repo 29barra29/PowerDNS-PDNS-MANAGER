@@ -1,0 +1,4 @@
+{
+  "set": {},
+  "remove": ["bulk.ptrProblems", "bulk.ptrUpdated"]
+}

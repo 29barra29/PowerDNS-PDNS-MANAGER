@@ -2,9 +2,7 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileText } from 'lucide-react'
 import BulkEditorModal from '../../components/bulk/BulkEditorModal'
-import { fanoutWarnings, formatFanoutWarnings } from '../../lib/fanout.js'
-import { summarizePtr } from '../../lib/ptrResults.js'
-import { EMPTY_SELECTION, applyOutcome, nextModalId } from '../bulkModel.js'
+import { EMPTY_SELECTION, appliedBanners, nextModalId } from '../bulkModel.js'
 import { useZoneSlotState } from '../zoneDetailContext'
 
 // Kopf-Aktion "Text-Editor" (F1 2.4, Plan B.14) und Host des Bulk-Editor-Modals. Das Modal wird ueber den geteilten
@@ -27,22 +25,13 @@ export default function TextEditorAction({ ctx }) {
     }
 
     function handleApplied(res) {
-        const details = res?.details || {}
-        const outcome = applyOutcome(details)
+        // Ergebnis inkl. PTR je IP mit Begruendung (F11 §2.6), Texte aus bulkModel.appliedBanners
+        const banners = appliedBanners(t, res?.details)
         setModal(null)
         setSelected(EMPTY_SELECTION)
-        const ptr = summarizePtr(details.ptr)
-        const ptrProblems = (ptr?.warnings?.length || 0) + (ptr?.errors?.length || 0)
-        let message = outcome.nothing ? t('bulk.nothingApplied') : t('bulk.applied', { count: outcome.count })
-        if (ptr?.ok?.length) message = `${message} ${t('bulk.ptrUpdated', { count: ptr.ok.length })}`
-        setSuccess(message)
-        setError(outcome.hasErrors ? t('bulk.fanoutErrors', { list: outcome.errorList }) : '')
-        const warnings = []
-        if (outcome.hasDrift) warnings.push(t('bulk.peerDrift', { servers: outcome.driftServers }))
-        const notLoaded = fanoutWarnings(details)
-        if (notLoaded.length) warnings.push(t('zoneDetail.fanoutNotLoaded', { servers: formatFanoutWarnings(notLoaded) }))
-        if (ptrProblems) warnings.push(t('bulk.ptrProblems', { count: ptrProblems }))
-        setWarning(warnings.join('\n'))
+        setSuccess(banners.success)
+        setError(banners.error)
+        setWarning(banners.warning)
         loadZone({ silent: true })
     }
 

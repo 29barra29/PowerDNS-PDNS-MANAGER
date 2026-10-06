@@ -7,7 +7,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-    EMPTY_SELECTION, NON_SELECTABLE_TYPES, applyErrorIssues, applyOutcome, buildDeleteOps, buildDisabledOps,
+    EMPTY_SELECTION, NON_SELECTABLE_TYPES, appliedBanners, applyErrorIssues, applyOutcome, bulkApplyBody,
+    buildDeleteOps, effectivePtrChoice, buildDisabledOps,
     buildTextRequest, buildTtlOps, canApply, collapseKept, fanoutErrorList, filterExistingSelection, firstSelectedTtl,
     hasRemovals, headerState, isConflictError, needsLinePrefix, isSelectable, isTextEmpty, isValidBulkTtl, issueI18n, lineIssuesOf,
     lineOffsets, loadAllPrefill, nextModalId, opKey, recordKey, refreshRequest, relativeOwner, rrsetKeyOf,
@@ -223,4 +224,74 @@ test('Vertrag: jeder Problem-Code des Backends hat einen i18n-Text (de/en)', () 
             assert.ok(keys.has(`bulk.issue.${code}`), `${lang}: bulk.issue.${code} fehlt`)
         }
     }
+})
+
+// --- Fix-Runde Welle 2: manage_ptr immer explizit, Anzeige == gesendeter Wert -----------------------------------
+test('PTR: effectivePtrChoice nutzt gemerkte Auswahl, sonst Admin-Default aus dem Cache', () => {
+    assert.equal(effectivePtrChoice(null, { auto_default: true }), true)
+    assert.equal(effectivePtrChoice(null, { auto_default: false }), false)
+    assert.equal(effectivePtrChoice(null, undefined), false)
+    assert.equal(effectivePtrChoice(false, { auto_default: true }), false)
+    assert.equal(effectivePtrChoice(true, { auto_default: false }), true)
+})
+
+test('PTR: bulkApplyBody sendet manage_ptr immer als Boolean und laesst den Vorschau-Body sonst unveraendert', () => {
+    const preview = { ops: { source: 'selection', delete: [{ name: 'www.example.com.', type: 'A' }], manage_ptr: null,
+        expected: [{ name: 'www.example.com.', type: 'A', fingerprint: 'absent' }] } }
+    const on = bulkApplyBody(preview, { ptrVisible: true, managePtr: true })
+    assert.equal(on.manage_ptr, true)
+    assert.deepEqual(on.expected, preview.ops.expected)
+    assert.equal(bulkApplyBody(preview, { ptrVisible: true, managePtr: false }).manage_ptr, false)
+    // keine A/AAAA-Aenderung (Option unsichtbar) -> trotzdem explizit false, nie null (kein Admin-Default im Backend)
+    assert.equal(bulkApplyBody(preview, { ptrVisible: false, managePtr: true }).manage_ptr, false)
+    for (const opts of [{}, { ptrVisible: true, managePtr: null }, { ptrVisible: true, managePtr: undefined }]) {
+        assert.equal(typeof bulkApplyBody(preview, opts).manage_ptr, 'boolean')
+    }
+    assert.equal(preview.ops.manage_ptr, null) // Eingabe nicht veraendert
+})
+
+const tf = (key, vals) => (vals ? `${key}${JSON.stringify(vals)}` : key)
+
+test('Ergebnis: appliedBanners zeigt PTRs je IP mit Begruendung (F11 §2.6), ohne Zaehler-Texte', () => {
+    const details = {
+        changed_rrsets: 2, audit_id: 7, fanout: { ns1: 'saved', ns2: 'error: kaputt', ns3: 'skipped (not loaded: aus)' },
+        peer_drift: { ns2: 1 },
+        ptr: [
+            { ip: '192.0.2.5', ptr: '5.2.0.192.in-addr.arpa.', zone: '2.0.192.in-addr.arpa.', target: 'a.example.com.', op: 'set', action: 'set', reason: null },
+            { ip: '192.0.2.6', ptr: '6.2.0.192.in-addr.arpa.', zone: '2.0.192.in-addr.arpa.', target: 'a.example.com.', op: 'set', action: 'skipped', reason: 'conflict', existing: ['b.example.com.'] },
+            { ip: '192.0.2.7', ptr: '7.2.0.192.in-addr.arpa.', zone: null, target: 'a.example.com.', op: 'set', action: 'skipped', reason: 'forbidden' },
+            { ip: '192.0.2.8', ptr: '8.2.0.192.in-addr.arpa.', zone: null, target: 'a.example.com.', op: 'set', action: 'skipped', reason: 'no_reverse_zone' },
+        ],
+    }
+    const b = appliedBanners(tf, details)
+    assert.ok(b.success.startsWith('bulk.applied{"count":2}'), b.success)
+    assert.match(b.success, /ptr\.resultSet\{"ptr":"5\.2\.0\.192\.in-addr\.arpa","target":"a\.example\.com","ip":"192\.0\.2\.5"\}/)
+    assert.match(b.error, /^bulk\.fanoutErrors/)
+    const lines = b.warning.split('\n')
+    assert.ok(lines[0].startsWith('bulk.peerDrift'), lines[0])
+    assert.ok(lines[1].startsWith('zoneDetail.fanoutNotLoaded'), lines[1])
+    assert.equal(lines[2], 'ptr.warningTitle')
+    assert.match(lines[3], /192\.0\.2\.6/)
+    assert.match(lines[3], /ptr\.reason\.conflict/)
+    assert.match(lines[3], /b\.example\.com/)
+    assert.match(lines[4], /192\.0\.2\.7/)
+    assert.match(lines[4], /ptr\.reason\.forbidden_plain/) // ohne Zonennamen (kein Leserecht, [S5])
+    assert.equal(lines.length, 5) // no_reverse_zone bleibt still
+    assert.doesNotMatch(`${b.success}\n${b.warning}`, /bulk\.ptr(Problems|Updated)/)
+})
+
+test('Ergebnis: appliedBanners ohne PTR-Pflege und ohne Aenderung', () => {
+    const b = appliedBanners(tf, { changed_rrsets: 0, audit_id: null, fanout: { ns1: 'skipped (no changes needed)' } })
+    assert.deepEqual(b, { success: 'bulk.nothingApplied', error: '', warning: '' })
+    assert.deepEqual(appliedBanners(tf, undefined), { success: 'bulk.nothingApplied', error: '', warning: '' })
+})
+
+test('Quelltext: Bulk-Modal sendet bulkApplyBody mit dem angezeigten Wert und abonniert /ptr/config', () => {
+    const src = fs.readFileSync(path.join(HERE, '../src/components/bulk/BulkEditorModal.jsx'), 'utf-8')
+    assert.match(src, /useSyncExternalStore\(subscribePtrConfig, getPtrConfig/)
+    assert.match(src, /bulkApplyBody\(preview, \{ ptrVisible, managePtr: ptrChecked \}\)/)
+    assert.match(src, /<PtrSyncOption checked=\{ptrChecked\}/)
+    assert.doesNotMatch(src, /manage_ptr = ptrChoice/)
+    const action = fs.readFileSync(path.join(HERE, '../src/zoneDetail/header-actions/40-text-editor.action.jsx'), 'utf-8')
+    assert.match(action, /appliedBanners\(t, res\?\.details\)/)
 })

@@ -216,6 +216,47 @@ async def test_expected_conflict_409_and_force(two, fake_db, admin, audit, event
     assert res.details["changed_rrsets"] == 1 and audit.last["details"]["forced"] is False
 
 
+# --- Fix-Runde Welle 2: Sperre deckt auch unveraenderte, beruehrte RRsets ab -----------------------------------
+async def test_replace_of_unchanged_rrset_conflicts_after_concurrent_change(two, fake_db, admin, audit, events):
+    """Vorschau zeigt www A als unveraendert; ein danach hinzugefuegter Wert darf nicht still verschwinden."""
+    p = await preview("ns1", {"ops": {"source": "api",
+                                      "create": [{"name": WWW, "type": "A", "ttl": 3600,
+                                                  "records": [{"content": "192.0.2.1"}, {"content": "192.0.2.2"}]}],
+                                      "delete": [{"name": "old.example.com.", "type": "TXT"}]}}, fake_db, admin)
+    assert [(c["name"], c["type"]) for c in p["changes"]] == [("old.example.com.", "TXT")]
+    assert {(e.name, e.type) for e in p["ops"].expected} == {(WWW, "A"), ("old.example.com.", "TXT")}
+    # zwischen Vorschau und Anwenden: jemand ergaenzt www A auf dem Primary
+    two.ns1.rrset(Z, WWW, "A")["records"].append({"content": "192.0.2.3", "disabled": False})
+    with pytest.raises(HTTPException) as ei:
+        await records.bulk_update_records("ns1", Z, p["ops"], fake_db, admin)
+    assert ei.value.status_code == 409 and ei.value.detail["conflicts"] == [{"name": WWW, "type": "A"}]
+    assert two.ns1.patches == [] and two.ns2.patches == [] and events.calls == []
+    assert two.ns1.values(Z, WWW, "A") == ["192.0.2.1", "192.0.2.2", "192.0.2.3"]
+    # ohne Zwischenaenderung laeuft derselbe Ablauf durch (nur das geaenderte RRset wird geschrieben)
+    two.ns1.rrset(Z, WWW, "A")["records"].pop()
+    p = await preview("ns1", {"ops": p["ops"].model_dump(exclude={"expected"})}, fake_db, admin)
+    res = await records.bulk_update_records("ns1", Z, p["ops"], fake_db, admin)
+    assert res.details["changed_rrsets"] == 1
+
+
+async def test_expected_must_cover_every_changed_rrset(two, fake_db, admin, audit, events):
+    """API-Body mit ``expected``, der ein tatsaechlich geaendertes RRset auslaesst -> 409 (force uebergeht)."""
+    www_fp = snapshot_fingerprint(two.ns1.rrset(Z, WWW, "A"), "A", Z)
+    body = {"set_ttl": [{"name": WWW, "type": "A", "ttl": 300}],
+            "delete": [{"name": "old.example.com.", "type": "TXT"}],
+            "expected": [{"name": WWW, "type": "A", "fingerprint": www_fp}]}
+    with pytest.raises(HTTPException) as ei:
+        await apply("ns1", body, fake_db, admin)
+    assert ei.value.status_code == 409
+    assert ei.value.detail["conflicts"] == [{"name": "old.example.com.", "type": "TXT"}]
+    assert two.ns1.patches == []
+    res = await apply("ns1", {**body, "force": True}, fake_db, admin)
+    assert res.details["changed_rrsets"] == 2 and audit.last["details"]["forced"] is True
+    # ohne expected bleibt die Anwendung ungesperrt (Bestandsverhalten der API)
+    res = await apply("ns1", {"set_ttl": [{"name": WWW, "type": "A", "ttl": 600}]}, fake_db, admin)
+    assert res.details["changed_rrsets"] == 1
+
+
 # --- Nr. 9: Audit-Format 4.3 ---------------------------------------------------------------------------------------
 async def test_audit_details_v2_format(two, fake_db, admin, audit, events):
     res = await apply("ns1", {"source": "selection",

@@ -28,7 +28,8 @@ import { RECORD_TYPES } from './zoneDetailModel'
 // TTL-Dialog. Die Auswahl liegt im geteilten Slot-Zustand 'bulk.selected', die Vorschau oeffnet das Modal der
 // Kopf-Aktion "Text-Editor" ueber 'bulk.modal' (header-actions/40-text-editor.action.jsx).
 // F11 (PTR): Papierkorb bei A/AAAA sendet die gemerkte PTR-Auswahl der Zone (lib/ptrPreference.js) als manage_ptr;
-// ohne gemerkte Auswahl entscheidet der Admin-Default im Backend.
+// ohne gemerkte Auswahl setzt useZoneData.handleDelete den Admin-Default aus dem /ptr/config-Cache explizit ein
+// (manage_ptr ist immer true/false, Spec F11 §12 Nr. 14).
 
 // Breite der Aktionsspalte: 2.4.1 w-28 fuer drei Icons, je weiterer Aktion etwas mehr.
 function actionColumnWidth(extraCount) {
