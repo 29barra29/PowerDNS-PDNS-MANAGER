@@ -1,0 +1,6 @@
+{
+  "set": {
+    "login.ssoError.rateLimited": "Previše neuspelih SSO pokušaja prijave. Pokušajte ponovo za nekoliko minuta."
+  },
+  "remove": []
+}

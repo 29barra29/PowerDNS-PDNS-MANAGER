@@ -44,11 +44,13 @@ LDAP_ON = {"ldap_enabled": True, "ldap_server_urls": '["ldaps://dc1.example.com"
 def _fresh_state():
     lrl.reset_for_tests()
     sso_oidc.reset_for_tests()
+    sso_router.reset_for_tests()
     core_auth._TOTP_USED.clear()
     secret_store.configure_for_tests()
     yield
     lrl.reset_for_tests()
     sso_oidc.reset_for_tests()
+    sso_router.reset_for_tests()
     core_auth._TOTP_USED.clear()
 
 
@@ -159,22 +161,67 @@ def test_unknown_user_ldap_off_checks_dummy_hash(env, monkeypatch, detached):
     assert reasons(detached) == ["bad_credentials"]
 
 
-def test_ldap_unavailable_503_without_counter(env, ldap, detached):
+def test_ldap_unavailable_503_counts_as_failure(env, ldap, detached):
+    """Review Welle 2: ein Ausfall zaehlt wie ein Fehlversuch (IP und Name) – sonst unbegrenztes Raten/Binden."""
     env.set_settings(**LDAP_ON)
     ldap.error = sso_ldap.LdapUnavailable("Timeout")
     r = login(env.client(ip="198.51.100.20"), "alice", LDAP_PW)
     assert r.status_code == 503
     assert r.json()["detail"] == "Der Anmeldedienst (LDAP) ist nicht erreichbar. Bitte später erneut versuchen."
     assert reasons(detached) == ["ldap_unavailable"]
-    assert ip_count("198.51.100.20") == 0 and user_count("alice") == 0
+    assert ip_count("198.51.100.20") == 1 and user_count("alice") == 1
+
+
+@pytest.mark.parametrize("error", [sso_ldap.LdapUnavailable("Timeout"), sso_ldap.LdapConfigError("Dienstkonto")],
+                         ids=["unavailable", "config"])
+def test_local_password_guessing_with_broken_ldap_is_limited(env, ldap, detached, error):
+    """Review Welle 2 [S2]: LDAP aktiv, aber gestoert – falsches lokales Passwort gibt 401 (kein 503-Orakel) und
+    zaehlt; der 6. Versuch ist 429 ohne weiteren Bind, auch mit dem richtigen Passwort."""
+    env.set_settings(**LDAP_ON)
+    env.add_user("root", role="admin")
+    ldap.error = error
+    c = env.client(ip="198.51.100.21")
+    for _ in range(lrl.USER_MAX_FAILS):
+        r = login(c, "root", "falsch-123")
+        assert r.status_code == 401 and r.json()["detail"] == "Falscher Benutzername oder Passwort"
+    assert ldap.binds == lrl.USER_MAX_FAILS
+    assert ip_count("198.51.100.21") == lrl.USER_MAX_FAILS and user_count("root") == lrl.USER_MAX_FAILS
+    assert login(c, "root", "falsch-123").status_code == 429
+    r = login(env.client(ip="203.0.113.21"), "root", PW)     # richtiges Passwort, andere IP: weiter gesperrt
+    assert r.status_code == 429
+    assert ldap.binds == lrl.USER_MAX_FAILS
+    assert set(reasons(detached)) == {"bad_credentials"}
+    ldap_errors = {kw["details"].get("ldap_error") for a, kw in detached if a == "LOGIN_FAILED"}
+    assert ldap_errors == {"ldap_unavailable" if isinstance(error, sso_ldap.LdapUnavailable) else "ldap_config"}
+
+
+def test_ldap_outage_ip_limit_stops_binds(env, ldap):
+    """Review Welle 2: unbekannte Namen waehrend eines Ausfalls – das IP-Fenster greift, danach kein Bind mehr."""
+    env.set_settings(**LDAP_ON)
+    ldap.error = sso_ldap.LdapUnavailable("Warteschlange voll")
+    c = env.client(ip="198.51.100.22")
+    for i in range(lrl.IP_MAX_FAILS):
+        assert login(c, f"name-{i}", "egal-123").status_code == 503
+    assert login(c, "noch-einer", "egal-123").status_code == 429
+    assert ldap.binds == lrl.IP_MAX_FAILS
+
+
+def test_correct_local_password_with_broken_ldap_logs_in(env, ldap):
+    env.set_settings(**LDAP_ON)
+    env.add_user("bob")
+    ldap.error = sso_ldap.LdapConfigError("Dienstkonto")
+    assert login(env.client(), "bob", PW).status_code == 200
+    assert ldap.binds == 0
 
 
 def test_ldap_config_error_503(env, ldap, detached):
     env.set_settings(**LDAP_ON)
     ldap.error = sso_ldap.LdapConfigError("Dienstkonto")
-    r = login(env.client(), "alice", LDAP_PW)
+    r = login(env.client(ip="198.51.100.23"), "alice", LDAP_PW)
     assert r.status_code == 503 and "fehlerhaft konfiguriert" in r.json()["detail"]
     assert reasons(detached) == ["ldap_config"]
+    # kann nach erfolgreichem Benutzer-Bind kommen (ID-Attribut fehlt): zaehlt, sonst Passwort-Orakel
+    assert ip_count("198.51.100.23") == 1 and user_count("alice") == 1
 
 
 def test_local_login_disabled_blocks_non_admin_but_not_admin(env, detached):
@@ -691,3 +738,20 @@ def test_ldap_link_uses_login_counters(env, ldap):
     for i in range(lrl.USER_MAX_FAILS):
         lrl.record_failed_login(f"203.0.113.{i + 1}", "bob")
     assert c.post(url, headers=h, json=body).status_code == 429 and ldap.binds == 1
+
+
+@pytest.mark.parametrize("error", [sso_ldap.LdapUnavailable("Timeout"), sso_ldap.LdapConfigError("ID-Attribut")],
+                         ids=["unavailable", "config"])
+def test_ldap_link_broken_ldap_counts_directory_name(env, ldap, error):
+    """Review Welle 2 [S2]: auch beim Verknuepfen zaehlen Ausfall/Konfigurationsfehler fuer den Verzeichnis-Namen."""
+    env.set_settings(**LDAP_ON)
+    user = env.add_user("bob")
+    ldap.error = error
+    c, h = env.client(ip="198.51.100.61"), session_headers(user)
+    url = "/api/v1/auth/me/sso/ldap/link"
+    body = {"current_password": PW, "ldap_username": "b.directory", "ldap_password": LDAP_PW}
+    for _ in range(lrl.USER_MAX_FAILS):
+        assert c.post(url, headers=h, json=body).status_code == 503
+    assert user_count("b.directory") == lrl.USER_MAX_FAILS and user_count("bob") == 0
+    assert c.post(url, headers=h, json=body).status_code == 429
+    assert ldap.binds == lrl.USER_MAX_FAILS

@@ -461,6 +461,7 @@ class SsoGeneralOut(BaseModel):
     redirect_uri: Optional[str] = None
     emergency_login_url: Optional[str] = None
     insecure_allowed: bool = False
+    session_max_age: int = 0   # Sekunden (AUTH_COOKIE_MAX_AGE); Warnung im SSO-Tab bei > 86400 (Plan E-F10-2)
 
 
 class OidcSettingsOut(BaseModel):

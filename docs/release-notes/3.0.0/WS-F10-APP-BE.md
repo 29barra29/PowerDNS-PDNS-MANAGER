@@ -28,7 +28,13 @@
 - **Fehlversuche zählen je IP und je Benutzername** – auch für LDAP: Nach 5 Fehlversuchen in 15 Minuten ist ein
   Benutzername gesperrt, egal von welcher Adresse; ein gesperrter Name erreicht das Verzeichnis nicht mehr (kein
   AD-Lockout über das Panel). Dieselben Zähler gelten für den 2FA-Schritt, die LDAP-Verknüpfung und die Bestätigung
-  kritischer Änderungen.
+  kritischer Änderungen. Auch Versuche, bei denen das Verzeichnis nicht erreichbar oder fehlkonfiguriert ist, zählen
+  als Fehlversuch; ein falsches Passwort eines lokalen Kontos ergibt dann wie sonst „Falscher Benutzername oder
+  Passwort“.
+- **OIDC-Anmeldeseiten sind gedrosselt**: Ist OIDC aus, erzeugen Aufrufe der Rücksprung-Adresse keine Audit-Einträge
+  mehr. Wiederholte Fehler ohne gültigen Anmeldevorgang werden je IP höchstens alle 5 Minuten einmal protokolliert,
+  nach 20 Fehlschlägen in 5 Minuten meldet die Login-Seite „zu viele Versuche“. Ein nicht erreichbarer Anbieter wird
+  höchstens einmal pro Minute erneut abgefragt.
 - Konten mit SSO-/LDAP-Anmeldung haben kein Panel-Passwort: Passwort-Login, „Passwort vergessen“, Passwort ändern und
   Passkeys sind für sie gesperrt; Benutzername und E-Mail verwaltet der Anmeldedienst.
 - Ist die Anmeldung mit lokalen Konten abgeschaltet, sind auch die öffentliche Registrierung und „Passwort
@@ -46,6 +52,8 @@
 - `POST /api/v1/auth/login/2fa`: `two_factor_token` ist optional (OIDC-Zwischenschritt liegt im HttpOnly-Cookie).
 - `GET /api/v1/auth/users`: je Benutzer `external_issuer`/`external_id`, dazu Block `sso` (Rollen-Modus, JIT je Quelle);
   alle Benutzerobjekte enthalten `auth_source`.
+- `GET|PUT /api/v1/settings/sso`: `general.session_max_age` (Sitzungsdauer in Sekunden) – der SSO-Tab warnt bei mehr
+  als 24 Stunden.
 - `GET /api/v1/settings/app-info`: `registration_enabled` ist `false`, solange die lokale Anmeldung abgeschaltet ist.
 
 #### Nach dem Update prüfen
@@ -66,7 +74,7 @@
 - `konfiguration`: `SSO_ALLOW_INSECURE`; **veraltet**: Aussage zu `AUTH_COOKIE_SAMESITE=strict` (funktioniert auch
   mit OIDC, das State-Cookie ist immer `lax`).
 - `troubleshooting`: Tabelle `sso_error`-Codes (u. a. `state`, `idp_error`, `token`, `id_token`, `not_allowed`,
-  `no_account`, `totp_unreadable`), „LDAP nicht erreichbar“ (503), „ausgesperrt“ → `/login?local=1`.
+  `no_account`, `totp_unreadable`, `rate_limited`), „LDAP nicht erreichbar“ (503), „ausgesperrt“ → `/login?local=1`.
 - `features/audit-log`: neue Aktionen und Login-Methoden (siehe oben).
 - `faq`: **veraltet**: „Benutzer mit zwei Rollen“ (jetzt optional mit SSO) und „Backend kontaktiert keine externen
   Dienste“ (außer dem konfigurierten Anmeldedienst).

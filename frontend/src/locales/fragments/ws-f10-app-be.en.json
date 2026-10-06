@@ -1,0 +1,6 @@
+{
+  "set": {
+    "login.ssoError.rateLimited": "Too many failed single sign-on attempts. Please try again in a few minutes."
+  },
+  "remove": []
+}

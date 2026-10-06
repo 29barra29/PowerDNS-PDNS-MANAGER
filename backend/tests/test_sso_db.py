@@ -215,9 +215,12 @@ def test_oidc_end_to_end_with_lifespan():
     from app.services import sso_oidc
     from app.services.system_settings import set_settings
 
+    from app.routers import sso as sso_router
+
     _run(prepare_fresh(_engine()))
     idp = _IdP()
     sso_oidc.reset_for_tests()
+    sso_router.reset_for_tests()   # OIDC-Drossel/Negativ-Cache anderer Tests im selben Prozess
     sso_oidc.set_transport_for_tests(httpx.MockTransport(idp.handler))
     keys = {"app_base_url": "https://testserver", "oidc_enabled": "true", "oidc_issuer": ISS,
             "oidc_client_id": "pdns", "oidc_client_secret": "t10-client-secret", "oidc_jit_enabled": "true",

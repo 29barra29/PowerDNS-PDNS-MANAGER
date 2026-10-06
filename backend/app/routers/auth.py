@@ -387,6 +387,36 @@ async def _local_login_enabled(db: AsyncSession) -> bool:
     return (await _load_sso_config(db)).general.local_login_enabled
 
 
+async def _ldap_failure(db: AsyncSession, exc: Exception, *, client_ip: str, username: str, user) -> HTTPException:
+    """LDAP nicht erreichbar oder fehlkonfiguriert: zaehlt wie ein Fehlversuch, liefert die Antwort (401/503) [S2].
+
+    - Beide Zaehler (IP und Benutzername) steigen: sonst waere bei dauerhaft gestoertem LDAP das Raten
+      unbegrenzt (503 bei falschem, 200 bei richtigem lokalem Passwort) und jeder Versuch ginge als Bind ans
+      Verzeichnis. Auch ein LDAP-Konto ist betroffen: ``LdapConfigError`` kann nach einem erfolgreichen
+      Benutzer-Bind kommen (fehlendes ID-Attribut) – 503 waere dann ein Passwort-Orakel.
+    - Wurde vorher ein lokales Passwort geprueft (lokales Konto), war es falsch: dieselbe 401-Antwort wie bei
+      jedem anderen Fehlversuch, kein 503.
+    - Sonst 503 mit dem passenden Hinweis (Ausfall bzw. Konfigurationsfehler).
+    """
+    from app.services import sso_ldap  # lazy wie im Login-Handler
+
+    unavailable = isinstance(exc, sso_ldap.LdapUnavailable)
+    reason = "ldap_unavailable" if unavailable else "ldap_config"
+    if not unavailable:
+        logger.error("LDAP-Konfigurationsfehler: %s", exc)
+    record_failed_login(client_ip, username)
+    prom.record_login("ldap", "failure")
+    if user is not None and user_guard.is_local_account(user):
+        await write_audit(db, "LOGIN_FAILED", "user", username[:255], user_id=user.id, status="error",
+                          details={"ip": client_ip, "method": "password", "reason": "bad_credentials",
+                                   "ldap_error": reason})
+        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=BAD_CREDENTIALS_DETAIL)
+    await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
+                      details={"ip": client_ip, "method": "ldap", "reason": reason})
+    return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                         detail=LDAP_UNAVAILABLE_DETAIL if unavailable else LDAP_CONFIG_DETAIL)
+
+
 @router.post("/login")
 async def login(
     db: DbWrite,
@@ -433,17 +463,8 @@ async def login(
             raise _rate_limited("ldap")
         try:
             ident = await sso_ldap.authenticate(cfg.ldap, username, password)
-        except sso_ldap.LdapUnavailable:
-            prom.record_login("ldap", "failure")
-            await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
-                              details={"ip": client_ip, "method": "ldap", "reason": "ldap_unavailable"})
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_UNAVAILABLE_DETAIL)
-        except sso_ldap.LdapConfigError as exc:
-            logger.error("LDAP-Konfigurationsfehler: %s", exc)
-            prom.record_login("ldap", "failure")
-            await write_audit(db, "LOGIN_FAILED", "user", username[:255], status="error",
-                              details={"ip": client_ip, "method": "ldap", "reason": "ldap_config"})
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_CONFIG_DETAIL)
+        except (sso_ldap.LdapUnavailable, sso_ldap.LdapConfigError) as exc:
+            raise await _ldap_failure(db, exc, client_ip=client_ip, username=username, user=user) from None
         if ident is not None:
             try:
                 prov = await resolve_external_user(db, ident.profile, policy_from(cfg.ldap, "ldap"))

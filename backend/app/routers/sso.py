@@ -15,6 +15,12 @@ Eigener Router (Bauplan B.13, ``ROUTER_ORDER = 25``, direkt nach ``routers/auth.
   LDAP-Link zusaetzlich je (IP, Verzeichnis-Benutzername) – ein gesperrter Name loest keinen LDAP-Bind aus [S2].
 
 OIDC ist kein Passwort-Raten: Callback-Fehler zaehlen nicht in den Login-Zaehlern, ein Erfolg loescht sie nicht.
+Die oeffentlichen OIDC-Pfade haben aber eine eigene Drosselung (Review Welle 2): Fehlschlaege mit Aufwand (Audit,
+Discovery, Token-Tausch) von Start und Callback zaehlen je IP (IPv6 /64); ab ``OIDC_FAIL_MAX`` im Fenster gibt es nur noch ``sso_error=rate_limited`` ohne Audit,
+ohne Discovery und ohne Token-Tausch. Ist OIDC aus, endet der Callback sofort in ``disabled`` (kein Audit).
+Fehler-Audits vor der State-Pruefung (ohne gueltiges State-Cookie) und Discovery-Fehler werden je (IP, Code)
+hoechstens einmal in ``AUDIT_DEDUPE_TTL`` geschrieben; fehlgeschlagene Discovery wird ``DISCOVERY_NEGATIVE_TTL``
+Sekunden negativ gecacht (kein ausgehender Request je Anfrage bei nicht erreichbarem IdP).
 Nie geloggt oder auditiert: ``code``, ``state``, ``nonce``, Tokens, ``error_description``, Passwoerter.
 """
 from __future__ import annotations
@@ -22,6 +28,7 @@ from __future__ import annotations
 import hmac
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -44,6 +51,7 @@ from app.core.auth import (
 from app.core.client_ip import get_client_ip
 from app.core.database import DbRead, DbWrite
 from app.core.login_rate_limit import is_login_rate_limited, record_failed_login
+from app.core.rate_limit import SlidingWindowLimiter, ip_key
 from app.models.models import User
 from app.schemas.sso import LdapLinkRequest, SsoLinkStart
 from app.services import sso_ldap, sso_oidc, sso_settings, user_guard
@@ -72,7 +80,7 @@ router = APIRouter(prefix="/auth", tags=["SSO"])
 # Fehlercodes der Redirects (login.ssoError.<code> im Frontend)
 SSO_ERROR_CODES = frozenset({
     "disabled", "config", "discovery", "state", "idp_error", "token", "id_token", "no_account", "not_allowed",
-    "account_disabled", "link_conflict", "link_failed", "totp_unreadable", "internal",
+    "account_disabled", "link_conflict", "link_failed", "totp_unreadable", "internal", "rate_limited",
 })
 _SSO_DETAIL_RE = re.compile(r"[a-z_]{1,40}")
 _MAX_CODE_LEN = 4096
@@ -100,6 +108,75 @@ LDAP_LINK_BAD_CREDENTIALS = "LDAP-Anmeldung fehlgeschlagen – Benutzername oder
 LDAP_LINK_NOT_ALLOWED = "Dein Verzeichnis-Konto ist nicht für dieses Panel freigegeben"
 LDAP_LINK_CONFLICT = "Dieses Verzeichnis-Konto ist bereits mit einem anderen Panel-Konto verknüpft"
 LDAP_LINKED_MESSAGE = "Konto mit LDAP verknüpft"
+
+
+# Drosselung der oeffentlichen OIDC-Fehlerpfade (Review Welle 2): Fehlschlaege je IP-Schluessel
+OIDC_FAIL_MAX = 20
+OIDC_FAIL_WINDOW_SEC = 300
+AUDIT_DEDUPE_TTL = 300
+DISCOVERY_NEGATIVE_TTL = 60
+_MAX_TRACKED = 10_000
+_fail_limiter = SlidingWindowLimiter(OIDC_FAIL_MAX, OIDC_FAIL_WINDOW_SEC, max_keys=20_000)
+_audited_at: dict[tuple, float] = {}
+_discovery_failed: dict[str, tuple[float, OidcError]] = {}
+
+
+def reset_for_tests() -> None:
+    """Drossel, Audit-Dedupe und Negativ-Cache leeren (nur fuer Tests)."""
+    _fail_limiter.reset()
+    _audited_at.clear()
+    _discovery_failed.clear()
+
+
+def _ip_bucket(client_ip: str) -> Optional[str]:
+    """Schluessel der Drossel (IPv6 /64); unbekannte bzw. zu lange Angaben zaehlen nicht."""
+    ip = (client_ip or "").strip()
+    if not ip or ip == "unknown" or len(ip) > 64:
+        return None
+    return ip_key(ip)
+
+
+def _is_throttled(ipk: Optional[str]) -> bool:
+    return ipk is not None and _fail_limiter.is_limited(ipk)
+
+
+def _note_failure(ipk: Optional[str]) -> None:
+    if ipk is not None:
+        _fail_limiter.hit(ipk)
+
+
+def _first_in_window(key: tuple) -> bool:
+    """True, wenn ``key`` in den letzten ``AUDIT_DEDUPE_TTL`` Sekunden noch nicht auditiert wurde (und merkt ihn)."""
+    now = time.monotonic()
+    last = _audited_at.get(key)
+    if last is not None and now - last < AUDIT_DEDUPE_TTL:
+        return False
+    if len(_audited_at) >= _MAX_TRACKED:
+        cutoff = now - AUDIT_DEDUPE_TTL
+        for k in [k for k, ts in _audited_at.items() if ts < cutoff]:
+            _audited_at.pop(k, None)
+        while len(_audited_at) >= _MAX_TRACKED:
+            _audited_at.pop(next(iter(_audited_at)))
+    _audited_at[key] = now
+    return True
+
+
+async def _provider_metadata(issuer: str) -> dict:
+    """Discovery mit kurzem Negativ-Cache: ein nicht erreichbarer IdP wird nicht bei jeder Anfrage erneut gefragt."""
+    now = time.monotonic()
+    cached = _discovery_failed.get(issuer)
+    if cached is not None:
+        if now < cached[0]:
+            raise cached[1]
+        _discovery_failed.pop(issuer, None)
+    try:
+        return await sso_oidc.get_provider_metadata(issuer)
+    except OidcError as exc:
+        if exc.code == "discovery":
+            if len(_discovery_failed) >= 100:
+                _discovery_failed.clear()
+            _discovery_failed[issuer] = (now + DISCOVERY_NEGATIVE_TTL, exc)
+        raise
 
 
 def _no_store(resp):
@@ -148,24 +225,30 @@ async def sso_providers(db: DbRead):
 @router.get("/oidc/start", include_in_schema=False)
 async def oidc_start(request: Request, db: DbRead):
     """Startet die OIDC-Anmeldung: State-Cookie (10 min, HttpOnly, SameSite=Lax) + 302 zum Anbieter."""
+    client_ip = get_client_ip(request) or "unknown"
+    ipk = _ip_bucket(client_ip)
+    if _is_throttled(ipk):
+        return fail_redirect("rate_limited")
     cfg = await sso_settings.load_sso_config(db)
     if not cfg.oidc.enabled:
         return fail_redirect("disabled")
     if not sso_settings.oidc_ready(cfg):
         return fail_redirect("config")
     try:
-        metadata = await sso_oidc.get_provider_metadata(cfg.oidc.issuer)
+        metadata = await _provider_metadata(cfg.oidc.issuer)
         url, cookie = sso_oidc.create_authorization_request(cfg, metadata, intent="login")
     except OidcError as exc:
         if exc.code != "discovery":
             logger.warning("OIDC-Start: Konfiguration unvollstaendig (%s)", exc.log_detail)
             return fail_redirect("config")
         logger.warning("OIDC-Start: Discovery fehlgeschlagen (%s)", exc.log_detail)
-        prom.record_login("oidc", "failure")
-        await write_audit_detached(
-            "LOGIN_FAILED", "user", "oidc", status="error", error_message=exc.log_detail[:200] or None,
-            details={"ip": get_client_ip(request) or "unknown", "method": "oidc", "reason": "discovery"},
-        )
+        _note_failure(ipk)
+        if _first_in_window(("start", ipk or client_ip, "discovery")):
+            prom.record_login("oidc", "failure")
+            await write_audit_detached(
+                "LOGIN_FAILED", "user", "oidc", status="error", error_message=exc.log_detail[:200] or None,
+                details={"ip": client_ip, "method": "oidc", "reason": "discovery"},
+            )
         return fail_redirect("discovery")
     resp = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
     set_transient_cookie(resp, OIDC_STATE_COOKIE, cookie, path=OIDC_STATE_COOKIE_PATH,
@@ -200,6 +283,7 @@ class _CallbackCtx:
     username_hint: Optional[str] = None
     user_id: Optional[int] = None
     username: Optional[str] = None
+    state_ok: bool = False   # State-Cookie und -Wert geprueft (Schritt 2)
 
 
 async def _audit_callback_failure(ctx: _CallbackCtx, fail: _CallbackFail, client_ip: str) -> None:
@@ -239,22 +323,38 @@ async def oidc_callback(
 ):
     """Rueckkehr vom Anbieter. Erfolg: Session-Cookie + 303 ``/`` (bzw. 2FA-Schritt oder Einstellungen)."""
     client_ip = get_client_ip(request) or "unknown"
+    ipk = _ip_bucket(client_ip)
     payload = decode_oidc_state_token(request.cookies.get(OIDC_STATE_COOKIE))
     ctx = _CallbackCtx(intent=payload["it"] if payload else "login",
                        issuer=payload.get("iss") if payload else None,
                        user_id=payload.get("uid") if payload else None)
+    if _is_throttled(ipk):
+        # Gedrosselt: kein Audit, keine Discovery, kein Token-Tausch, State bleibt unverbraucht
+        return fail_redirect("rate_limited", intent=ctx.intent)
     try:
         return await _callback(request, db, ctx, payload, code=code, state=state, error=error, iss=iss)
     except _CallbackFail as fail:
         await _safe_rollback(db)
-        if fail.audit:
-            await _audit_callback_failure(ctx, fail, client_ip)
+        if fail.audit:   # nur Fehlschlaege mit Aufwand zaehlen (OIDC aus/IdP-Abbruch kosten nichts)
+            _note_failure(ipk)
+            await _audit_callback_failure_throttled(ctx, fail, client_ip, ipk)
         return fail_redirect(fail.code, intent=ctx.intent, detail=fail.detail)
     except Exception as exc:  # noqa: BLE001 - nie ein 500 mit Stacktrace im Browser-Flow
         logger.exception("OIDC-Callback fehlgeschlagen (%s)", type(exc).__name__)
         await _safe_rollback(db)
-        await _audit_callback_failure(ctx, _CallbackFail("internal", type(exc).__name__), client_ip)
+        _note_failure(ipk)
+        await _audit_callback_failure_throttled(ctx, _CallbackFail("internal", type(exc).__name__), client_ip, ipk)
         return fail_redirect("internal", intent=ctx.intent)
+
+
+async def _audit_callback_failure_throttled(ctx: _CallbackCtx, fail: _CallbackFail, client_ip: str,
+                                            ipk: Optional[str]) -> None:
+    """Vor der State-Pruefung (ohne gueltiges State-Cookie) kann jeder anonym Fehler ausloesen: dort hoechstens ein
+    Audit je (IP, Code) und ``AUDIT_DEDUPE_TTL``. Nach gueltigem State wird jeder Fehler auditiert (die Drossel
+    begrenzt die Menge)."""
+    if not ctx.state_ok and not _first_in_window(("callback", ipk or client_ip, fail.code)):
+        return
+    await _audit_callback_failure(ctx, fail, client_ip)
 
 
 async def _safe_rollback(db) -> None:
@@ -266,6 +366,10 @@ async def _safe_rollback(db) -> None:
 
 async def _callback(request: Request, db, ctx: _CallbackCtx, payload: Optional[dict], *, code: Optional[str],
                     state: Optional[str], error: Optional[str], iss: Optional[str]):
+    # 0. OIDC aus (Standard): sofort Schluss, ohne Audit – sonst koennte jeder anonym Audit-Zeilen erzeugen
+    cfg = await sso_settings.load_sso_config(db)
+    if not cfg.oidc.enabled:
+        raise _CallbackFail("disabled", "OIDC ist deaktiviert", audit=False)
     # 1. Fehler vom Anbieter (error_description wird nie gelesen)
     if error:
         raise _CallbackFail("idp_error", f"IdP-Fehler {_clean_detail(error) or '(unbekannt)'}",
@@ -275,17 +379,15 @@ async def _callback(request: Request, db, ctx: _CallbackCtx, payload: Optional[d
             or not hmac.compare_digest(state.encode("utf-8"), str(payload["st"]).encode("utf-8")) \
             or not _consume_oidc_state(payload["st"]):
         raise _CallbackFail("state", "State fehlt, passt nicht oder wurde schon verwendet")
+    ctx.state_ok = True
     # 3. RFC 9207: iss-Parameter muss zum erwarteten Issuer passen
     if iss is not None and iss != payload["iss"]:
         raise _CallbackFail("idp_error", "iss-Parameter passt nicht")
     # 4. Konfiguration und Anbieter
-    cfg = await sso_settings.load_sso_config(db)
-    if not cfg.oidc.enabled:
-        raise _CallbackFail("disabled", "OIDC ist deaktiviert")
     if not sso_settings.oidc_ready(cfg):
         raise _CallbackFail("config", "OIDC-Konfiguration unvollstaendig")
     try:
-        metadata = await sso_oidc.get_provider_metadata(cfg.oidc.issuer)
+        metadata = await _provider_metadata(cfg.oidc.issuer)
     except OidcError as exc:
         raise _CallbackFail("discovery", exc.log_detail) from None
     if payload["iss"] != metadata.get("issuer"):
@@ -391,7 +493,7 @@ async def oidc_link_start(
     _reauth_local(current_user, data.current_password, data.totp_code, client_ip)
     await user_guard.assert_keeps_local_admin(db, current_user, removing=True)
     try:
-        metadata = await sso_oidc.get_provider_metadata(cfg.oidc.issuer)
+        metadata = await _provider_metadata(cfg.oidc.issuer)
         url, cookie = sso_oidc.create_authorization_request(cfg, metadata, intent="link", user=current_user)
     except OidcError as exc:
         logger.warning("OIDC-Verknuepfung: Anbieter nicht erreichbar (%s)", exc.log_detail)
@@ -428,8 +530,13 @@ async def ldap_link(
     try:
         ident = await sso_ldap.authenticate(cfg.ldap, ldap_name, data.ldap_password)
     except sso_ldap.LdapUnavailable:
+        # [S2] zaehlt wie ein Fehlversuch: kein unbegrenztes Binden waehrend eines Ausfalls
+        record_failed_login(client_ip, ldap_name)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_UNAVAILABLE_DETAIL) from None
     except sso_ldap.LdapConfigError as exc:
+        # [S2] LdapConfigError kann nach erfolgreichem Benutzer-Bind kommen (ID-Attribut fehlt): ohne Zaehler
+        # waere 503 ein Passwort-Orakel fuer das Verzeichnis-Konto
+        record_failed_login(client_ip, ldap_name)
         logger.error("LDAP-Konfigurationsfehler bei der Verknuepfung: %s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=LDAP_CONFIG_DETAIL) from None
     if ident is None:
