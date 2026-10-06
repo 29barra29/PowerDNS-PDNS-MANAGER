@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, Plus, Trash2, Pencil, Loader2, AlertCircle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap } from 'lucide-react'
+import { Server, Plus, Trash2, Pencil, Loader2, AlertCircle, AlertTriangle, CheckCircle2, RefreshCw, Wifi, WifiOff, Eye, EyeOff, X, Zap } from 'lucide-react'
 import api from '../../../api'
 import ModalErrorBanner from '../../ModalErrorBanner'
+import { useDialogFocus } from '../../../lib/useDialogFocus'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
@@ -11,6 +12,15 @@ export const tab = { id: 'servers', order: 30, labelKey: 'settings.servers', ico
 // Tab "Server" (PowerDNS-Server verwalten).
 // F8 (Welle 1): "Anzeigen" holt den Key immer frisch, Fehler im Dialog (C01, D07); gesendet wird der Key nur,
 // wenn das Feld geaendert wurde (f90); Texte uebersetzt (A11); Dialog-Fehler ueber ModalErrorBanner (C05).
+// F5 (WS-F5-FE): Badges je `api_key_status` (unreadable/missing); ein solcher Server ist nicht geladen und wird bei
+// Zonen-Aenderungen uebersprungen [D4] – Hinweis in der Liste und nach dem Neu-Eintragen (Zonen abgleichen).
+// Im Dialog: kein "Anzeigen" ohne lesbaren Key, Hinweisbox, Speichern nur mit neuem Key. Verlangt das Backend den
+// Key nach einer URL-Aenderung neu (400 `secret_reentry_required` [S3]), erscheint der Hinweis am Key-Feld.
+
+// Status des gespeicherten Keys; fehlt das Feld (aelteres Backend), gilt der Key als gesetzt.
+function keyStatus(s) {
+    return s?.api_key_status === 'unreadable' || s?.api_key_status === 'missing' ? s.api_key_status : 'set'
+}
 export default function ServersTab() {
     const { t } = useTranslation()
     const { notify, isAdmin } = useSettings()
@@ -21,6 +31,13 @@ export default function ServersTab() {
     const [revealingKey, setRevealingKey] = useState(false)
     // true, sobald der Admin das Key-Feld selbst geaendert hat; nur dann wird api_key beim Bearbeiten gesendet
     const [apiKeyDirty, setApiKeyDirty] = useState(false)
+    // api_key_status des bearbeiteten Servers ('set' beim Anlegen) und ob er aktiv ist
+    const [editKeyStatus, setEditKeyStatus] = useState('set')
+    const [editIsActive, setEditIsActive] = useState(true)
+    // Backend verlangt den Key neu (URL geaendert) bzw. Pflicht-Key fehlt -> Feldhinweis
+    const [apiKeyFieldHint, setApiKeyFieldHint] = useState('')
+    // Nach dem Neu-Eintragen eines Keys fuer einen nicht geladenen Server: Hinweis "Zonen abgleichen" [D4]
+    const [syncHintServer, setSyncHintServer] = useState('')
 
     // Add/Edit Server
     const [showForm, setShowForm] = useState(false)
@@ -54,6 +71,9 @@ export default function ServersTab() {
         setTestResult(null)
         setShowApiKey(false)
         setApiKeyDirty(false)
+        setEditKeyStatus('set')
+        setEditIsActive(true)
+        setApiKeyFieldHint('')
         setServerModalError('')
         setShowForm(true)
     }
@@ -73,6 +93,9 @@ export default function ServersTab() {
         setTestResult(null)
         setShowApiKey(false)
         setApiKeyDirty(false)
+        setEditKeyStatus(keyStatus(s))
+        setEditIsActive(s.is_active !== false)
+        setApiKeyFieldHint('')
         setServerModalError('')
         setShowForm(true)
     }
@@ -80,12 +103,15 @@ export default function ServersTab() {
     function closeServerModal() {
         setShowForm(false)
         setServerModalError('')
+        setApiKeyFieldHint('')
         setTestResult(null)
     }
 
+    const serverDialogRef = useDialogFocus({ onClose: closeServerModal, canClose: !saving, active: showForm })
+
     // Key immer frisch vom Server holen (kein Cache, f90); Fehler erscheinen im Dialog (f91)
     async function handleRevealApiKey() {
-        if (!editId) return
+        if (!editId || editKeyStatus !== 'set') return
         setRevealingKey(true)
         setServerModalError('')
         try {
@@ -120,8 +146,17 @@ export default function ServersTab() {
 
     async function handleSave(e) {
         e.preventDefault()
+        // Nicht lesbarer/fehlender Key: ohne neuen Key bliebe der aktive Server ungeladen (F5 §2 D). Ein
+        // deaktivierter Server ist ohnehin nicht geladen – dort darf z. B. die Beschreibung ohne Key gespeichert werden.
+        const needsKey = !!editId && editKeyStatus !== 'set' && editIsActive
+        if (needsKey && !(apiKeyDirty && form.api_key.trim())) {
+            setApiKeyFieldHint(t('settingsMore.apiKeyRequiredUnreadable'))
+            setServerModalError(t('settingsMore.apiKeyRequiredUnreadable'))
+            return
+        }
         setSaving(true)
         setServerModalError('')
+        setApiKeyFieldHint('')
         try {
             if (editId) {
                 await api.updateServerConfig(editId, {
@@ -133,6 +168,8 @@ export default function ServersTab() {
                     allow_writes: form.allow_writes,
                 })
                 setSuccess(t('settings.serverUpdated'))
+                // Server war nicht geladen und hat jetzt einen Key: Zonen koennen auf ihm veraltet sein [D4]
+                if (needsKey) setSyncHintServer(form.display_name || form.name)
             } else {
                 await api.addServerConfig(form)
                 setSuccess(t('settings.serverAdded'))
@@ -140,6 +177,7 @@ export default function ServersTab() {
             closeServerModal()
             loadServers()
         } catch (err) {
+            if (err?.code === 'secret_reentry_required') setApiKeyFieldHint(t('settingsMore.apiKeyReentryRequired'))
             setServerModalError(err.message)
         } finally {
             setSaving(false)
@@ -207,6 +245,16 @@ export default function ServersTab() {
                     </p>
                 </div>
 
+                {syncHintServer && (
+                    <div role="status" className="p-4 rounded-xl bg-warning/10 border border-warning/30 text-warning flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
+                        <p className="flex-1 min-w-0 text-sm break-words">{t('settingsMore.apiKeyReenteredSyncHint', { name: syncHintServer })}</p>
+                        <button type="button" onClick={() => setSyncHintServer('')} className="p-1 rounded-lg hover:bg-warning/10 shrink-0" title={t('common.close')} aria-label={t('common.close')}>
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
+
                 {loadingServers ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 text-accent animate-spin" /></div>
                 ) : servers.length === 0 ? (
@@ -245,6 +293,12 @@ export default function ServersTab() {
                                             {!s.is_active && (
                                                 <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">{t('settings.serverDisabledBadge')}</span>
                                             )}
+                                            {keyStatus(s) === 'unreadable' && (
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/30">{t('settingsMore.apiKeyUnreadable')}</span>
+                                            )}
+                                            {keyStatus(s) === 'missing' && (
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/30">{t('settingsMore.apiKeyMissing')}</span>
+                                            )}
                                             <button type="button" onClick={() => toggleAllowWrites(s)} className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${s.allow_writes !== false ? 'bg-success/10 text-success border-success/30' : 'bg-bg-hover text-text-muted border-border'}`} title={s.allow_writes !== false ? t('settings.allowWritesTitleOn') : t('settings.allowWritesTitleOff')}>
                                                 {s.allow_writes !== false ? t('settings.allowWritesYes') : t('settings.allowWritesNo')}
                                             </button>
@@ -255,6 +309,12 @@ export default function ServersTab() {
                                             {s.zone_count != null && <span>{t('settings.zonesCount')}: <span className="text-text-secondary">{s.zone_count}</span></span>}
                                             {s.description && <span className="italic">{s.description}</span>}
                                         </div>
+                                        {s.is_active && keyStatus(s) !== 'set' && (
+                                            <p className="mt-2 text-xs text-warning flex items-start gap-1.5">
+                                                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                                                <span>{t('settingsMore.apiKeyNotLoadedHint')}</span>
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Actions */}
@@ -283,12 +343,19 @@ export default function ServersTab() {
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
                 onClick={() => { if (!saving) closeServerModal() }}
             >
-                <div className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div
+                    ref={serverDialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="server-modal-title"
+                    className="glass-card p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto"
+                    onClick={e => e.stopPropagation()}
+                >
                     <div className="flex items-center justify-between mb-5">
-                        <h2 className="text-lg font-bold text-text-primary">
+                        <h2 id="server-modal-title" className="text-lg font-bold text-text-primary">
                             {editId ? t('settingsMore.editServer') : t('settingsMore.addNewServer')}
                         </h2>
-                        <button onClick={closeServerModal} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted" title={t('common.close')} aria-label={t('common.close')}>
+                        <button type="button" onClick={closeServerModal} disabled={saving} className="p-1 rounded-lg hover:bg-bg-hover text-text-muted disabled:opacity-50" title={t('common.close')} aria-label={t('common.close')}>
                             <X className="w-5 h-5" />
                         </button>
                     </div>
@@ -308,6 +375,7 @@ export default function ServersTab() {
                                     onChange={e => setForm({ ...form, name: e.target.value })}
                                     placeholder="server1" className="w-full px-3 py-2 text-sm"
                                     required disabled={!!editId} minLength={1}
+                                    data-autofocus={!editId ? true : undefined}
                                 />
                                 <p className="text-xs text-text-muted mt-0.5">{t('settingsMore.serverNameHint')}</p>
                             </div>
@@ -317,6 +385,7 @@ export default function ServersTab() {
                                     type="text" value={form.display_name}
                                     onChange={e => setForm({ ...form, display_name: e.target.value })}
                                     placeholder={t('settings.nameserverPlaceholder')} className="w-full px-3 py-2 text-sm"
+                                    data-autofocus={editId && editKeyStatus === 'set' ? true : undefined}
                                 />
                             </div>
                         </div>
@@ -333,23 +402,42 @@ export default function ServersTab() {
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-text-secondary mb-1">
-                                {t('settingsMore.apiKey')}{!editId ? ' *' : ''}
+                            <label htmlFor="server-api-key" className="block text-sm font-medium text-text-secondary mb-1">
+                                {t('settingsMore.apiKey')}{!editId || (editKeyStatus !== 'set' && editIsActive) ? ' *' : ''}
                             </label>
+                            {editId && editKeyStatus !== 'set' && (
+                                <div role="alert" className={`mb-2 p-3 rounded-lg border text-sm flex items-start gap-2 ${editKeyStatus === 'unreadable' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-warning/10 border-warning/30 text-warning'}`}>
+                                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                                    <div className="space-y-1">
+                                        <p>{editKeyStatus === 'unreadable' ? t('settingsMore.apiKeyUnreadableHint') : t('settingsMore.apiKeyMissingHint')}</p>
+                                        {editIsActive && <p className="text-xs">{t('settingsMore.apiKeyNotLoadedHint')}</p>}
+                                    </div>
+                                </div>
+                            )}
                             <div className="relative">
                                 <input
+                                    id="server-api-key"
                                     type={showApiKey ? 'text' : 'password'} value={form.api_key}
-                                    onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true) }}
-                                    placeholder={editId ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
+                                    onChange={e => { setForm({ ...form, api_key: e.target.value }); setApiKeyDirty(true); setApiKeyFieldHint('') }}
+                                    placeholder={editId && editKeyStatus === 'set' ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
                                     className="w-full px-3 py-2 pr-20 text-sm"
-                                    required={!editId}
+                                    required={!editId || (editKeyStatus !== 'set' && editIsActive)}
+                                    maxLength={500}
+                                    autoComplete="off"
+                                    aria-invalid={apiKeyFieldHint ? true : undefined}
+                                    aria-describedby={apiKeyFieldHint ? 'server-api-key-hint' : undefined}
+                                    data-autofocus={editId && editKeyStatus !== 'set' ? true : undefined}
                                 />
                                 <button type="button" onClick={() => setShowApiKey(!showApiKey)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
                                     {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                 </button>
                             </div>
-                            {editId && (
+                            {apiKeyFieldHint && (
+                                <p id="server-api-key-hint" className="mt-1 text-xs text-warning">{apiKeyFieldHint}</p>
+                            )}
+                            {/* "Anzeigen" nur bei lesbarem Key (unlesbar/fehlend -> Backend 409, F5 §2 D) */}
+                            {editId && editKeyStatus === 'set' && (
                                 <button
                                     type="button"
                                     onClick={handleRevealApiKey}

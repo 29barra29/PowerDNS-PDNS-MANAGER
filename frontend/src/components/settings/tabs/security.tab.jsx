@@ -1,17 +1,21 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, CheckCircle2, Eye, EyeOff, Check, Shield } from 'lucide-react'
+import { Loader2, CheckCircle2, Eye, EyeOff, Check, Shield, AlertTriangle } from 'lucide-react'
 import CaptchaWidget from '../../CaptchaWidget'
+import SecretsStatusCard from '../../SecretsStatusCard'
 import api from '../../../api'
+import { SECRET_MASK } from '../../../constants/secrets'
 import { useSettings } from '../settingsContext'
 
 // eslint-disable-next-line react-refresh/only-export-components -- Slot-Metadaten (Plan B.14)
 export const tab = { id: 'security', order: 70, labelKey: 'settings.captcha.tab', icon: Shield, adminOnly: true }
 
-// Tab "Sicherheit (Captcha)" – mechanisch aus SettingsPage.jsx 2.4.1 übernommen.
+// Tab "Sicherheit": oben die Statuskarte der Verschluesselung gespeicherter Geheimnisse (F5 §2 C, §6.4),
+// darunter Captcha (mechanisch aus SettingsPage.jsx 2.4.1 übernommen, plus Warnung bei nicht
+// entschluesselbarem Secret, F5 §2 D).
 export default function SecurityTab({ active }) {
     const { t } = useTranslation()
-    const { notify } = useSettings()
+    const { notify, setActiveTab } = useSettings()
     const setError = notify.error
     const setSuccess = notify.success
     const [captchaForm, setCaptchaForm] = useState({
@@ -19,8 +23,11 @@ export default function SecurityTab({ active }) {
         site_key: '',
         secret_key: '',
         secret_key_set: false,
+        secret_key_unreadable: false,
     })
     const [savingCaptcha, setSavingCaptcha] = useState(false)
+    // Zaehler: nach dem Speichern eines neuen Secrets die Statuskarte neu laden
+    const [secretsReload, setSecretsReload] = useState(0)
     const [showCaptchaSecret, setShowCaptchaSecret] = useState(false)
     const [captchaTestToken, setCaptchaTestToken] = useState('')
     const [captchaTestResult, setCaptchaTestResult] = useState(null)
@@ -37,6 +44,7 @@ export default function SecurityTab({ active }) {
                 site_key: data.site_key || '',
                 secret_key: '',
                 secret_key_set: !!data.secret_key_set,
+                secret_key_unreadable: data.secret_key_unreadable === true,
             })
             setCaptchaPreview({ provider: data.provider || 'none', site_key: data.site_key || '' })
             setCaptchaTestResult(null)
@@ -54,10 +62,14 @@ export default function SecurityTab({ active }) {
                 site_key: captchaForm.site_key.trim(),
                 // Leeres Secret = "nicht aendern" (das maskierte Backend-Feld kommt nicht zurueck als
                 // Plaintext, also tauschen wir hier auf "••••••••" um die Konvention beizubehalten).
-                secret_key: captchaForm.secret_key.trim() || (captchaForm.secret_key_set ? '••••••••' : ''),
+                // Ein nicht entschluesselbares Secret bleibt ebenfalls stehen (F5): sonst wuerde es still
+                // geloescht und die Warnung verschwinden, obwohl das Captcha weiter wirkungslos ist.
+                secret_key: captchaForm.secret_key.trim()
+                    || (captchaForm.secret_key_set || captchaForm.secret_key_unreadable ? SECRET_MASK : ''),
             }
             await api.updateCaptchaSettings(payload)
             setSuccess(t('settings.captcha.saveSuccess'))
+            if (payload.secret_key !== SECRET_MASK) setSecretsReload((n) => n + 1)
             setCaptchaPreview({ provider: payload.provider, site_key: payload.site_key })
             await loadCaptcha()
         } catch (err) { setError(err.message) }
@@ -90,6 +102,8 @@ export default function SecurityTab({ active }) {
 
     return (
         <div className="space-y-6">
+            <SecretsStatusCard onNavigateTab={setActiveTab} active={active} reloadKey={secretsReload} />
+
             <div className="glass-card p-6">
                 <div className="flex items-center gap-3 mb-6">
                     <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
@@ -126,6 +140,12 @@ export default function SecurityTab({ active }) {
 
                             <div>
                                 <label className="block text-sm font-medium text-text-secondary mb-1.5">{t('settings.captcha.secretKey')}</label>
+                                {captchaForm.secret_key_unreadable && (
+                                    <div role="alert" className="mb-2 p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex items-start gap-2">
+                                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+                                        <span>{t('settings.captcha.secretUnreadable')}</span>
+                                    </div>
+                                )}
                                 <div className="relative">
                                     <input
                                         type={showCaptchaSecret ? 'text' : 'password'}
