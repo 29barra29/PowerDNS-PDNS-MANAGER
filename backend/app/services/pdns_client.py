@@ -328,6 +328,9 @@ class PowerDNSClient:
     # ========================
     # DNSSEC
     # ========================
+    # Seit 3.0 (F4-B, Plan [F7]) ohne die Orchestrierung enable_dnssec/disable_dnssec/activate_cryptokey/
+    # deactivate_cryptokey: Ein-/Ausschalten und Schluesselaenderungen laufen ueber services/dnssec_service.py
+    # (Schutzregeln, Rollback, Audits); hier bleiben nur die einzelnen PowerDNS-Aufrufe.
     async def get_cryptokeys(self, zone_id: str, timeout: float = 30.0) -> list:
         """Get all DNSSEC keys for a zone."""
         return await self._request("GET", f"/zones/{zone_id}/cryptokeys", timeout=timeout)
@@ -363,59 +366,11 @@ class PowerDNSClient:
         """Get a specific DNSSEC key."""
         return await self._request("GET", f"/zones/{zone_id}/cryptokeys/{key_id}")
 
-    async def activate_cryptokey(self, zone_id: str, key_id: int) -> None:
-        """Activate a DNSSEC key."""
-        return await self._request(
-            "PUT",
-            f"/zones/{zone_id}/cryptokeys/{key_id}",
-            json_data={"active": True},
-        )
-
-    async def deactivate_cryptokey(self, zone_id: str, key_id: int) -> None:
-        """Deactivate a DNSSEC key."""
-        return await self._request(
-            "PUT",
-            f"/zones/{zone_id}/cryptokeys/{key_id}",
-            json_data={"active": False},
-        )
-
     async def delete_cryptokey(self, zone_id: str, key_id: int) -> None:
         """Delete a DNSSEC key."""
         return await self._request(
             "DELETE", f"/zones/{zone_id}/cryptokeys/{key_id}"
         )
-
-    async def enable_dnssec(
-        self,
-        zone_id: str,
-        algorithm: str = "ECDSAP256SHA256",
-        nsec3param: str = "1 0 1 ab",
-    ) -> dict:
-        """Enable DNSSEC for a zone by creating a CSK (Combined Signing Key)."""
-        # Create a CSK (automatically creates KSK+ZSK)
-        key_data = {
-            "keytype": "csk",
-            "active": True,
-            "algorithm": algorithm,
-        }
-        result = await self.add_cryptokey(zone_id, key_data)
-        
-        # Set NSEC3 parameters
-        await self.update_zone(zone_id, {
-            "nsec3param": nsec3param,
-            "api_rectify": True,
-        })
-        
-        # Rectify zone
-        await self.rectify_zone(zone_id)
-        
-        return result
-
-    async def disable_dnssec(self, zone_id: str) -> None:
-        """Disable DNSSEC for a zone by removing all crypto keys."""
-        keys = await self.get_cryptokeys(zone_id)
-        for key in keys:
-            await self.delete_cryptokey(zone_id, key["id"])
 
     # ========================
     # Metadata

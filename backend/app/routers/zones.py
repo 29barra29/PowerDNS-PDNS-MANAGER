@@ -6,7 +6,12 @@ laufen in der Request-Session (``DbWrite``: Commit vor der Antwort), Webhook-Ere
 (``await enqueue_event``), danach wird der Zonen-Index fuer DynDNS/PTR verworfen (``zone_index.invalidate``).
 
 NOTIFY und Export (F2) werden auditiert (``ZONE_NOTIFY``, ``ZONE_EXPORT``); PowerDNS-Fehler kommen als lesbare,
-deutsche Texte zurueck. Nach dem Anlegen setzt ``_update_zone_soa_and_dnssec`` nur mname/rname des SOA (F0, [D13]).
+deutsche Texte zurueck. Nach dem Anlegen setzt ``_update_zone_soa`` nur mname/rname des SOA (F0, [D13]).
+
+DNSSEC beim Anlegen (F4 5.7, Plan [F7]): ``dnssec_service.enable_dnssec_on_new_zone`` nur auf dem **ersten** Server,
+auf dem die Zone tatsaechlich angelegt wurde (``created``). Weitere angelegte Server haben eine eigene Datenbank und
+bekommen ``created; dnssec-skipped`` (keine abweichenden Schluessel je Server); bei ``synced`` (409, gemeinsame
+Datenbank) passiert nichts. Scheitert DNSSEC, bleibt die Zone angelegt: ``created; dnssec-error: <text>``.
 """
 import logging
 import re
@@ -28,13 +33,14 @@ from app.core.auth import (
     is_effective_admin,
 )
 from app.core.database import DbRead, DbWrite
-from app.services import fanout, zone_index
+from app.services import dnssec_service, fanout, zone_index
 from app.services.audit import write_audit
 from app.services.pdns_client import pdns_manager, PowerDNSAPIError
 from app.schemas.dns import (
     ZoneCreate, ZoneUpdate, ZoneResponse, ZoneListResponse,
     ZoneImport, MessageResponse,
 )
+from app.schemas.dnssec import DNSSECEnable
 from app.models.models import AuditLog, User, UserZoneAccess, ServerConfig
 
 logger = logging.getLogger(__name__)
@@ -158,8 +164,12 @@ def build_created_zone_soa(current_content: Optional[str], zone_name: str, names
     return f"{mname} {rname} {serial} {' '.join(timers)}"
 
 
-async def _update_zone_soa_and_dnssec(client, server_name: str, zone_name: str, zone_data: ZoneCreate):
-    """Update SOA (mname/rname, F0) and optionally enable DNSSEC after zone creation. Logs warnings on failure."""
+async def _update_zone_soa(client, server_name: str, zone_name: str, zone_data: ZoneCreate):
+    """SOA nach dem Anlegen setzen (mname/rname, F0 [D13]). Fehler werden nur geloggt (die Zone existiert ja).
+
+    Der DNSSEC-Teil (2.4.1: ``client.enable_dnssec``) ist entfallen; DNSSEC richtet ``create_zone`` ueber
+    ``dnssec_service.enable_dnssec_on_new_zone`` ein (F4 5.7).
+    """
     try:
         zone_details = await client.get_zone(zone_name)
         soa_rrset = next((rr for rr in zone_details.get("rrsets", []) if rr.get("type") == "SOA"), None)
@@ -174,11 +184,19 @@ async def _update_zone_soa_and_dnssec(client, server_name: str, zone_name: str, 
                 )
     except Exception as e:
         logger.warning(f"Failed to update SOA for {zone_name} on {server_name}: {e}")
-    if zone_data.enable_dnssec:
-        try:
-            await client.enable_dnssec(zone_name)
-        except Exception as e:
-            logger.warning(f"DNSSEC enable failed for {zone_name} on {server_name}: {e}")
+
+
+# Ergebnis-Werte je Server bei DNSSEC beim Anlegen (UI-Vertrag ZonesPage, F4 2.10)
+DNSSEC_ERROR_PREFIX = "created; dnssec-error: "
+DNSSEC_SKIPPED = "created; dnssec-skipped"
+
+
+def _dnssec_create_details(opts: DNSSECEnable, dnssec_server: Optional[str], *, skipped: bool = False) -> dict:
+    """``details.dnssec`` des Zonen-``CREATE``-Audits (F4 5.7): Optionen ohne das Legacy-Feld ``nsec3param``."""
+    out = {"enabled": True, "server": dnssec_server, "options": opts.model_dump(exclude={"nsec3param"})}
+    if skipped:
+        out["skipped"] = True
+    return out
 
 
 def _allow_writes_column():
@@ -235,17 +253,34 @@ async def create_zone(
     if zone_data.masters:
         payload["masters"] = zone_data.masters
 
+    dnssec_opts: Optional[DNSSECEnable] = None
+    if zone_data.enable_dnssec:
+        dnssec_opts = zone_data.dnssec_options or DNSSECEnable()
+    # Erster Server, auf dem die Zone tatsaechlich angelegt wurde -> dort (und nur dort) DNSSEC (F4 5.7)
+    dnssec_server: Optional[str] = None
+    dnssec_client = None
+    dnssec_skipped: list[str] = []
+
     first_audit: Optional[AuditLog] = None
     for server_name in target_servers:
         try:
             client = pdns_manager.get_client(server_name)
             await client.create_zone(payload)
-            await _update_zone_soa_and_dnssec(client, server_name, zone_name, zone_data)
+            await _update_zone_soa(client, server_name, zone_name, zone_data)
             results[server_name] = "created"
+            dnssec_details = False
+            if dnssec_opts is not None:
+                if dnssec_server is None:
+                    dnssec_server, dnssec_client = server_name, client
+                    dnssec_details = _dnssec_create_details(dnssec_opts, dnssec_server)
+                else:
+                    # eigene Datenbank: keine zweiten, abweichenden Schluessel (Abgleich manuell, Doku Multi-Server)
+                    dnssec_skipped.append(server_name)
+                    dnssec_details = _dnssec_create_details(dnssec_opts, dnssec_server, skipped=True)
             audit = await _log_action(db, "CREATE", zone_name, server_name, {
                 "kind": zone_data.kind,
                 "nameservers": zone_data.nameservers,
-                "dnssec": zone_data.enable_dnssec,
+                "dnssec": dnssec_details,
             }, user_id=admin.id)
             first_audit = first_audit or audit
         except PowerDNSAPIError as e:
@@ -266,6 +301,7 @@ async def create_zone(
     if any(v in ("created", "synced") for v in results.values()):
         zone_index.invalidate()
         from app.services.webhook_outbox import enqueue_event
+        # zone.created vor dnssec.enabled (Reihenfolge der Ereignisse fuer Empfaenger)
         await enqueue_event(
             db, "zone.created", actor=admin, zone=zone_name,
             data={
@@ -277,6 +313,16 @@ async def create_zone(
             },
             audit_log_id=first_audit.id if first_audit else None,
         )
+
+    if dnssec_server is not None:
+        # Audit DNSSEC_ENABLE (source=zone_create) und Ereignis dnssec.enabled bzw. Fehler-Audit schreibt der Dienst
+        dnssec_error = await dnssec_service.enable_dnssec_on_new_zone(
+            db, dnssec_client, dnssec_server, zone_name, dnssec_opts, admin,
+        )
+        if dnssec_error is not None:
+            results[dnssec_server] = f"{DNSSEC_ERROR_PREFIX}{dnssec_error}"
+        for server_name in dnssec_skipped:
+            results[server_name] = DNSSEC_SKIPPED
 
     return MessageResponse(
         message=f"Zone '{zone_name}' creation completed",
