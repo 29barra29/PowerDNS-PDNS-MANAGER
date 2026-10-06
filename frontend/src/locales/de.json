@@ -75,7 +75,8 @@
       "notAllowed": "Dein Konto ist nicht für dieses Panel freigegeben (fehlende Gruppenmitgliedschaft).",
       "state": "Die Anmeldung ist abgelaufen oder wurde in einem anderen Fenster gestartet. Bitte starte sie erneut.",
       "token": "Die Anmeldung konnte nicht abgeschlossen werden (Code-Einlösung fehlgeschlagen). Bitte versuche es erneut oder informiere den Administrator.",
-      "totp_unreadable": "Die Anmeldung war erfolgreich, aber das 2FA-Geheimnis deines Kontos kann nicht entschlüsselt werden. Bitte einen Administrator, die 2FA zurückzusetzen."
+      "totp_unreadable": "Die Anmeldung war erfolgreich, aber das 2FA-Geheimnis deines Kontos kann nicht entschlüsselt werden. Bitte einen Administrator, die 2FA zurückzusetzen.",
+      "rateLimited": "Zu viele fehlgeschlagene SSO-Anmeldeversuche. Bitte versuche es in einigen Minuten erneut."
     },
     "ssoRedirecting": "Weiterleitung zum Anmeldedienst …"
   },
@@ -1879,8 +1880,6 @@
     "previewSubtitle": "Zone {{zone}} auf Server {{server}}",
     "previewTitle": "Vorschau der Änderungen",
     "ptrDeleteHint": "Der passende PTR wird ebenfalls entfernt, sofern er auf diesen Namen zeigt.",
-    "ptrProblems": "PTR-Pflege: {{count}} Einträge mit Hinweis – Details im Verlauf der Reverse-Zone.",
-    "ptrUpdated": "PTR-Einträge aktualisiert: {{count}}.",
     "refreshPreview": "Vorschau neu laden",
     "removalWarning": "Achtung: {{values}} bestehende Werte werden entfernt und {{rrsets}} RRsets gelöscht.",
     "selectAll": "Alle {{type}}-Einträge auswählen",

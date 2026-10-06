@@ -75,7 +75,8 @@
       "notAllowed": "A fiókod nincs engedélyezve ehhez a panelhez (hiányzó csoporttagság).",
       "state": "A bejelentkezés lejárt, vagy egy másik ablakban indult. Kérlek, kezdd újra.",
       "token": "A bejelentkezést nem sikerült befejezni (a kód beváltása sikertelen). Próbáld újra, vagy értesítsd a rendszergazdát.",
-      "totp_unreadable": "A bejelentkezés sikerült, de a fiókod 2FA-titka nem fejthető vissza. Kérd meg a rendszergazdát, hogy állítsa vissza a 2FA-t."
+      "totp_unreadable": "A bejelentkezés sikerült, de a fiókod 2FA-titka nem fejthető vissza. Kérd meg a rendszergazdát, hogy állítsa vissza a 2FA-t.",
+      "rateLimited": "Túl sok sikertelen SSO-bejelentkezési kísérlet. Kérlek, próbáld újra néhány perc múlva."
     },
     "ssoRedirecting": "Átirányítás a bejelentkezési szolgáltatáshoz …"
   },
@@ -1879,8 +1880,6 @@
     "previewSubtitle": "{{zone}} zóna a(z) {{server}} szerveren",
     "previewTitle": "Változások előnézete",
     "ptrDeleteHint": "A hozzá tartozó PTR is törlődik, ha erre a névre mutat.",
-    "ptrProblems": "PTR-karbantartás: {{count}} bejegyzés megjegyzéssel – részletek a fordított zóna előzményeiben.",
-    "ptrUpdated": "Frissített PTR rekordok: {{count}}.",
     "refreshPreview": "Előnézet újratöltése",
     "removalWarning": "Figyelem: {{values}} meglévő érték eltávolításra és {{rrsets}} RRset törlésre kerül.",
     "selectAll": "Összes {{type}} rekord kijelölése",

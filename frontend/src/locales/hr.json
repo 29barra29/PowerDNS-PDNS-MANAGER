@@ -75,7 +75,8 @@
       "notAllowed": "Vaš račun nije odobren za ovaj panel (nedostaje članstvo u grupi).",
       "state": "Prijava je istekla ili je pokrenuta u drugom prozoru. Pokrenite je ponovno.",
       "token": "Prijava nije mogla biti dovršena (razmjena kôda nije uspjela). Pokušajte ponovno ili obavijestite administratora.",
-      "totp_unreadable": "Prijava je uspjela, ali 2FA tajna vašeg računa ne može se dešifrirati. Zamolite administratora da poništi 2FA."
+      "totp_unreadable": "Prijava je uspjela, ali 2FA tajna vašeg računa ne može se dešifrirati. Zamolite administratora da poništi 2FA.",
+      "rateLimited": "Previše neuspjelih SSO pokušaja prijave. Pokušajte ponovno za nekoliko minuta."
     },
     "ssoRedirecting": "Preusmjeravanje na uslugu za prijavu …"
   },
@@ -1895,8 +1896,6 @@
     "previewSubtitle": "Zona {{zone}} na poslužitelju {{server}}",
     "previewTitle": "Pregled promjena",
     "ptrDeleteHint": "Odgovarajući PTR također se uklanja ako pokazuje na ovo ime.",
-    "ptrProblems": "Održavanje PTR-a: {{count}} unosa s napomenom – pojedinosti u povijesti obrnute zone.",
-    "ptrUpdated": "Ažurirani PTR zapisi: {{count}}.",
     "refreshPreview": "Ponovno učitaj pregled",
     "removalWarning": "Pozor: {{values}} postojećih vrijednosti bit će uklonjeno i {{rrsets}} RRsetova izbrisano.",
     "selectAll": "Odaberi sve {{type}} zapise",

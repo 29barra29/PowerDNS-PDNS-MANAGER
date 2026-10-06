@@ -75,7 +75,8 @@
       "notAllowed": "Your account is not authorized for this panel (missing group membership).",
       "state": "The sign-in has expired or was started in another window. Please start again.",
       "token": "The sign-in could not be completed (code exchange failed). Please try again or inform your administrator.",
-      "totp_unreadable": "Sign-in succeeded, but the 2FA secret of your account cannot be decrypted. Please ask an administrator to reset your 2FA."
+      "totp_unreadable": "Sign-in succeeded, but the 2FA secret of your account cannot be decrypted. Please ask an administrator to reset your 2FA.",
+      "rateLimited": "Too many failed single sign-on attempts. Please try again in a few minutes."
     },
     "ssoRedirecting": "Redirecting to the sign-in service …"
   },
@@ -1879,8 +1880,6 @@
     "previewSubtitle": "Zone {{zone}} on server {{server}}",
     "previewTitle": "Preview of changes",
     "ptrDeleteHint": "The matching PTR is removed as well if it points to this name.",
-    "ptrProblems": "PTR maintenance: {{count}} entries with notes – see the history of the reverse zone for details.",
-    "ptrUpdated": "PTR records updated: {{count}}.",
     "refreshPreview": "Reload preview",
     "removalWarning": "Warning: {{values}} existing values will be removed and {{rrsets}} RRsets deleted.",
     "selectAll": "Select all {{type}} records",
