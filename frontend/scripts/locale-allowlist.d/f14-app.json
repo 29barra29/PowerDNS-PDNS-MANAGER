@@ -1,0 +1,6 @@
+{
+  "reason": "WS-F14-APP: Spaltenkoepfe 'Name' und 'Status' sowie das Badge 'Admin' der Panel-Token-Liste sind im Deutschen identisch mit en (etablierte Begriffe, F14 6.6)",
+  "perLanguage": {
+    "de": ["panelTokens.colName", "panelTokens.colStatus", "panelTokens.adminBadge"]
+  }
+}
