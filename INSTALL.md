@@ -579,7 +579,7 @@ Ablauf:
 ### Manuell
 
 ```bash
-( umask 077; docker exec dns-manager-db sh -c 'mysqldump --single-transaction -u root -p"$MARIADB_ROOT_PASSWORD" dns_manager' > backup_$(date +%Y%m%d).sql )
+( umask 077; docker exec dns-manager-db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump --single-transaction -u root dns_manager' > backup_$(date +%Y%m%d).sql )   # aeltere Images: mysqldump statt mariadb-dump
 git fetch origin --tags --force --prune
 git checkout v3.0.0                 # gewünschtes Release-Tag, oder: git checkout main && git pull
 docker compose build --no-cache backend
@@ -714,9 +714,9 @@ Die PowerDNS-Daten selbst sichert das Panel nicht – sie liegen in den Backends
 ### Backup erstellen
 
 ```bash
-# Datenbank (Root-Passwort aus dem Container-Environment; ein nacktes -p würde ohne Terminal
-# ein leeres Backup schreiben). ./update.sh bietet den Dump auch an.
-( umask 077; docker exec dns-manager-db sh -c 'mysqldump --single-transaction -u root -p"$MARIADB_ROOT_PASSWORD" dns_manager' > backup.sql )
+# Datenbank (Root-Passwort aus dem Container-Environment ueber MYSQL_PWD, damit es nicht in der
+# Prozessliste steht). Das MariaDB-11-Image hat nur mariadb-dump. ./update.sh bietet den Dump auch an.
+( umask 077; docker exec dns-manager-db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump --single-transaction -u root dns_manager' > backup.sql )   # aeltere Images: mysqldump statt mariadb-dump
 
 # Schlüssel (falls er nicht in der .env steht)
 ./update.sh --backup-key-only

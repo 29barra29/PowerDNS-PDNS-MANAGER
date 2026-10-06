@@ -632,7 +632,7 @@ Branding-Rename und Härtung der Installations-/Update-Skripte. **Kein Schema-Br
 **update.sh**
 
 - **`--no-cache` nur noch bei tatsächlichem Versionswechsel** oder explizitem `--rebuild`-Flag. Spart 3-5 min bei Patch-Updates ohne Dependency-Änderung.
-- **DB-Backup-Frage vor jedem Update** (überspringbar mit `--no-backup`). Schreibt `backup_<version>_<ts>.sql` via `mysqldump --single-transaction` direkt in den Repo-Ordner.
+- **DB-Backup-Frage vor jedem Update** (überspringbar mit `--no-backup`). Schreibt `backup_<version>_<ts>.sql` via `mariadb-dump --single-transaction` (ältere Images: `mysqldump`) direkt in den Repo-Ordner.
 - **Major-Version-Sprung wird gemeldet** mit roter Warn-Box und aktiver Bestätigung – verhindert versehentliche Migrationen ohne Changelog-Lektüre.
 - **Generische Compose-Statusliste** statt hartkodiertem `name=dns-manager`-Filter.
 - `git fetch` bewusst **ohne `--prune-tags`** – lokale Maintainer-Tags überleben.

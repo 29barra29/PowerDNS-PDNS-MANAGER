@@ -351,11 +351,18 @@ if ! $SKIP_BACKUP && [ -f .env ]; then
             if [ -z "$DB_CID" ]; then
                 echo "ℹ️  MariaDB-Container läuft nicht – Backup übersprungen."
             else
-                echo "→ Schreibe $BACKUP_FILE …"
+                # Das MariaDB-11-Image bringt nur noch mariadb-dump mit (kein mysqldump mehr);
+                # aeltere Images haben mysqldump. Im Container nachsehen, was es gibt.
+                DUMP_BIN=$($DOCKER_CMD exec "$DB_CID" sh -c 'command -v mariadb-dump || command -v mysqldump' 2>/dev/null | tail -n 1)
+                if [ -z "$DUMP_BIN" ]; then
+                    echo "⚠️  Kein Dump-Programm (mariadb-dump/mysqldump) im DB-Container gefunden – Backup übersprungen."
+                    echo "    Bitte vor dem Update manuell sichern (siehe INSTALL.md → Backup)."
+                else
+                echo "→ Schreibe $BACKUP_FILE (mit $(basename "$DUMP_BIN")) …"
                 # Passwort per Umgebungsvariable statt als -p-Argument, damit es nicht in der
                 # Prozessliste (ps / /proc) des Containers auftaucht.
                 # umask 077: der Dump enthaelt Passwort-Hashes und (vor 3.0) Geheimnisse im Klartext.
-                if ( umask 077; $DOCKER_CMD exec -e MYSQL_PWD="$DB_ROOT_PW" "$DB_CID" mysqldump --single-transaction --quick \
+                if ( umask 077; $DOCKER_CMD exec -e MYSQL_PWD="$DB_ROOT_PW" "$DB_CID" "$DUMP_BIN" --single-transaction --quick \
                         -u root "$DB_NAME_VAL" > "$BACKUP_FILE" 2>/dev/null ); then
                     chmod 600 "$BACKUP_FILE" 2>/dev/null || true
                     SIZE=$(du -h "$BACKUP_FILE" 2>/dev/null | cut -f1 || echo "?")
@@ -364,6 +371,7 @@ if ! $SKIP_BACKUP && [ -f .env ]; then
                 else
                     echo "⚠️  Backup fehlgeschlagen (DB-Login? Container healthy?). Datei wird entfernt."
                     rm -f "$BACKUP_FILE"
+                fi
                 fi
             fi
         fi
