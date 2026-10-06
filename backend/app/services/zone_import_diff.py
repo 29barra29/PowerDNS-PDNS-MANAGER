@@ -160,16 +160,18 @@ def normalize_passthrough_content(rtype: str, content: str) -> str:
 
 
 def _record_type_token(ll: LogicalLine) -> Optional[Tuple[int, str]]:
-    """(Token-Index, Typ gross) einer RR-Zeile: Owner (ohne fuehrenden Leerraum), dann bis zu zwei TTL-/Klassen-
-    Tokens, dann der Typ. ``None`` fuer leere Zeilen und Direktiven (``$ORIGIN`` usw.)."""
+    """(Token-Index, Typ gross) einer RR-Zeile: Owner (ohne fuehrenden Leerraum), dann beliebig viele TTL-/Klassen-
+    Tokens, dann der Typ. ``None`` fuer leere Zeilen und Direktiven (``$ORIGIN`` usw.).
+
+    PowerDNS ueberspringt beliebig viele ``IN`` (``www 300 IN IN LUA …`` ist dort ein LUA-Record); frueher zaehlte
+    der Scanner hoechstens zwei Tokens und meldete dann ``IN`` als Typ (Review Welle 3).
+    """
     if not ll.text or ll.text.startswith("$"):
         return None
     toks = _TOKEN_RE.findall(ll.text)
     k = 0 if ll.leading_ws else 1
-    skipped = 0
-    while k < len(toks) and skipped < 2 and (_TTL_RE.fullmatch(toks[k]) or _CLASS_RE.fullmatch(toks[k])):
+    while k < len(toks) and (_TTL_RE.fullmatch(toks[k]) or _CLASS_RE.fullmatch(toks[k])):
         k += 1
-        skipped += 1
     if k >= len(toks):
         return None
     return k, toks[k].upper()
@@ -251,14 +253,9 @@ def rewrite_passthrough_records(content: str, zone_name: str) -> Tuple[str, List
 _PASSTHROUGH_TOKENS = {**{t: t for t in PASSTHROUGH_TYPE_CODES}, **_GENERIC_TO_PASSTHROUGH}
 
 
-def count_passthrough_records(content: str) -> Dict[str, int]:
-    """``{"LUA": n, "ALIAS": m}`` einer Zonendatei fuer das Import-Gate (F15 3.6; wirft nie).
-
-    Bewusst grosszuegig: zaehlt auch Zeilen mit Klammerfehlern, die Generic-Schreibweise ``TYPE65402`` und
-    ``$GENERATE``-Vorlagen mit LUA/ALIAS – das Gate darf keinen Weg offen lassen, auf dem PowerDNS trotz
-    deaktivierter Policy LUA-Records anlegt.
-    """
-    out = {t: 0 for t in PASSTHROUGH_TYPE_CODES}
+def _passthrough_hits(content: str) -> List[Tuple[int, str]]:
+    """``[(erste physische Zeile, "LUA"|"ALIAS")]`` nach dem Panel-Scanner (logische Zeilen; wirft nie)."""
+    out: List[Tuple[int, str]] = []
     try:
         logical = split_logical_lines(content or "")
     except Exception:  # noqa: BLE001
@@ -268,7 +265,7 @@ def count_passthrough_records(content: str) -> Dict[str, int]:
             for tok in _TOKEN_RE.findall(ll.text)[2:]:
                 t = _PASSTHROUGH_TOKENS.get(tok.upper())
                 if t:
-                    out[t] += 1
+                    out.append((ll.start, t))
                     break
             continue
         hit = _record_type_token(ll)
@@ -276,8 +273,149 @@ def count_passthrough_records(content: str) -> Dict[str, int]:
             continue
         t = _PASSTHROUGH_TOKENS.get(hit[1])
         if t:
-            out[t] += 1
+            out.append((ll.start, t))
     return out
+
+
+def count_passthrough_records(content: str) -> Dict[str, int]:
+    """``{"LUA": n, "ALIAS": m}`` einer Zonendatei (Vorschau-Zaehler, F15 3.6; wirft nie).
+
+    Zaehlt auch Zeilen mit Klammerfehlern, die Generic-Schreibweise ``TYPE65402`` und ``$GENERATE``-Vorlagen mit
+    LUA/ALIAS. Das Import-Gate bei Policy ``disabled`` nutzt zusaetzlich ``lua_gate_lines`` (PowerDNS-Sicht).
+    """
+    out = {t: 0 for t in PASSTHROUGH_TYPE_CODES}
+    for _, t in _passthrough_hits(content):
+        out[t] += 1
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Import-Gate bei Policy "disabled" (F15 3.6; Review Welle 3)
+# ---------------------------------------------------------------------------
+# Der Panel-Scanner oben deutet die Zeilenstruktur wie BIND (verschachtelte Klammern ueber Zeilen, Quotes).
+# PowerDNS (ZoneParserTNG, mit pdnsutil 4.9 nachgeprueft) liest den Kopf eines Records anders: nur die erste
+# physische Zeile, Tokens nur an Leerzeichen/Tab getrennt (Quotes egal, ``"x`` ist ein gueltiger Owner),
+# beliebig viele ``IN``, eine TTL; die API trennt Zeilen an ``\n`` und ``\r``; Klammern wirken erst im Inhalt.
+# Der Typ wird case-insensitiv erkannt, ``TYPE`` + Zahl ueber ``stoll`` (fuehrende Nullen, ``+``, Leerraum und
+# Text nach der Zahl erlaubt: ``TYPE065402x`` ist LUA). ``$GENERATE`` ersetzt ``$``/``${…}`` auch im Typ
+# (``LU${9,1,X}`` ergibt ``LUA``), ``$INCLUDE`` liest eine Datei auf dem PowerDNS-Server.
+# ``lua_gate_lines`` vereinigt deshalb drei Sichten und meldet lieber zu viel als zu wenig (Fehlalarme treffen
+# nur Policy ``disabled``): (a) PowerDNS-Kopf je physischer Zeile (beide Tokenisierungen, Owner-Frage im
+# Zweifel beidseitig, Uebermenge der uebersprungenen TTL-/Klassen-Tokens), (b) jedes Token ausserhalb von
+# Quotes und Kommentaren ausser dem Owner, (c) der Panel-Scanner (``_passthrough_hits``).
+MAX_GATE_LINES = 50
+_GATE_TYPE_RE = re.compile(r"LUA|TYPE\s*\+?0*65402(?:\D.*)?", re.I | re.S)
+_GATE_SKIP_RE = re.compile(r"[0-9smhdw]+|IN|CH|HS|CS|ANY|NONE|CLASS\d+", re.I)
+_PDNS_TOKEN_RE = re.compile(r"[^ \t]+")
+
+
+def _gate_head_hit(tokens: List[str], start: int, *, template: bool = False) -> bool:
+    """Kopf ab ``tokens[start]``: TTL-/Klassen-Tokens ueberspringen, dann ist das naechste Token der Typ.
+
+    ``template=True`` ($GENERATE): jedes Token mit ``$`` kann zu LUA expandieren -> Treffer.
+    """
+    for tok in tokens[start:]:
+        semi = tok.find(";")
+        if semi == 0:
+            return False
+        if semi > 0:
+            tok = tok[:semi]
+        if template and "$" in tok:
+            return True
+        if _GATE_TYPE_RE.fullmatch(tok):
+            return True
+        if semi > 0 or not _GATE_SKIP_RE.fullmatch(tok):
+            return False
+    return False
+
+
+def _gate_pdns_head(line: str) -> bool:
+    """Sicht (a): Kopf einer physischen Zeile wie ZoneParserTNG, mit Uebermengen an den Unsicherheitsstellen."""
+    if not line:
+        return False
+    if line[0] == "$":
+        toks = line.split()
+        cmd = toks[0].upper()
+        if cmd == "$INCLUDE":
+            return True  # Inhalt der eingebundenen Datei ist nicht pruefbar
+        if cmd == "$GENERATE":
+            # $GENERATE <range> <lhs> [ttl] [class] <type> <rhs>; lhs wird zum Owner
+            return any(_gate_head_hit(t, 3, template=True) for t in (toks, _PDNS_TOKEN_RE.findall(line)))
+        return False
+    if line[0] in " \t":
+        starts: Tuple[int, ...] = (0,)  # Owner vom Vorgaenger
+    elif line[0].isspace():
+        starts = (0, 1)  # \v, \f, Unicode-Leerraum: PowerDNS sieht hier ggf. einen Owner
+    else:
+        starts = (1,)
+    for toks in (_PDNS_TOKEN_RE.findall(line), line.split()):
+        if not toks or toks[0].startswith(";"):
+            continue
+        if any(_gate_head_hit(toks, k) for k in starts):
+            return True
+    return False
+
+
+def _gate_unquoted_tokens(line: str) -> bool:
+    """Sicht (b): irgendein Token ausserhalb von Quotes/Kommentaren (ohne Owner) ist ``LUA``/``TYPE65402``."""
+    if not line or line[0] == "$":
+        return False
+    buf: List[str] = []
+    in_quote = False
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            if not in_quote:
+                buf.append(line[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            in_quote = not in_quote
+            buf.append(" ")
+        elif not in_quote:
+            if c == ";":
+                break
+            buf.append(c)
+        i += 1
+    text = "".join(buf)
+    owner = 0 if line[0].isspace() else 1
+    for variant in (re.sub(r"[()]", " ", text), re.sub(r"[()]", "", text)):
+        toks = variant.split()
+        if any(_GATE_TYPE_RE.fullmatch(t) for t in toks[owner:]):
+            return True
+    return False
+
+
+def lua_gate_lines(content: str) -> List[int]:
+    """Zeilennummern (1-basiert, an ``\n`` gezaehlt), die bei Policy ``disabled`` den Import sperren (wirft nie).
+
+    Leere Liste = PowerDNS legt aus dieser Datei keinen LUA-Record an. Laufzeit linear in der Dateilaenge.
+    """
+    text = content if isinstance(content, str) else str(content or "")
+    hits: Set[int] = set()
+    for no, raw in enumerate(text.split("\n"), start=1):
+        line = raw.rstrip(" \t\r\n\x1a")
+        variants = [line]
+        if "\r" in line:
+            variants.extend(line.split("\r"))  # die PowerDNS-API trennt Zeilen auch an \r
+        for v in variants:
+            if _gate_pdns_head(v) or _gate_unquoted_tokens(v):
+                hits.add(no)
+                break
+    panel = [no for no, t in _passthrough_hits(text) if t == "LUA"]
+    if panel:
+        # Panel-Scanner zaehlt Zeilen mit str.splitlines() (auch \r, \v, \f, \u2028 …) -> auf \n-Zaehlung abbilden
+        to_nl: List[int] = []
+        nl = 1
+        for part in text.splitlines(keepends=True):
+            to_nl.append(nl)
+            if part.endswith("\n"):
+                nl += 1
+        for no in panel:
+            hits.add(to_nl[no - 1] if 0 < no <= len(to_nl) else nl)
+    return sorted(hits)
 
 
 def lua_issues(found: List[PassthroughLine]) -> List[Dict[str, Any]]:

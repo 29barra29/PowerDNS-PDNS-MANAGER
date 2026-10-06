@@ -926,7 +926,12 @@ export default function ZonesPage() {
                                         </div>
                                     )}
                                     {imPreview.lua_blocked && (
-                                        <p className="text-danger font-medium" role="alert">{t('lua.import.blocked')}</p>
+                                        <div className="text-danger" role="alert">
+                                            <p className="font-medium">{t('lua.import.blocked')}</p>
+                                            {imPreview.lua_blocked_lines?.length > 0 && (
+                                                <p>{t('lua.import.blockedLines', { lines: imPreview.lua_blocked_lines.join(', ') })}</p>
+                                            )}
+                                        </div>
                                     )}
                                 </div>
                             )}

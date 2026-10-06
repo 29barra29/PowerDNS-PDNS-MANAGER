@@ -8,8 +8,8 @@ Neuinstallation:
   per DNS mit der Adresse aus dem Lua-Code (echte Auswertung). Ungueltiger Inhalt und ``TYPE65402`` -> 422.
 - Export -> Import-Vorschau: LUA-Zeile wird verstanden, keine Schein-Unterschiede (``lua_count`` = 1).
 - Policy ``admin``: Nicht-Admin mit Zonenrecht -> 403 (vor jedem PowerDNS-Zugriff), Policy ``manage`` -> erlaubt.
-- Policy ``disabled``: Anlegen 403 (auch Admin), Import-Vorschau ``lua_blocked``, Import 403 ohne Zone, Loeschen
-  bleibt erlaubt; ``LUA_SETTINGS_UPDATE`` im Audit-Log (from/to).
+- Policy ``disabled``: Anlegen 403 (auch Admin), Import-Vorschau ``lua_blocked``/``lua_blocked_lines``, Import 403
+  ohne Zone (auch ``IN IN LUA``), Loeschen bleibt erlaubt; ``LUA_SETTINGS_UPDATE`` im Audit-Log (from/to).
 Upgrade: kein ``lua_records_policy``-Key -> ``admin``; ``alice`` (alpha=manage) darf keinen LUA-Record anlegen,
 sieht aber den Server-Status; Admin legt in einer eigenen Zone einen LUA-Record an, der per DNS antwortet.
 """
@@ -174,9 +174,17 @@ def check_fresh(ctx) -> None:
                    f"@ 3600 IN NS ns1.e2e.test.\nwww 60 IN LUA {_lua('192.0.2.80')}\n")
         p = ctx.api("POST", "zones/import/preview", json={"name": imp_zone, "content": content}, expect=200).json()
         ctx.check(p["lua_blocked"] is True and p["lua_count"] == 1, f"Vorschau: {p}")
+        ctx.eq(p.get("lua_blocked_lines"), [4], "Vorschau: gesperrte Zeilen")
         r = ctx.api("POST", "zones/import", json={"name": imp_zone, "content": content,
                                                   "nameservers": ["ns1.e2e.test."]}, expect=403)
-        ctx.eq(r.json().get("detail"), MSG_IMPORT_BLOCKED, "Import-403")
+        ctx.eq(r.json().get("detail"), f"{MSG_IMPORT_BLOCKED} Betroffene Zeilen: 4.", "Import-403")
+        # Varianten, die PowerDNS als LUA liest, der fruehere Panel-Zaehler aber nicht (Review Welle 3)
+        for variant in (f"www 60 IN IN LUA {_lua('192.0.2.81')}", f"www IN 60 IN LUA {_lua('192.0.2.82')}"):
+            alt = content.replace(f"www 60 IN LUA {_lua('192.0.2.80')}", variant)
+            p = ctx.api("POST", "zones/import/preview", json={"name": imp_zone, "content": alt}, expect=200).json()
+            ctx.check(p["lua_blocked"] is True and p.get("lua_blocked_lines") == [4], f"Vorschau ({variant}): {p}")
+            ctx.api("POST", "zones/import", json={"name": imp_zone, "content": alt,
+                                                  "nameservers": ["ns1.e2e.test."]}, expect=403)
         for srv in ctx.pdns.servers:
             ctx.check(ctx.pdns.zone(srv, imp_zone) is None, f"Zone trotz Sperre auf {srv} angelegt")
         ctx.api("DELETE", f"records/ns1/{_z(zone)}/delete",

@@ -174,6 +174,89 @@ def test_count_passthrough_never_raises_and_is_conservative():
     assert zid.count_passthrough_records("lua IN A 192.0.2.1\n")["LUA"] == 0
 
 
+# --------------------------------------------------------------------------- 8b: Import-Gate aus PowerDNS-Sicht
+# Review Welle 3: PowerDNS (ZoneParserTNG) liest den Record-Kopf anders als der Panel-Scanner. Jede Zeile der
+# Liste HITS hat PowerDNS 4.9 (pdnsutil load-zone, enable-lua-records=yes) als LUA-Record angelegt; die Kopfzeile
+# ist die letzte Zeile der Eintraege (HEADER hat 4 Zeilen, der erste Eintrag beginnt in Zeile 5).
+GATE_HITS = [
+    "www 300 IN IN LUA A \"ifportup(443, {'192.0.2.1'})\"",
+    'www IN 300 IN LUA A "x"',
+    'b 3600 IN TXT ( "y" ( "z" )\nwww 300 IN LUA A "x"',  # Klammer: PowerDNS verbindet nur bis zur ersten ")"
+    'www 300 in lua A "x"',
+    'www 300 IN TYPE065402 A "x"',
+    'www 300 IN TYPE65402x A "x"',
+    'www 300 IN TYPE+65402 A "x"',
+    'www 300 IN type65402 A "x"',
+    'www 300 IN TYPE\v65402 A "x"',
+    'www\t300\tIN\tLUA\tA "x"',
+    'www 1H IN LUA A "x"',
+    '"x 300 IN LUA A "y"',  # Quote im Owner: PowerDNS trennt den Kopf nicht quote-bewusst
+    'w\vw IN LUA A "x"',  # \v trennt bei PowerDNS keine Tokens
+    '\u00a0www 300 IN LUA A "x"',  # NBSP gehoert bei PowerDNS zum Owner
+    ' \tIN LUA A "x"',  # Owner vom Vorgaenger
+    '$GENERATE 1-1 h$ IN LU${9,1,X} A "x"',  # Template ergibt LUA
+    '$GENERATE 65402-65402 h IN TYPE$ A "x"',
+    '$GENERATE 1-2 h$ IN LUA A "x$"',
+    '$GENERATE 1-1 h $ IN LUA A "x"',  # $ als TTL
+    "$INCLUDE /etc/hostname",  # Inhalt nicht pruefbar
+    'x ; kommentar\rwww 300 IN LUA A "x"',  # die API trennt Zeilen auch an \r
+]
+
+
+@pytest.mark.parametrize("line", GATE_HITS)
+def test_lua_gate_lines_finds_pdns_lua_heads(line):
+    lines = zid.lua_gate_lines(HEADER + line + "\n")
+    assert lines == [5 + line.count("\n")], lines
+
+
+GATE_MISSES = [
+    "lua 300 IN A 192.0.2.1",  # Owner "lua"
+    "lua.example.com. IN A 192.0.2.1",
+    'www 300 IN TXT "LUA" "a LUA b"',
+    "; www 300 IN LUA A \"x\"",
+    ' ; www 300 IN LUA A "x"',
+    "www 300 IN A 192.0.2.1 ; LUA",
+    "$ORIGIN lua.example.com.",
+    'www 300 IN TXT "TYPE65402"',
+    "$GENERATE 1-100 host$ A 10.0.0.$",
+    "$GENERATE 1-100 host$ 300 IN CNAME lua$.example.com.",
+    "www 300 IN TYPE654021 \\# 0",  # ausserhalb von uint16
+    "@ 3600 IN MX 10 mail.example.com.",
+    "_sip._tcp 300 IN SRV 0 5 5060 sip.example.com.",
+    '@ IN CAA 0 issue "letsencrypt.org"',
+    '@ 300 IN TXT "v=spf1 include:_spf.lua.example -all"',
+    "@ IN SOA ns1 hostmaster ( 1 2\n 3 4 5 ) ; LUA im Kommentar",
+]
+
+
+@pytest.mark.parametrize("line", GATE_MISSES)
+def test_lua_gate_lines_no_false_positive_on_common_lines(line):
+    assert zid.lua_gate_lines(HEADER + line + "\n") == []
+
+
+def test_lua_gate_lines_covers_panel_scanner_and_real_zone():
+    assert zid.lua_gate_lines(ZONE_FILE) == [6, 7, 8, 9]
+    # Panel-Scanner (verschachtelte Klammern ueber Zeilen) bleibt Teil der Pruefung
+    assert zid.lua_gate_lines('www 300 (\n IN LUA A "x" )\n') == [1, 2]
+    assert zid.lua_gate_lines("") == [] and zid.lua_gate_lines(None) == []
+
+
+def test_count_passthrough_skips_any_number_of_ttl_and_class_tokens():
+    assert zid.count_passthrough_records('www 300 IN IN LUA A "x"\n')["LUA"] == 1
+    assert zid.count_passthrough_records('www IN 300 IN LUA A "x"\n')["LUA"] == 1
+    assert zid.build_import_diff("example.com", HEADER + 'www 300 IN IN LUA A "x"\n', None)["lua_count"] == 1
+
+
+def test_lua_gate_lines_linear_time():
+    import time
+
+    big = HEADER + ("www 300 IN TXT " + '"' + "a" * 200 + '" ' + "( " * 20 + "\n") * 20_000
+    big += ("x" + " " * 100_000 + "IN\n") + ('"' * 100_000) + "\n" + ("\\" * 100_000) + "\n"
+    t = time.perf_counter()
+    zid.lua_gate_lines(big)
+    assert time.perf_counter() - t < 5.0
+
+
 def test_generic_type65402_in_preview_counts_as_lua():
     data = LUA_A.encode()
     text = HEADER + f"g IN TYPE65402 \\# {len(data)} {data.hex()}\n"
@@ -237,14 +320,32 @@ IMPORT_BODY = {"name": "imp.example.", "nameservers": ["ns1.example."],
 def test_import_blocked_when_policy_disabled(pdns):
     r = _admin_client("disabled").post("/api/v1/zones/import", json=IMPORT_BODY)
     assert r.status_code == 403
-    assert r.json()["detail"] == "Die Zonendatei enthält LUA-Records, LUA-Records sind in diesem Panel deaktiviert."
+    assert r.json()["detail"] == ("Die Zonendatei enthält LUA-Records, LUA-Records sind in diesem Panel deaktiviert. "
+                                  "Betroffene Zeilen: 3.")
     assert pdns.get_client_calls == [] and pdns.calls == []
     assert pdns.audits and pdns.audits[-1]["action"] == "IMPORT" and pdns.audits[-1]["status"] == "error"
-    assert pdns.audits[-1]["details"] == {"lua_count": 1} and pdns.audits[-1]["zone_name"] == "imp.example."
+    assert pdns.audits[-1]["details"] == {"lua_count": 1, "lines": [3]}
+    assert pdns.audits[-1]["zone_name"] == "imp.example."
     # ohne LUA in der Datei greift das Gate nicht
     body = dict(IMPORT_BODY, content=IMPORT_BODY["content"].replace('LUA A "f()"', "A 192.0.2.1"))
     assert _admin_client("disabled").post("/api/v1/zones/import", json=body).status_code == 200
     assert pdns.get_client_calls == ["ns1"]
+
+
+@pytest.mark.parametrize("variant", ['www 60 IN IN LUA A "f()"', 'www IN 60 IN LUA A "f()"',
+                                     'b 60 IN TXT ( "y" ( "z" )\nwww 60 IN LUA A "f()"'])
+def test_import_gate_blocks_pdns_only_lua_variants(pdns, variant):
+    """Review Welle 3: Varianten, die PowerDNS als LUA anlegt, der fruehere Panel-Zaehler aber nicht sah."""
+    body = dict(IMPORT_BODY, content=IMPORT_BODY["content"].replace('www 60 IN LUA A "f()"', variant))
+    line = 3 + variant.count("\n")
+    client = _admin_client("disabled")
+    p = client.post("/api/v1/zones/import/preview", json=body)
+    assert p.status_code == 200, p.text
+    assert p.json()["lua_blocked"] is True and line in p.json()["lua_blocked_lines"]
+    calls_after_preview = list(pdns.calls)
+    r = client.post("/api/v1/zones/import", json=body)
+    assert r.status_code == 403 and f"Zeilen: {', '.join(map(str, p.json()['lua_blocked_lines']))}." in r.json()["detail"]
+    assert pdns.calls == calls_after_preview  # Import hat PowerDNS nicht erreicht
 
 
 def test_import_allowed_with_policy_admin(pdns):
@@ -263,3 +364,4 @@ def test_import_preview_reports_lua_fields(pdns, policy, blocked):
     assert body["lua_count"] == 1 and body["lua_issues"] == []
     assert body["lua_policy"] == (policy or "admin")
     assert body["lua_blocked"] is blocked
+    assert body["lua_blocked_lines"] == ([3] if blocked else [])

@@ -14,8 +14,9 @@ bekommen ``created; dnssec-skipped`` (keine abweichenden Schluessel je Server); 
 Datenbank) passiert nichts. Scheitert DNSSEC, bleibt die Zone angelegt: ``created; dnssec-error: <text>``.
 
 LUA beim Import (F15 3.6/5.8): Die Vorschau versteht LUA-/ALIAS-Zeilen (``zone_import_diff``) und meldet
-``lua_count``/``lua_issues`` sowie ``lua_policy``/``lua_blocked``. Bei Policy ``disabled`` lehnt ``import_zone``
-Dateien mit LUA-Records vor jedem PowerDNS-Zugriff mit 403 ab (Fehler-Audit ``IMPORT`` mit ``lua_count``).
+``lua_count``/``lua_issues`` sowie ``lua_policy``/``lua_blocked``/``lua_blocked_lines``. Bei Policy ``disabled``
+lehnt ``import_zone`` Dateien mit LUA-Records vor jedem PowerDNS-Zugriff mit 403 ab (Fehler-Audit ``IMPORT`` mit
+``lua_count`` und ``lines``); geprueft wird konservativ aus PowerDNS-Sicht (``zone_import_diff.lua_gate_lines``).
 """
 import asyncio
 import logging
@@ -571,7 +572,7 @@ async def import_zone_preview(
     """Vergleich Zonefile vs. bestehende PDNS-Zone (erster schreibender Server) – kein Schreiben."""
     assert_token_scope(import_data.name, write=False)
     from app.services.lua_records import get_lua_policy
-    from app.services.zone_import_diff import build_import_diff, count_passthrough_records
+    from app.services.zone_import_diff import MAX_GATE_LINES, build_import_diff, lua_gate_lines
 
     col = _allow_writes_column()
     if col is not None:
@@ -600,26 +601,35 @@ async def import_zone_preview(
     result = await asyncio.to_thread(build_import_diff, import_data.name, import_data.content, existing)
     policy = await get_lua_policy(db)
     result["lua_policy"] = policy
-    # gleiche (grosszuegige) Zaehlung wie das Gate in import_zone
-    result["lua_blocked"] = policy == "disabled" and (
-        result.get("lua_count", 0) > 0 or count_passthrough_records(import_data.content).get("LUA", 0) > 0
-    )
+    # gleiche (konservative) Pruefung wie das Gate in import_zone: PowerDNS-Sicht + Panel-Scanner
+    lines: list[int] = []
+    if policy == "disabled":
+        lines = await asyncio.to_thread(lua_gate_lines, import_data.content)
+    result["lua_blocked"] = policy == "disabled" and (bool(lines) or result.get("lua_count", 0) > 0)
+    result["lua_blocked_lines"] = lines[:MAX_GATE_LINES]
     return result
 
 
 async def _assert_lua_import_allowed(db: AsyncSession, import_data: ZoneImport, admin: User) -> None:
-    """Policy ``disabled`` + LUA in der Datei -> 403 vor jedem PowerDNS-Zugriff (F15 3.6), mit Fehler-Audit."""
+    """Policy ``disabled`` + LUA in der Datei -> 403 vor jedem PowerDNS-Zugriff (F15 3.6), mit Fehler-Audit.
+
+    Prueft konservativ aus PowerDNS-Sicht (``lua_gate_lines``): PowerDNS liest die Datei roh, der Panel-Zaehler
+    allein liess Varianten wie ``www 300 IN IN LUA …`` durch (Review Welle 3).
+    """
     from app.services.lua_records import get_lua_policy
-    from app.services.zone_import_diff import count_passthrough_records
+    from app.services.zone_import_diff import MAX_GATE_LINES, lua_gate_lines
 
     if await get_lua_policy(db) != "disabled":
         return
-    n = count_passthrough_records(import_data.content).get("LUA", 0)
-    if n <= 0:
+    lines = await asyncio.to_thread(lua_gate_lines, import_data.content)
+    if not lines:
         return
-    await _log_action(db, "IMPORT", import_data.name, None, {"lua_count": n}, status="error",
-                      error_message=LUA_IMPORT_BLOCKED_DETAIL, user_id=admin.id)
-    raise HTTPException(status_code=403, detail=LUA_IMPORT_BLOCKED_DETAIL)
+    shown = ", ".join(str(n) for n in lines[:10]) + (" …" if len(lines) > 10 else "")
+    detail = f"{LUA_IMPORT_BLOCKED_DETAIL} Betroffene Zeilen: {shown}."
+    await _log_action(db, "IMPORT", import_data.name, None,
+                      {"lua_count": len(lines), "lines": lines[:MAX_GATE_LINES]}, status="error",
+                      error_message=detail, user_id=admin.id)
+    raise HTTPException(status_code=403, detail=detail)
 
 
 @router.post("/import", response_model=MessageResponse)
