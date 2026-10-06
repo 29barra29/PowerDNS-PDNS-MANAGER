@@ -478,3 +478,25 @@ export function authSourceKey(source) {
 export function isExternalAccount(user) {
     return (user?.auth_source || 'local') !== 'local'
 }
+
+// Loesch-Rueckfrage der Benutzerverwaltung (F10 §2.8): externe Konten warnen, dass JIT sie bei der naechsten
+// SSO-Anmeldung neu anlegt und Deaktivieren der dauerhafte Weg ist.
+export function userDeleteConfirmKey(user) {
+    return isExternalAccount(user) ? 'users.deleteExternalConfirm' : 'users.deleteConfirm'
+}
+
+const ROLE_MODES = ['off', 'promote', 'sync']
+
+// sso-Block aus GET /auth/users fuer den Badge-Kontext (F10 §2.8). Nur bekannte Felder und Werte; fehlt der
+// Block (aeltere API, Fehler), liefert die Funktion null und die Badges zeigen keinen Rollen-Hinweis.
+export function usersSsoContext(userData) {
+    const raw = userData?.sso
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    const mode = (v) => (ROLE_MODES.includes(v) ? v : 'off')
+    return {
+        oidc_role_mode: mode(raw.oidc_role_mode),
+        ldap_role_mode: mode(raw.ldap_role_mode),
+        oidc_jit: raw.oidc_jit === true,
+        ldap_jit: raw.ldap_jit === true,
+    }
+}

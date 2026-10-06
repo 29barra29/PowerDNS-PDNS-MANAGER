@@ -8,16 +8,19 @@ import ModalErrorBanner from '../components/ModalErrorBanner'
 import UserBadges from '../components/users/UserBadges'
 import UserSecurityModal from '../components/userSecurity/UserSecurityModal'
 import { createUserPayload, orphanZones } from '../components/userSecurity/userSecurityModel'
+import { userDeleteConfirmKey, usersSsoContext } from '../components/sso/ssoModel'
 
 // Benutzerverwaltung (Admin). F3 §2.3/§2.5/§6.5: Rollenwechsel mit Rueckfrage, Aktivieren/Deaktivieren,
 // Dialog "Passwort & Sicherheit", E-Mail und erzwungener Passwortwechsel beim Anlegen; eigenes Konto gesperrt.
 // F8-I02 (f152): verwaiste Zonenrechte im Zonen-Editor sichtbar und abwaehlbar; F8-C05: Modal-Fehler im Modal.
+// F10 §2.8: sso-Block aus GET /auth/users als Badge-Kontext (Rollen-Tooltip), eigene Loesch-Rueckfrage fuer externe Konten.
 const EMPTY_FORM = { username: '', password: '', display_name: '', email: '', role: 'user', must_change_password: true }
 
 export default function UsersPage() {
     const { t } = useTranslation()
     const me = api.getUser()
     const [users, setUsers] = useState([])
+    const [ssoContext, setSsoContext] = useState(null)
     const [allZones, setAllZones] = useState([])
     const [zonesLoadErrors, setZonesLoadErrors] = useState([])
     const [resetMailAvailable, setResetMailAvailable] = useState(false)
@@ -73,6 +76,7 @@ export default function UsersPage() {
 
     const applyData = useCallback(({ userData, zones, failed }) => {
         setUsers(userData.users || [])
+        setSsoContext(usersSsoContext(userData))
         setResetMailAvailable(!!userData.password_reset_mail_available)
         setAllZones(zones)
         setZonesLoadErrors(failed)
@@ -113,10 +117,11 @@ export default function UsersPage() {
         }
     }
 
-    async function handleDelete(id, name) {
-        if (!confirm(t('users.deleteConfirm', { name }))) return
+    async function handleDelete(user) {
+        const name = user.username
+        if (!confirm(t(userDeleteConfirmKey(user), { name }))) return
         try {
-            await api.deleteUser(id)
+            await api.deleteUser(user.id)
             setSuccess(t('users.userDeleted', { name }))
             loadData()
         } catch (err) {
@@ -294,7 +299,7 @@ export default function UsersPage() {
                                         {!u.is_active && (
                                             <span className="text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger border border-danger/30">{t('users.deactivated')}</span>
                                         )}
-                                        <UserBadges user={u} context={{ meId: me?.id ?? null }} />
+                                        <UserBadges user={u} context={{ meId: me?.id ?? null, sso: ssoContext }} />
                                     </div>
                                     <p className="text-sm text-text-muted break-all">@{u.username}{u.email ? ` · ${u.email}` : ''}</p>
 
@@ -368,7 +373,7 @@ export default function UsersPage() {
                                         </button>
                                     </span>
                                     <button
-                                        onClick={() => handleDelete(u.id, u.username)}
+                                        onClick={() => handleDelete(u)}
                                         disabled={self}
                                         className="p-2 rounded-lg text-text-muted hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                         title={t('users.delete')}
