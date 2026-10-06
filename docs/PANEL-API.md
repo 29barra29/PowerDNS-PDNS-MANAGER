@@ -438,6 +438,8 @@ Filter der Liste: `limit` (1–200, Standard 50), `offset`, `action` (Komma-List
   `failed_action`, `not_record_change`, `incomplete`, `no_changes`, `only_excluded_records`, `zone_recreated`,
   `dyndns_repair`. In Vorschau und Liste zusätzlich `no_write_permission`, `server_read_only`.
 - **Nie zurückgesetzt:** SOA, DNSSEC-Records (inkl. DS) und `_acme-challenge`. LUA-Ziele unterliegen der LUA-Policy.
+- **PTRs:** Ein Rollback pflegt keine PTRs. Die zugehörigen PTR-Änderungen stehen als eigene Einträge `PTR_SYNC` im
+  Verlauf der Reverse-Zone und lassen sich dort zurücksetzen.
 - **Datenschutz:** Nicht-Admins sehen keine Client-IPs, Token-Kennungen und PowerDNS-Fehlertexte; Einträge aus der
   Zeit vor einer endgültigen Löschung und Neuanlage der Zone sind für sie nicht sichtbar (404).
 
@@ -622,7 +624,7 @@ erst nach `rotate` wieder aktivieren (`PUT` mit `is_active: true` → 409). Glob
   oder entfernt; Classless-Delegationen (RFC 2317) werden erkannt und ausgelassen. PTR-Probleme brechen die
   eigentliche Änderung nie ab.
 - Jede geschriebene Reverse-Zone bekommt einen eigenen Audit-Eintrag `PTR_SYNC` (rücksetzbar) und das Ereignis
-  `record.ptr_synced`.
+  `record.ptr_synced`. Ein Rollback der Forward-Änderung setzt PTRs nicht mit zurück.
 - `GET /ptr/config` – Admin-Standard `auto_default` und Zahl der beschreibbaren Reverse-Zonen;
   `GET /ptr/lookup?ip=&name=&server=` – was die PTR-Pflege für eine IP täte (`status`: `ok`, `no_reverse_zone`,
   `classless`, `forbidden`, `error`; `would`: `set`, `unchanged`, `conflict`). Zonennamen und vorhandene PTRs nur mit

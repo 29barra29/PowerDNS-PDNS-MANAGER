@@ -436,7 +436,7 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 **Record-Historie & Audit-Log**
 
 - Jede Record-Änderung speichert den vollständigen Zustand der betroffenen RRsets vorher und nachher (Audit-Format Version 2). Tab **„Verlauf“** je Zone mit Vorher/Nachher-Ansicht, Filtern und Verlauf je Record (Uhr-Symbol in der Zeile).
-- **Zurücksetzen** mit Vorschau und Konfliktprüfung (`force` nach Bestätigung); bereits zurückgesetzte Stände zählen nicht als Konflikt. SOA, DNSSEC-Records und `_acme-challenge` werden nie zurückgesetzt.
+- **Zurücksetzen** mit Vorschau und Konfliktprüfung (`force` nach Bestätigung); bereits zurückgesetzte Stände zählen nicht als Konflikt. SOA, DNSSEC-Records und `_acme-challenge` werden nie zurückgesetzt; PTRs in Reverse-Zonen setzt ein Rollback nicht mit zurück (eigene `PTR_SYNC`-Einträge im Verlauf der Reverse-Zone).
 - Protokoll-Seite mit Filtern (Aktion, Typ, Status, Benutzer, Zone, Server, Zeitraum, Volltext), teilbarer Adresse, Detailansicht und CSV-Export der gefilterten Einträge (geschützt gegen Formel-Injection). Einträge speichern Zone, Benutzername und Client-IP zum Zeitpunkt der Aktion.
 - **Aufbewahrung** einstellbar: 0 = unbegrenzt oder 7–3650 Tage, stündliche Bereinigung. Nicht-Admins sehen im Zonenverlauf keine Client-IPs, Token-Kennungen oder PowerDNS-Fehlertexte.
 
