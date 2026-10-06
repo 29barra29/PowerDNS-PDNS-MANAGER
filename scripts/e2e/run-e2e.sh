@@ -7,13 +7,15 @@
 # und haelt den E2E-Lock (nur ein E2E-Lauf je Host).
 #
 # Aufruf (aus beliebigem Verzeichnis):
-#   scripts/e2e/run-e2e.sh [--no-build] [--keep] [--only base,f5] [--list]
+#   scripts/e2e/run-e2e.sh [--no-build] [--keep] [--only base,f5] [--list] [--ui|--ui-only]
 #
 #   --no-build   vorhandenes Image pdnsmgr-e2e:local verwenden (Default: neu bauen)
 #   --keep       Umgebung nach dem Lauf NICHT abbauen (Fehlersuche; spaeter: scripts/e2e/run-e2e.sh --down)
 #   --down       nur abbauen (Container, Netz, Volumes des Projekts pdnsmgr-e2e) und beenden
 #   --only LISTE nur diese Check-Module (Komma-getrennt, Dateinamen ohne .py)
 #   --list       gefundene Check-Module auflisten und beenden (startet keine Container)
+#   --ui         nach den API-Checks die UI-Smoke-Tests (Playwright, scripts/e2e/ui/run.sh) ausfuehren
+#   --ui-only    nur die UI-Smoke-Tests (ohne API-Checks); Playwright-Argumente: E2E_UI_ARGS="tests/x.spec.js"
 #
 # Umgebung: E2E_IMAGE (Default pdnsmgr-e2e:local), E2E_WORKDIR (Arbeitsordner, Default mktemp),
 #           E2E_WAIT_TIMEOUT (Sekunden, Default 240), E2E_LOG_LEVEL (Backend, Default info).
@@ -23,7 +25,7 @@ set -euo pipefail
 # shellcheck source=scripts/e2e/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-BUILD=1 KEEP=0 ONLY="" LIST=0 DOWN_ONLY=0
+BUILD=1 KEEP=0 ONLY="" LIST=0 DOWN_ONLY=0 UI=0 API_CHECKS=1
 ARGS=("$@")
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -33,7 +35,9 @@ while [ "$#" -gt 0 ]; do
     --only) shift; ONLY="${1:-}"; [ -n "$ONLY" ] || { echo "--only braucht eine Liste" >&2; exit 2; } ;;
     --only=*) ONLY="${1#--only=}" ;;
     --list) LIST=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ui) UI=1 ;;
+    --ui-only) UI=1; API_CHECKS=0 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekanntes Argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -95,15 +99,38 @@ if ! e2e_up db pdns1 pdns2 receiver backend; then
 fi
 e2e_save_backend_log "$E2E_WORKDIR/backend-fresh.log"
 
-CHECK_ARGS=(fresh)
-[ -n "$ONLY" ] && CHECK_ARGS+=(--only "$ONLY")
-e2e_log "Check-Runner: ${CHECK_ARGS[*]}"
-if e2e_run_checks "${CHECK_ARGS[@]}"; then
+API_OK=1
+if [ "$API_CHECKS" -eq 1 ]; then
+  CHECK_ARGS=(fresh)
+  [ -n "$ONLY" ] && CHECK_ARGS+=(--only "$ONLY")
+  e2e_log "Check-Runner: ${CHECK_ARGS[*]}"
+  if e2e_run_checks "${CHECK_ARGS[@]}"; then
+    e2e_log "E2E Neuinstallation (API-Checks): OK"
+  else
+    API_OK=0
+    e2e_log "E2E Neuinstallation (API-Checks): FEHLGESCHLAGEN"
+    e2e_save_backend_log "$E2E_WORKDIR/backend-fresh.log"
+    tail -n 40 "$E2E_WORKDIR/backend-fresh.log" >&2 || true
+  fi
+fi
+
+UI_OK=1
+if [ "$UI" -eq 1 ]; then
+  # UI-Smoke laeuft auch nach fehlgeschlagenen API-Checks (mehr Befund); Lock und Slot werden vererbt.
+  e2e_log "UI-Smoke (Playwright): scripts/e2e/ui/run.sh"
+  # shellcheck disable=SC2086 # E2E_UI_ARGS bewusst wortweise (Playwright-Argumente)
+  if bash "$E2E_DIR/ui/run.sh" --workdir "$E2E_WORKDIR" -- ${E2E_UI_ARGS:-}; then
+    e2e_log "UI-Smoke: OK"
+  else
+    UI_OK=0
+    e2e_log "UI-Smoke: FEHLGESCHLAGEN (Bericht: $E2E_WORKDIR/ui/report/index.html)"
+  fi
+fi
+
+if [ "$API_OK" -eq 1 ] && [ "$UI_OK" -eq 1 ]; then
   STATUS=0
   e2e_log "E2E Neuinstallation: OK"
 else
   e2e_log "E2E Neuinstallation: FEHLGESCHLAGEN"
-  e2e_save_backend_log "$E2E_WORKDIR/backend-fresh.log"
-  tail -n 40 "$E2E_WORKDIR/backend-fresh.log" >&2 || true
 fi
 exit "$STATUS"
