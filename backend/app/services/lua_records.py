@@ -278,11 +278,14 @@ _FALSE_VALUES = ("no", "false", "0", "off")
 
 # Servername -> (time.monotonic() der Abfrage, Status-Dict)
 _status_cache: dict[str, tuple[float, dict]] = {}
+# Servername -> laufende Abfrage (W3-L1: gleichzeitige Aufrufe teilen sich eine Abfrage je Server)
+_inflight: dict[str, asyncio.Task] = {}
 
 
 def clear_status_cache() -> None:
     """Cache leeren (Tests; nach Server-Aenderungen nicht noetig – der Cache laeuft nach 60 s ab)."""
     _status_cache.clear()
+    _inflight.clear()
 
 
 def _iso_now() -> str:
@@ -401,6 +404,25 @@ async def _probe_named(name: str) -> dict:
     return await _probe(name, client)
 
 
+async def _probe_shared(name: str) -> dict:
+    """Wie ``_probe_named``, aber eine bereits laufende Abfrage desselben Servers wird mitbenutzt (W3-L1).
+
+    Bricht ein wartender Aufrufer ab (Client weg), laeuft die gemeinsame Abfrage fuer die anderen weiter (``shield``).
+    """
+    loop = asyncio.get_running_loop()
+    task = _inflight.get(name)
+    if task is None or task.done() or task.get_loop() is not loop:
+        task = loop.create_task(_probe_named(name))
+        _inflight[name] = task
+
+        def _done(t: asyncio.Task, n: str = name) -> None:
+            if _inflight.get(n) is t:
+                _inflight.pop(n, None)
+
+        task.add_done_callback(_done)
+    return await asyncio.shield(task)
+
+
 async def get_server_lua_status(refresh: bool = False) -> dict:
     """LUA-Status aller PowerDNS-Server: ``{"servers": [...], "checked_at": iso, "cached": bool}``.
 
@@ -408,7 +430,8 @@ async def get_server_lua_status(refresh: bool = False) -> dict:
     Cache-Eintrag (< ``LUA_STATUS_CACHE_TTL``) existiert oder ``refresh`` gesetzt ist. Konfigurierte, aber
     nicht geladene Server (``pdns_manager.unloaded``, z. B. API-Key unlesbar [D4]) erscheinen mit Fehlertext.
     ``checked_at`` ist der Zeitpunkt des aeltesten verwendeten Eintrags; ``cached`` = mindestens ein Eintrag
-    kam aus dem Cache.
+    kam aus dem Cache. Gleichzeitige Aufrufe (auch mit ``refresh``) teilen sich eine laufende Abfrage je Server
+    (W3-L1); der Router gibt die DB-Verbindung vorher frei.
     """
     from app.services.pdns_client import pdns_manager
 
@@ -417,7 +440,7 @@ async def get_server_lua_status(refresh: bool = False) -> dict:
     todo = [n for n in names
             if refresh or n not in _status_cache or now - _status_cache[n][0] > LUA_STATUS_CACHE_TTL]
     if todo:
-        results = await asyncio.gather(*(_probe_named(n) for n in todo))
+        results = await asyncio.gather(*(_probe_shared(n) for n in todo))
         stamp = time.monotonic()
         for r in results:
             _status_cache[r["name"]] = (stamp, r)

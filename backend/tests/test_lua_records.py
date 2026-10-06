@@ -487,6 +487,55 @@ def test_server_status_cache_refresh_and_errors(two_status):
     assert _config_calls(two_status.ok) == 2 and _config_calls(two_status.down) == 2
 
 
+async def test_server_status_concurrent_calls_share_one_probe(two_status):
+    """W3-L1 (WS-W3-NACHARBEIT): gleichzeitige Aufrufe (auch refresh) fragen jeden Server nur einmal."""
+    import asyncio
+
+    lr.clear_status_cache()
+    gate = asyncio.Event()
+    real = two_status.ok.get_config
+
+    async def slow_config(*a, **k):
+        await gate.wait()
+        return await real(*a, **k)
+
+    two_status.ok.get_config = slow_config
+    calls = [asyncio.ensure_future(lr.get_server_lua_status(refresh=True)) for _ in range(5)]
+    await asyncio.sleep(0.01)
+    assert list(lr._inflight) == ["ns1"]   # ns2 antwortet sofort (Fehler), ns1 wartet
+    gate.set()
+    results = await asyncio.gather(*calls)
+    assert all(r["servers"][0]["lua_records"] == "yes" for r in results)
+    assert _config_calls(two_status.ok) == 1 and _config_calls(two_status.down) == 1
+    assert lr._inflight == {}
+    # ein abgebrochener Aufrufer stoppt die gemeinsame Abfrage nicht
+    gate.clear()
+    first = asyncio.ensure_future(lr.get_server_lua_status(refresh=True))
+    second = asyncio.ensure_future(lr.get_server_lua_status(refresh=True))
+    await asyncio.sleep(0.01)
+    first.cancel()
+    gate.set()
+    assert (await second)["servers"][0]["reachable"] is True
+    assert _config_calls(two_status.ok) == 2
+
+
+def test_server_status_releases_db_before_probing(two_status):
+    """W3-L1: die Pool-Verbindung ist frei, bevor PowerDNS gefragt wird."""
+    admin = make_user()
+    session = FakeSession(user_row=admin)
+    seen = []
+    real = two_status.ok.get_config
+
+    async def watch(*a, **k):
+        seen.append(session.commits)
+        return await real(*a, **k)
+
+    two_status.ok.get_config = watch
+    lr.clear_status_cache()
+    r = _client(session, lua_router, user=admin).get("/api/v1/lua/server-status")
+    assert r.status_code == 200 and seen and seen[0] >= 1
+
+
 def test_server_status_needs_admin_or_zone_right(two_status):
     user = make_user(role="user", uid=6, username="eve")
     r = _client(FakeSession(user_row=user), lua_router, user=user).get("/api/v1/lua/server-status")
