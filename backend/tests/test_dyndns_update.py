@@ -67,15 +67,20 @@ class Env:
             v = self.settings.get(key)
             return default if v is None else bool(v)
 
-        async def verify_token(db, plaintext, *, remote_ip):
+        def by_hash(plaintext):
+            # wie der echte Hash-Lookup: ein entwertetes Secret passt zu keinem Klartext mehr
             t = self.tokens.get(plaintext)
+            return t if t is not None and t.token_hash == dyndns.hash_token(plaintext) else None
+
+        async def verify_token(db, plaintext, *, remote_ip):
+            t = by_hash(plaintext)
             if t is None or not t.is_active:
                 return None
             t.last_used_ip = remote_ip
             return t
 
         async def find_token_by_plaintext(db, plaintext):
-            return self.tokens.get(plaintext)
+            return by_hash(plaintext)
 
         async def load_owner(db, token):
             if token is None or not self.owner.is_active:
@@ -187,6 +192,20 @@ def test_token_in_query_revokes_token(env):
     assert rev.kwargs["details"]["reason"] == "token_in_query" and TOKEN not in str(rev.kwargs)
     # Danach hilft auch Basic-Auth nicht mehr
     assert env.get(hostname=HOME, myip="203.0.113.5").status_code == 401
+
+
+def test_token_in_query_secret_stays_invalid_after_reactivation(env):
+    """Fix-Runde: Sperre wegen Token im Query entwertet das Secret – auch ein spaeteres is_active=True belebt den
+    (in Logs stehenden) Klartext nicht wieder."""
+    r = env.get(token=None, hostname=HOME, myip="203.0.113.5", password=TOKEN)
+    assert r.status_code == 401
+    t = env.token
+    assert dyndns.is_secret_revoked(t) and t.token_hash != dyndns.hash_token(TOKEN)
+    assert dyndns.serialize_token(t)["secret_revoked"] is True and t.last_result == "badauth"
+    t.is_active = True  # z. B. Reaktivieren an der API vorbei
+    r = env.get(hostname=HOME, myip="203.0.113.5")
+    assert r.status_code == 401 and r.text == "badauth"
+    assert env.pdns.ns1.patches == [] and env.pdns.ns2.patches == []
 
 
 def test_token_value_in_any_query_param_rejected(env):
@@ -432,6 +451,46 @@ def test_peer_error_persists_and_survives_restart(env):
     (repair,) = env.audits("DYNDNS_UPDATE")
     assert repair.kwargs["details"]["repair"] is True and repair.kwargs["details"]["fanout"] == {"ns2": "saved"}
     assert env.token.stale_servers is None
+
+
+def test_stale_first_server_is_repaired_with_nochg(env):
+    """Fix-Runde [D5]: Ist ausgerechnet der erste Server veraltet, ist der naechste Ping mit gleicher IP eine
+    Reparatur (nochg, repair=true, kein Webhook, last_changed_at unveraendert) und keine neue Aenderung."""
+    env.pdns.ns1.fail_on_patch = PowerDNSAPIError(500, "kaputt", "ns1")
+    r = env.get(hostname=HOME, myip="203.0.113.5")
+    assert r.text == "good 203.0.113.5" and env.token.stale_servers == {HOME: ["ns1"]}
+    assert len(env.events.calls) == 1
+    changed_at = env.token.last_changed_at
+    # Neustart: nur stale_servers in der Tokenzeile bleibt
+    dyndns.reset_state_for_tests()
+    zone_index.invalidate()
+    env.pdns.ns1.fail_on_patch = None
+    env.audit.calls.clear()
+    env.events.calls.clear()
+    n2 = len(env.pdns.ns2.patches)
+    r = env.get(hostname=HOME, myip="203.0.113.5")
+    assert r.text == "nochg 203.0.113.5"
+    assert len(env.pdns.ns2.patches) == n2 and env.pdns.ns1.values(Z, HOME, "A") == ["203.0.113.5"]
+    (repair,) = env.audits("DYNDNS_UPDATE")
+    d = repair.kwargs["details"]
+    assert d["repair"] is True and d["fanout"] == {"ns1": "saved"} and repair.kwargs["server_name"] == "ns1"
+    assert env.events.calls == []
+    assert env.token.stale_servers is None and env.token.last_changed_at == changed_at
+
+
+def test_stale_first_server_with_new_ip_reports_old_from_current_server(env):
+    """Erster Server veraltet, Client meldet eine neue IP: echte Aenderung, ``old`` kommt vom aktuellen Server."""
+    env.pdns.ns2.add_zone(make_zone(Z, [rr(HOME, "A", "203.0.113.5", ttl=60)]))
+    env.token.stale_servers = {HOME: ["ns1"]}
+    r = env.get(path="/api/v1/dyndns/update", basic=False, hostname=HOME, myip="203.0.113.9")
+    assert r.status_code == 200, r.text
+    (host,) = r.json()["hosts"]
+    assert host["result"] == "good" and not host.get("repair")
+    (change,) = [c for c in host["changes"] if c["type"] == "A"]
+    assert change["old"] == ["203.0.113.5"] and change["status"] == "updated"
+    (event,) = env.events.calls
+    assert event.kwargs["data"]["old"] == ["203.0.113.5"]
+    assert env.pdns.ns1.values(Z, HOME, "A") == ["203.0.113.9"] == env.pdns.ns2.values(Z, HOME, "A")
 
 
 def test_unreachable_peer_is_stale_but_nochg(env):

@@ -198,6 +198,11 @@ def check_fresh(ctx) -> None:
         ctx.check(ctx.db_value("SELECT COUNT(*) FROM audit_logs WHERE action = 'DYNDNS_TOKEN_REVOKED'") >= 1,
                   "DYNDNS_TOKEN_REVOKED fehlt")
         ctx.eq(_nic(ctx, token, hostname=host, myip=NEXT_IP).status, 401, "gesperrter Token")
+        # Sicherheitssperre entwertet das Secret: Reaktivieren ohne neues Secret -> 409 (Fix-Runde)
+        r = sess.put(f"dyndns/tokens/{tid}", json={"is_active": True}, expect=409)
+        ctx.check("neues Secret" in r.text, f"409-Text ohne Hinweis auf neues Secret: {r.text}")
+        ctx.eq(ctx.db_value("SELECT is_active FROM dyndns_tokens WHERE id = %s", (tid,)), 0, "bleibt gesperrt")
+        ctx.eq(_nic(ctx, token, hostname=host, myip=NEXT_IP).status, 401, "alter Klartext bleibt ungueltig")
         new_token = sess.post(f"dyndns/tokens/{tid}/rotate", json={}, expect=200).json()["plaintext_token"]
         sess.put(f"dyndns/tokens/{tid}", json={"is_active": True}, expect=200)
         ctx.eq(_nic(ctx, token, hostname=host, myip=NEXT_IP).status, 401, "alter Token nach Rotation")

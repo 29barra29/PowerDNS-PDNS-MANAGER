@@ -144,6 +144,23 @@ def generate_token() -> str:
     return TOKEN_PREFIX + secrets.token_urlsafe(_TOKEN_BYTES)
 
 
+# Entwertetes Secret nach einer Sicherheitssperre (Token im Query, Zugangs-Widerruf): kein SHA-256-Hex wie bei
+# ``hash_token``, daher passt nie wieder ein Klartext. Der Praefix ist zugleich die persistente Markierung
+# "aus Sicherheitsgruenden gesperrt" (ohne Schemaaenderung): ``PUT is_active=true`` wird dafuer abgelehnt, nur
+# ``rotate`` (neues Secret) macht den Token wieder nutzbar.
+REVOKED_HASH_PREFIX = "revoked:"
+
+
+def is_secret_revoked(token: DynDnsToken) -> bool:
+    return str(token.token_hash or "").startswith(REVOKED_HASH_PREFIX)
+
+
+def revoke_secret(token: DynDnsToken) -> None:
+    """Deaktiviert den Token und entwertet sein Secret (nur Attribute, kein flush)."""
+    token.is_active = False
+    token.token_hash = REVOKED_HASH_PREFIX + secrets.token_hex(32)
+
+
 def token_prefix(plain: str) -> str:
     return plain[: len(TOKEN_PREFIX) + 4]
 
@@ -426,7 +443,7 @@ async def revoke_tokens_in_query(db: AsyncSession, values: list[str], *, client_
         token = await find_token_by_plaintext(db, v)
         if token is None or not token.is_active:
             continue
-        token.is_active = False
+        revoke_secret(token)  # Klartext steht in Logs -> nie wieder gueltig, auch nicht nach Reaktivieren
         token.last_result = "badauth"
         revoked += 1
         logger.warning("DynDNS: Token %s im Query-String gesendet – deaktiviert", token.token_prefix)
@@ -574,6 +591,7 @@ def serialize_token(t: DynDnsToken, *, hostname_status: Optional[list[dict]] = N
         "last_result": t.last_result,
         "last_changed_at": iso_utc(t.last_changed_at),
         "stale_servers": stale_server_list(t),
+        "secret_revoked": is_secret_revoked(t),
         "owner_user_id": t.user_id,
     }
     if hostname_status is not None:
@@ -632,6 +650,26 @@ async def delete_tokens_of_user(db: AsyncSession, user_id: int) -> int:
     return int(res.rowcount or 0)
 
 
+async def revoke_tokens_of_user(db: AsyncSession, user_id: int) -> int:
+    """Sicherheitssperre aller DynDNS-Tokens eines Benutzers (Kontouebernahme, ``access_revocation.revoke_all``).
+
+    Deaktiviert jeden Token und entwertet sein Secret (:func:`revoke_secret`), auch bereits pausierte Tokens – sonst
+    liesse sich ein vom Angreifer angelegter oder gelesener Token spaeter wieder aktivieren. Rueckgabe: Anzahl der
+    neu gesperrten Tokens (bereits entwertete zaehlen nicht). Nur flush, kein Commit, kein Audit (der Aufrufer
+    schreibt den Audit-Eintrag).
+    """
+    rows = (await db.execute(select(DynDnsToken).where(DynDnsToken.user_id == user_id))).scalars().all()
+    n = 0
+    for token in rows:
+        if is_secret_revoked(token):
+            continue
+        revoke_secret(token)
+        token.updated_at = utcnow()
+        n += 1
+    await db.flush()
+    return n
+
+
 def prune_stale(token: DynDnsToken) -> None:
     """``stale_servers``-Eintraege fuer Hostnamen entfernen, die der Token nicht mehr hat."""
     raw = token.stale_servers
@@ -649,6 +687,15 @@ def prune_stale(token: DynDnsToken) -> None:
 def _result(hostname: str) -> dict:
     return {"hostname": hostname, "zone": None, "result": "nochg", "ips": [], "changes": [], "fanout": None,
             "ptr": None, "detail": None}
+
+
+def _stale_for(token: DynDnsToken, hostname: str) -> set[str]:
+    """Persistent als veraltet bekannte Server eines Hostnamens."""
+    raw = token.stale_servers
+    if not isinstance(raw, dict):
+        return set()
+    servers = raw.get(hostname)
+    return {str(s) for s in servers} if isinstance(servers, list) else set()
 
 
 def _set_stale(token: DynDnsToken, hostname: str, servers: Iterable[str]) -> None:
@@ -774,7 +821,10 @@ async def perform_update(db: AsyncSession, *, token: DynDnsToken, owner: User, h
 
     ttl = int(token.ttl or DEFAULT_TTL)
     ordered = [s for s in match.servers if s in states]
-    ref = states[ordered[0]]
+    # Referenz fuer good/nochg, changes[].old und PTR: der erste erreichbare Server, der nicht als veraltet bekannt
+    # ist (sonst wuerde die Reparatur eines veralteten ersten Servers als echte Aenderung gemeldet) [D5].
+    known_stale = _stale_for(token, h)
+    ref = states[next((s for s in ordered if s not in known_stale), ordered[0])]
     changes = []
     for rtype, value in wanted.items():
         before = rrset_snapshot(ref, h, rtype)

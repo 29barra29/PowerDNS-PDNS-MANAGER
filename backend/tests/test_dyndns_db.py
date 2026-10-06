@@ -112,6 +112,51 @@ def test_owner_inactive_and_delete_tokens_of_user(fresh_db):
     _run(go())
 
 
+def test_security_revoke_survives_reactivation(fresh_db):
+    """Fix-Runde: Token im Query bzw. Zugangs-Widerruf entwerten das Secret in der DB; is_active=1 belebt den alten
+    Klartext nicht wieder, erst rotate liefert einen nutzbaren Token."""
+    from app.core.database import async_session
+    from app.models.models import DynDnsToken
+    from app.services import dyndns
+
+    async def go():
+        async with async_session() as s:
+            owner = await _user(s, "ddns_revoke")
+            t1, p1 = await dyndns.create_token(s, user=owner, name="q", hostnames=["a.example.com"],
+                                               allowed_types=["A"], ttl=60, update_ptr=False)
+            t2, p2 = await dyndns.create_token(s, user=owner, name="r", hostnames=["b.example.com"],
+                                               allowed_types=["A"], ttl=60, update_ptr=False)
+            t3, p3 = await dyndns.create_token(s, user=owner, name="p", hostnames=["c.example.com"],
+                                               allowed_types=["A"], ttl=60, update_ptr=False)
+            t3.is_active = False  # pausiert
+            await s.commit()
+            ids, uid = (t1.id, t2.id, t3.id), owner.id
+        async with async_session() as s:
+            assert await dyndns.revoke_tokens_in_query(s, [p1], client_ip="203.0.113.1") == 1
+            await s.commit()
+        async with async_session() as s:
+            assert await dyndns.revoke_tokens_of_user(s, uid) == 2  # t2 + pausierter t3, t1 schon entwertet
+            await s.commit()
+        async with async_session() as s:
+            rows = (await s.execute(select(DynDnsToken).where(DynDnsToken.id.in_(ids)))).scalars().all()
+            assert len(rows) == 3 and all(dyndns.is_secret_revoked(r) and not r.is_active for r in rows)
+            for r in rows:
+                r.is_active = True  # Reaktivieren an der API vorbei
+            await s.commit()
+        async with async_session() as s:
+            for plain in (p1, p2, p3):
+                assert await dyndns.verify_token(s, plain, remote_ip=None) is None
+                assert await dyndns.find_token_by_plaintext(s, plain) is None
+            row = (await s.execute(select(DynDnsToken).where(DynDnsToken.id == ids[0]))).scalar_one()
+            new_plain = await dyndns.rotate_token(s, row)
+            await s.commit()
+        async with async_session() as s:
+            found = await dyndns.verify_token(s, new_plain, remote_ip=None)
+            assert found is not None and found.id == ids[0] and not dyndns.is_secret_revoked(found)
+
+    _run(go())
+
+
 def test_settings_ptr_auto_default_and_dyndns_switches(fresh_db):
     from app.core.database import async_session
     from app.services import dyndns, ptr
