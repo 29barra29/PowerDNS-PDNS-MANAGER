@@ -99,6 +99,8 @@ test('PTR-Begruendungen des Backends kennt lib/ptrResults.js', { skip: SKIP }, (
     const found = new Set()
     for (const m of src.matchAll(/reason\s*[=:]\s*["'](\w+)["']/g)) found.add(m[1])
     for (const m of src.matchAll(/["']reason["']\s*:\s*["'](\w+)["']/g)) found.add(m[1])
+    // Backend setzt Begruendungen ueber den Helfer _skip(res, "<reason>") (services/ptr.py)
+    for (const m of src.matchAll(/_skip\(\s*[\w\[\]]+\s*,\s*["'](\w+)["']/g)) found.add(m[1])
     const lit = /Literal\[([^\]]*"no_reverse_zone"[^\]]*)\]/.exec(src)
     if (lit) for (const m of lit[1].matchAll(/"(\w+)"/g)) found.add(m[1])
     assert.ok(found.size >= 3, `keine Begruendungen in services/ptr.py gefunden (${[...found]})`)

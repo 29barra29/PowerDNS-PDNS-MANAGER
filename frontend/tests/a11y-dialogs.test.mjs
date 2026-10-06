@@ -30,6 +30,8 @@ const PENDING = Object.freeze({
     'components/panelTokens/PanelTokenFormModal.jsx': 'WS-F14-APP (Welle 2, parallel): Umstellung ab Welle 3',
     'components/dyndns/DyndnsTokenModal.jsx': 'WS-F9F11-FE (Welle 2, parallel): Umstellung ab Welle 3',
     'components/dnssec/DnssecDialog.jsx': 'WS-F4-B (Welle 2, parallel): Umstellung ab Welle 3',
+    'components/bulk/BulkEditorModal.jsx': 'WS-F1 (Welle 2, parallel; im Integrationsschritt eingetragen): Umstellung ab Welle 3',
+    'components/bulk/BulkTtlDialog.jsx': 'WS-F1 (Welle 2, parallel; im Integrationsschritt eingetragen): Umstellung ab Welle 3',
 })
 
 // Mindestens diese Dialoge nutzen den Hook (Besitz WS-W1-NACHARBEIT, Welle 2).
