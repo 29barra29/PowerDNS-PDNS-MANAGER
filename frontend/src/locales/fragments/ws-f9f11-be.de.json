@@ -1,0 +1,16 @@
+{
+  "set": {
+    "audit.actions.DYNDNS_AUTH_FAILED": "DynDNS-Anmeldung fehlgeschlagen",
+    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS-Token erstellt",
+    "audit.actions.DYNDNS_TOKEN_UPDATE": "DynDNS-Token geändert",
+    "audit.actions.DYNDNS_TOKEN_ROTATE": "DynDNS-Secret erneuert",
+    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS-Token gelöscht",
+    "audit.actions.DYNDNS_TOKEN_REVOKED": "DynDNS-Token gesperrt (in URL gesendet)",
+    "audit.actions.DYNDNS_SETTINGS_UPDATE": "DynDNS-Einstellungen geändert",
+    "audit.actions.PTR_SYNC": "PTR-Pflege",
+    "audit.actions.PTR_SETTINGS_UPDATE": "PTR-Einstellungen geändert",
+    "audit.resourceTypes.dyndns": "DynDNS",
+    "audit.resourceTypes.dyndns_token": "DynDNS-Token"
+  },
+  "remove": []
+}
