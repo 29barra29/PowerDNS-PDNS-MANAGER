@@ -77,7 +77,7 @@ test('Step-up: Codes und Feld step_up wie im Frontend [S8]', { skip: SKIP_BE }, 
     if (m) assert.ok(/step_up/.test(m[0]), 'ConvertToLocalBody ohne step_up (Frontend sendet step_up: {current_password, totp_code})')
 })
 
-test('Antrag: general.session_max_age in GET /settings/sso (Warnung Sitzungsdauer)', { skip: SKIP_BE }, (t) => {
+test('general.session_max_age in GET /settings/sso (Warnung Sitzungsdauer)', { skip: SKIP_BE }, () => {
     const src = read('routers', 'settings_sso.py') + read('services', 'sso_settings.py')
-    if (!src.includes('session_max_age')) t.skip('Antrag an WS-F10-APP-BE nicht umgesetzt – UI zeigt nur die allgemeine Empfehlung')
+    assert.ok(src.includes('session_max_age'), 'general.session_max_age fehlt in GET /settings/sso')
 })

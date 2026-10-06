@@ -28,6 +28,7 @@ export const SSO_ERROR_KEYS = Object.freeze({
     link_failed: 'linkFailed',
     internal: 'internal',
     totp_unreadable: 'totp_unreadable',
+    rate_limited: 'rateLimited',
 })
 
 export function ssoErrorKey(code) {
