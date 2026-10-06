@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import api from '../api'
 import { normalizeRecordName } from '../lib/dnsName.js'
 import { fanoutSummary, formatFanoutErrors, formatFanoutWarnings } from '../lib/fanout.js'
+import { luaInactiveServers as inactiveLuaServers, relevantLuaServers } from '../lib/luaRecord.js'
 import { effectiveManagePtr, isPtrType, loadPtrConfig } from '../lib/ptrPreference.js'
 import { applyPtrMessages } from '../lib/ptrResults.js'
 import { rrsetValueCount, truncateValue } from '../lib/recordContent.js'
@@ -18,8 +19,15 @@ import { rrsetValueCount, truncateValue } from '../lib/recordContent.js'
 //  - PTR-Pflege (F11 §2.5 Schritt 5, WS-F9F11-FE): handleDelete sendet bei A/AAAA immer manage_ptr (Auswahl aus
 //    lib/ptrPreference.js, sonst Admin-Default; ein manage_ptr in `extra` gewinnt), ergaenzt die Rueckfrage um
 //    ptr.deleteNote und wertet details.ptr aus (lib/ptrResults.js). GET /ptr/config laedt der Hook beim Oeffnen.
+//  - LUA (F15 6.6, WS-F15): luaPolicy (GET /lua/policy beim Oeffnen; sicherer Startwert = kein Schreibrecht, das
+//    Backend entscheidet ohnehin), luaStatus/luaStatusLoading/luaStatusError (GET /lua/server-status, hoechstens
+//    einmal je Seitenaufruf ueber ensureLuaStatus(): nach dem Laden, wenn die Zone LUA-Records hat, und wenn der
+//    Record-Dialog LUA zeigt), luaRelevantServers (aktueller Server + schreibbare, erreichbare Peers) und
+//    luaInactiveServers (davon mit enable-lua-records=no).
 // TTL (F01) und disabled (F07) setzt der Record-Dialog (RecordFormModal) aus dem Record der Anfrage.
-// Die Schnittstelle ist in zoneDetailContext.js beschrieben.
+// Die Schnittstelle ist in zoneDetailContext.js beschrieben (LUA-Felder siehe oben).
+const LUA_POLICY_FALLBACK = Object.freeze({ policy: 'admin', can_write: false, reason: null })
+
 export default function useZoneData(server, zoneId) {
     const { t } = useTranslation()
 
@@ -41,9 +49,16 @@ export default function useZoneData(server, zoneId) {
     const [me, setMe] = useState(() => api.getUser())
     const [allServers, setAllServers] = useState([])
 
+    // LUA (F15): Policy fuer diesen Nutzer und PowerDNS-Status der Server
+    const [luaPolicy, setLuaPolicy] = useState(LUA_POLICY_FALLBACK)
+    const [luaStatus, setLuaStatus] = useState(null)
+    const [luaStatusLoading, setLuaStatusLoading] = useState(false)
+    const [luaStatusError, setLuaStatusError] = useState('')
+
     const loadSeqRef = useRef(0)
     const formSeqRef = useRef(0)
     const listenersRef = useRef(new Set())
+    const luaStatusRequested = useRef(false)
 
     useEffect(() => {
         api.getMe().then((u) => { api.setUser(u); setMe(u) }).catch(() => {})
@@ -54,6 +69,32 @@ export default function useZoneData(server, zoneId) {
     // Admin-Default der PTR-Pflege (Cache in lib/ptrPreference.js; Fehler bleiben still, Default "aus")
     useEffect(() => {
         loadPtrConfig(() => api.getPtrConfig())
+    }, [])
+    // LUA-Policy: Fehler bleiben still, der sichere Startwert (kein Schreibrecht) bleibt stehen
+    useEffect(() => {
+        const ctrl = new AbortController()
+        api.getLuaPolicy({ signal: ctrl.signal })
+            .then((p) => { if (p && typeof p === 'object') setLuaPolicy(p) })
+            .catch(() => {})
+        return () => ctrl.abort()
+    }, [])
+
+    /** LUA-Server-Status einmal je Seitenaufruf laden (Aufruf aus Handlern/Effekten; setzt Zustand asynchron). */
+    const ensureLuaStatus = useCallback(() => {
+        if (luaStatusRequested.current) return
+        luaStatusRequested.current = true
+        queueMicrotask(async () => {
+            setLuaStatusLoading(true)
+            try {
+                const st = await api.getLuaServerStatus()
+                setLuaStatus(st && typeof st === 'object' ? st : null)
+                setLuaStatusError('')
+            } catch (err) {
+                setLuaStatusError(err?.message || String(err))
+            } finally {
+                setLuaStatusLoading(false)
+            }
+        })
     }, [])
 
     useEffect(() => {
@@ -77,6 +118,11 @@ export default function useZoneData(server, zoneId) {
         () => allServers.filter((s) => s.name !== server && s.allow_writes !== false && s.is_reachable),
         [allServers, server]
     )
+    const luaRelevantServers = useMemo(() => relevantLuaServers(server, allServers), [server, allServers])
+    const luaInactiveServers = useMemo(
+        () => inactiveLuaServers(luaStatus, luaRelevantServers),
+        [luaStatus, luaRelevantServers]
+    )
     const serverCanWrite = currentServerInfo ? currentServerInfo.allow_writes !== false : true
     const userCanEdit = !me || me.role === 'admin' || me.zone_permissions?.[zoneKey] !== 'read'
     const canEdit = userCanEdit && serverCanWrite
@@ -98,6 +144,7 @@ export default function useZoneData(server, zoneId) {
             setRecords(list)
             setZoneMeta(meta)
             setZoneLoadSeq(seq)
+            if (list.some((r) => r?.type === 'LUA')) ensureLuaStatus()
             event = { seq, ok: true, silent, records: list, zoneMeta: meta, error: null }
         } else {
             const err = recRes.reason
@@ -107,7 +154,7 @@ export default function useZoneData(server, zoneId) {
         setLoading(false)
         setLoadEvent(event)
         return event
-    }, [server, zoneId])
+    }, [server, zoneId, ensureLuaStatus])
 
     /** Zone neu laden. opts.silent: ohne Ganzseiten-Spinner (Panels bleiben gemountet, F7 §6.4). */
     const loadZone = useCallback((opts = {}) => {
@@ -227,5 +274,6 @@ export default function useZoneData(server, zoneId) {
         recordForm, openAdd, openEdit, openClone, closeRecordForm,
         handleDelete, reportFanout, resolveName, relativeName,
         slotState, setSlotState,
+        luaPolicy, luaStatus, luaStatusLoading, luaStatusError, ensureLuaStatus, luaRelevantServers, luaInactiveServers,
     }
 }

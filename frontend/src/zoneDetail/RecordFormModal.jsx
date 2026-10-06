@@ -22,6 +22,9 @@ import {
 // Erweiterungen (form-extensions/*.ext.jsx) laufen ueber den Vertrag aus formExtensions.js / form-extensions/README.md.
 // F8 (Welle 1): TTL-Feld mit Grenzen (F01/F02), CAA-Defaults (F03), unbekannte Typen als RDATA-Editor (F04),
 // Namensnormalisierung (F05), disabled-Flag (F07), Validatoren mit Wert-Set (F10), Wert-Index im Fehler (F11).
+// F15 (Welle 3): Typ-Option LUA nur mit LUA-Schreibrecht (ctx.luaPolicy.can_write, sonst disabled mit Zusatz
+// "(nur Admins)"/"(deaktiviert)"); Speichern bricht dann mit dem Policy-Text ab (Kosmetik, das Backend prueft).
+// Editor-Zusaetze fuer LUA liefert form-extensions/lua.ext.jsx.
 
 // Felder, die Erweiterungen ueber setForm aendern duerfen ('disabled' ist ein Kernfeld, F07)
 const FORM_PATCH_KEYS = ['type', 'name', 'ttl', 'fieldsList']
@@ -81,7 +84,7 @@ export default function RecordFormModal({ request }) {
     const ctx = useZoneDetail()
     const {
         server, zoneId, zoneName, zoneKey, zoneMeta, records, canEdit, slots,
-        closeRecordForm, reportFanout, setSuccess, loadZone, relativeName,
+        closeRecordForm, reportFanout, setSuccess, loadZone, relativeName, luaPolicy,
     } = ctx
     const exts = useMemo(() => slots?.formExtensions || [], [slots])
     const record = request?.record || null
@@ -203,6 +206,12 @@ export default function RecordFormModal({ request }) {
         disabled: !!form.disabled,
     }), [form, fqdn])
 
+    /* ----- LUA-Policy (F15) ---------------------------------------------------*/
+    const luaWriteOk = luaPolicy?.can_write === true
+    const luaDisabledPolicy = luaPolicy?.policy === 'disabled'
+    const luaDeniedText = luaPolicy?.reason || t(luaDisabledPolicy ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
+    const luaOptionSuffix = t(luaDisabledPolicy ? 'lua.typeOptionDisabled' : 'lua.typeOptionAdminOnly')
+
     /* ----- Submit -----------------------------------------------------------*/
     async function handleAddRecord(e) {
         e.preventDefault()
@@ -218,6 +227,13 @@ export default function RecordFormModal({ request }) {
 
         if (apexWarning?.kind === 'error') {
             setModalError(apexWarning.text)
+            setSaving(false)
+            return
+        }
+
+        // LUA-Policy (F15 6.6): ohne Schreibrecht gar nicht erst senden (Backend antwortet sonst mit 403)
+        if (addType === 'LUA' && !luaWriteOk) {
+            setModalError(luaDeniedText)
             setSaving(false)
             return
         }
@@ -434,7 +450,14 @@ export default function RecordFormModal({ request }) {
                             >
                                 {typeOptions.map((k) => {
                                     const v = getRecordDef(k)
-                                    return <option key={k} value={k}>{v.labelKey ? t(v.labelKey) : v.label}</option>
+                                    const label = v.labelKey ? t(v.labelKey) : v.label
+                                    // LUA ohne Schreibrecht: Option gesperrt (ausser beim Bearbeiten eines LUA-Records)
+                                    const luaLocked = k === 'LUA' && !luaWriteOk && !(isEdit && addType === 'LUA')
+                                    return (
+                                        <option key={k} value={k} disabled={luaLocked}>
+                                            {luaLocked ? `${label} ${luaOptionSuffix}` : label}
+                                        </option>
+                                    )
                                 })}
                             </select>
                         </div>

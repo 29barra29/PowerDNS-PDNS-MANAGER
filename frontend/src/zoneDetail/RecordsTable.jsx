@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, Pencil, Copy, Globe } from 'lucide-react'
+import { Plus, Trash2, Pencil, Copy, Globe, Search, AlertTriangle } from 'lucide-react'
 import api from '../api'
 import BulkActionBar from '../components/bulk/BulkActionBar'
 import BulkTtlDialog from '../components/bulk/BulkTtlDialog'
 import { ALL_RECORD_TYPE_KEYS } from '../constants/dnsRecordTypes'
+import { filterRecords, normalizeRecordFilter, recordFilterTypes } from '../lib/luaRecord.js'
 import { getDefault, getManagePtr } from '../lib/ptrPreference.js'
 import { slotApplies } from '../lib/slots.js'
 import { formatTtl } from '../lib/ttl.js'
@@ -30,6 +31,10 @@ import { RECORD_TYPES } from './zoneDetailModel'
 // F11 (PTR): Papierkorb bei A/AAAA sendet die gemerkte PTR-Auswahl der Zone (lib/ptrPreference.js) als manage_ptr;
 // ohne gemerkte Auswahl setzt useZoneData.handleDelete den Admin-Default aus dem /ptr/config-Cache explizit ein
 // (manage_ptr ist immer true/false, Spec F11 §12 Nr. 14).
+// F15 (LUA): Filterleiste ueber den Karten (Name, Typ oder Wert; Typauswahl; ESC leert das Feld) - die Kopf-Checkbox
+// einer Typ-Karte wirkt nur auf sichtbare Zeilen, ausgeblendete Auswahl bleibt erhalten und wird gemeldet.
+// LUA-Karte: Chip, wenn ein relevanter Server enable-lua-records=no meldet (ctx.luaInactiveServers); Stift/Klon bei
+// LUA-Zeilen gesperrt ohne LUA-Schreibrecht (ctx.luaPolicy, Titel = Policy-Text). Loeschen bleibt erlaubt.
 
 // Breite der Aktionsspalte: 2.4.1 w-28 fuer drei Icons, je weiterer Aktion etwas mehr.
 function actionColumnWidth(extraCount) {
@@ -55,9 +60,28 @@ function HeaderCheckbox({ state, onChange, label }) {
 export default function RecordsTable() {
     const { t } = useTranslation()
     const ctx = useZoneDetail()
-    const { records, canEdit, openAdd, openEdit, openClone, handleDelete, slots, zoneKey, server, zoneId, subscribeZoneLoaded } = ctx
+    const {
+        records, canEdit, openAdd, openEdit, openClone, handleDelete, slots, zoneKey, server, zoneId, subscribeZoneLoaded,
+        luaPolicy, luaInactiveServers,
+    } = ctx
     const rowActions = slots?.rowActions || []
     const valueRenderers = slots?.valueRenderers || []
+
+    // ---- Filter (F15 2.5) ---------------------------------------------------------------------------------------
+    const [filterText, setFilterText] = useState('')
+    const [filterTypeRaw, setFilterType] = useState('')
+    const filterTypes = useMemo(() => recordFilterTypes(records, ALL_RECORD_TYPE_KEYS), [records])
+    // ein gewaehlter Typ, den es nach dem Neuladen nicht mehr gibt, gilt als "Alle Typen"
+    const filterType = filterTypes.includes(filterTypeRaw) ? filterTypeRaw : ''
+    const filter = normalizeRecordFilter({ text: filterText, type: filterType })
+    const visibleRecords = useMemo(
+        () => filterRecords(records, { text: filterText, type: filterType }),
+        [records, filterText, filterType],
+    )
+    function resetFilter() {
+        setFilterText('')
+        setFilterType('')
+    }
 
     // ---- Mehrfachauswahl (F1) -----------------------------------------------------------------------------------
     const [selectedRaw, setSelected] = useZoneSlotState('bulk.selected', EMPTY_SELECTION)
@@ -75,6 +99,11 @@ export default function RecordsTable() {
 
     const stats = useMemo(() => selectionStats(records, selected), [records, selected])
     const showBulk = canEdit && selected.size > 0
+    const hiddenSelectedCount = useMemo(() => {
+        if (!filter.active || selected.size === 0) return 0
+        const visible = new Set(visibleRecords.map(recordKey))
+        return [...selected].filter((k) => !visible.has(k)).length
+    }, [filter.active, selected, visibleRecords])
 
     async function runSelectionPreview(ops, { fromTtl = false } = {}) {
         if (bulkBusy) return
@@ -148,7 +177,7 @@ export default function RecordsTable() {
     }
 
     const grouped = {}
-    records.forEach(r => {
+    visibleRecords.forEach(r => {
         if (!grouped[r.type]) grouped[r.type] = []
         grouped[r.type].push(r)
     })
@@ -166,6 +195,11 @@ export default function RecordsTable() {
         return true
     }
 
+    // LUA ohne Schreibrecht (Policy): Bearbeiten/Klonen gesperrt, Loeschen nicht (F15 2.3)
+    const luaLocked = (r) => r.type === 'LUA' && luaPolicy?.can_write !== true
+    const luaLockTitle = luaPolicy?.reason
+        || t(luaPolicy?.policy === 'disabled' ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
+
     function renderValue(r) {
         const renderer = valueRenderers.find((entry) => slotApplies(entry, [r, ctx]))
         if (!renderer) return r.content
@@ -175,11 +209,81 @@ export default function RecordsTable() {
 
     return (
         <>
+            {/* Filterleiste (F15 2.5): nur bei vorhandenen Records */}
+            <div className="glass-card p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="relative flex-1 min-w-0">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" aria-hidden="true" />
+                    <input
+                        type="search"
+                        value={filterText}
+                        onChange={(e) => setFilterText(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape' && filterText) {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                setFilterText('')
+                            }
+                        }}
+                        placeholder={t('zoneDetail.filterPlaceholder')}
+                        aria-label={t('zoneDetail.filterLabel')}
+                        className="w-full h-9 pl-9 pr-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary"
+                        autoComplete="off"
+                        spellCheck={false}
+                    />
+                </div>
+                <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    aria-label={t('zoneDetail.filterAllTypes')}
+                    className="h-9 px-3 text-sm rounded-lg border border-border bg-bg-primary text-text-primary sm:w-44"
+                >
+                    <option value="">{t('zoneDetail.filterAllTypes')}</option>
+                    {filterTypes.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <span className="text-xs text-text-muted whitespace-nowrap" aria-live="polite">
+                    {t('zoneDetail.filterCount', { shown: visibleRecords.length, total: records.length })}
+                </span>
+                {filter.active && (
+                    <button
+                        type="button"
+                        onClick={resetFilter}
+                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-bg-hover whitespace-nowrap"
+                    >
+                        {t('zoneDetail.filterReset')}
+                    </button>
+                )}
+            </div>
+            {hiddenSelectedCount > 0 && (
+                <p className="text-xs text-amber-300 -mt-3" role="status">
+                    {t('zoneDetail.filterHiddenSelected', { count: hiddenSelectedCount })}
+                </p>
+            )}
+
+            {filter.active && visibleRecords.length === 0 && (
+                <div className="glass-card p-8 text-center text-text-muted">
+                    <Search className="w-10 h-10 mx-auto mb-3 opacity-30" aria-hidden="true" />
+                    <p className="text-sm">{t('zoneDetail.filterNoMatch')}</p>
+                    <button
+                        type="button"
+                        onClick={resetFilter}
+                        className="mt-4 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-bg-hover"
+                    >
+                        {t('zoneDetail.filterReset')}
+                    </button>
+                </div>
+            )}
+
             {sortedTypes.map(type => (
                 <div key={type} className="glass-card overflow-hidden">
-                    <div className="px-4 py-3 bg-bg-hover/30 border-b border-border flex items-center gap-2">
+                    <div className="px-4 py-3 bg-bg-hover/30 border-b border-border flex flex-wrap items-center gap-2">
                         <span className="text-xs font-bold px-2 py-0.5 bg-accent/20 text-accent-light rounded">{type}</span>
                         <span className="text-xs text-text-muted">{t('zoneDetail.recordCount', { count: grouped[type].length })}</span>
+                        {type === 'LUA' && luaInactiveServers?.length > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-200">
+                                <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                                {t('lua.tableNotActive', { servers: luaInactiveServers.join(', ') })}
+                            </span>
+                        )}
                     </div>
                     <div className="overflow-x-auto">
                     <table className={`w-full text-sm ${canEdit ? 'min-w-[680px]' : 'min-w-[640px]'}`}>
@@ -229,23 +333,30 @@ export default function RecordsTable() {
                                     <td className="p-3 font-mono text-xs text-text-secondary break-all">{renderValue(r)}</td>
                                     <td className="p-3 text-text-muted text-xs" title={Number.isFinite(Number(r.ttl)) ? formatTtl(Number(r.ttl), t) : undefined}>{r.ttl}</td>
                                     <td className="p-3 text-right whitespace-nowrap">
-                                        <button
-                                            onClick={() => openEdit(r)}
-                                            disabled={!canEdit}
-                                            className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1 disabled:opacity-30 disabled:pointer-events-none"
-                                            title={t('zoneDetail.edit')}
-                                        >
-                                            <Pencil className="w-3.5 h-3.5" />
-                                        </button>
-                                        {type !== 'SOA' && RECORD_TYPES[type] && (
+                                        {/* Gesperrte LUA-Zeilen: Titel am umschliessenden span (deaktivierte Knoepfe zeigen keinen) */}
+                                        <span className="inline-block" title={luaLocked(r) ? luaLockTitle : undefined}>
                                             <button
-                                                onClick={() => openClone(r)}
-                                                disabled={!canEdit}
+                                                onClick={() => openEdit(r)}
+                                                disabled={!canEdit || luaLocked(r)}
                                                 className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1 disabled:opacity-30 disabled:pointer-events-none"
-                                                title={t('zoneDetail.clone')}
+                                                title={t('zoneDetail.edit')}
+                                                aria-label={luaLocked(r) ? `${t('zoneDetail.edit')} – ${luaLockTitle}` : t('zoneDetail.edit')}
                                             >
-                                                <Copy className="w-3.5 h-3.5" />
+                                                <Pencil className="w-3.5 h-3.5" />
                                             </button>
+                                        </span>
+                                        {type !== 'SOA' && RECORD_TYPES[type] && (
+                                            <span className="inline-block" title={luaLocked(r) ? luaLockTitle : undefined}>
+                                                <button
+                                                    onClick={() => openClone(r)}
+                                                    disabled={!canEdit || luaLocked(r)}
+                                                    className="p-1 rounded text-text-muted hover:text-accent-light hover:bg-accent/10 transition-colors mr-1 disabled:opacity-30 disabled:pointer-events-none"
+                                                    title={t('zoneDetail.clone')}
+                                                    aria-label={luaLocked(r) ? `${t('zoneDetail.clone')} – ${luaLockTitle}` : t('zoneDetail.clone')}
+                                                >
+                                                    <Copy className="w-3.5 h-3.5" />
+                                                </button>
+                                            </span>
                                         )}
                                         {canDeleteRecord(r) && (
                                             <button

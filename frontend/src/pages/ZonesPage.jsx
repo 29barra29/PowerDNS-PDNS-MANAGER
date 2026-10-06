@@ -906,13 +906,35 @@ export default function ZonesPage() {
                                     )}
                                     <p>{t('zones.importPreviewExists', { answer: imPreview.zone_exists ? t('common.yes') : t('common.no') })}</p>
                                     <p>{t('zones.importPreviewCounts', { add: imPreview.would_add_total ?? 0, remove: imPreview.would_remove_total ?? 0 })}</p>
+                                    {/* LUA in der Datei (F15 2.6/6.8): Anzahl, Hinweis, Auffaelligkeiten, Sperre bei Policy "disabled" */}
+                                    {imPreview.lua_count > 0 && (
+                                        <>
+                                            <p className="text-amber-200">{t('lua.import.found', { count: imPreview.lua_count })}</p>
+                                            <p className="text-text-muted">{t('lua.import.enableHint')}</p>
+                                        </>
+                                    )}
+                                    {imPreview.lua_issues?.length > 0 && (
+                                        <div className="text-amber-200">
+                                            <p className="font-medium">{t('lua.import.issues')}</p>
+                                            <ul className="list-disc pl-5">
+                                                {imPreview.lua_issues.map((issue) => (
+                                                    <li key={`${issue.line}:${issue.message}`}>
+                                                        {t('lua.import.issueLine', { line: issue.line, message: issue.message })}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {imPreview.lua_blocked && (
+                                        <p className="text-danger font-medium" role="alert">{t('lua.import.blocked')}</p>
+                                    )}
                                 </div>
                             )}
                             <div className="flex flex-wrap justify-end gap-2 pt-2">
                                 <button type="button" disabled={imBusy} onClick={runImportPreview} className="px-3 py-2 rounded-lg bg-bg-secondary text-sm">
                                     {imBusy ? <Loader2 className="w-4 h-4 inline animate-spin" /> : null} {t('zones.importPreview')}
                                 </button>
-                                <button type="button" disabled={imBusy || !imPreview} onClick={runImportExecute} className="px-3 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm">
+                                <button type="button" disabled={imBusy || !imPreview || !!imPreview.lua_blocked} onClick={runImportExecute} className="px-3 py-2 rounded-lg bg-gradient-to-r from-accent to-purple-600 text-white text-sm">
                                     {t('zones.importRun')}
                                 </button>
                             </div>
