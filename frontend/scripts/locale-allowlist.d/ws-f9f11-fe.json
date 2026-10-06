@@ -1,0 +1,16 @@
+{
+  "reason": "WS-F9F11-FE: Produkt-/Protokollnamen DynDNS, FRITZ!Box und ddclient sowie die Einheit 'TTL (s)' sind in allen Sprachen gleich; 'Zone' ist im Deutschen das uebliche Wort (wie zones.zone); 'DynDNS token' ist in bs/hr/sr die uebliche Schreibweise (Token wird nicht uebersetzt, wie bei den Panel-Tokens).",
+  "global": [
+    "audit.resourceTypes.dyndns",
+    "dyndns.title",
+    "dyndns.colTtl",
+    "dyndns.guideFritzTitle",
+    "dyndns.guideDdclientTitle"
+  ],
+  "perLanguage": {
+    "de": ["dyndns.fieldZone"],
+    "bs": ["audit.resourceTypes.dyndns_token"],
+    "hr": ["audit.resourceTypes.dyndns_token"],
+    "sr": ["audit.resourceTypes.dyndns_token"]
+  }
+}

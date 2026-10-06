@@ -17,7 +17,8 @@ import { createContext, useCallback, useContext } from 'react'
 //   Records      openAdd(), openEdit(record), openClone(record), closeRecordForm(), recordForm
 //                handleDelete(record, extra?) -> Promise<res|null>  (extra = zusaetzliche Body-Felder)
 //                reportFanout(details) -> { errors, warnings, hasErrors, hasWarnings } (setzt Fehler/Warnung)
-//                resolveName(name) -> FQDN mit Punkt, relativeName(fqdn) -> '@' bzw. relativer Name
+//                resolveName(name) -> FQDN mit Punkt (klein, normalisiert wie der Record-Dialog); '' bei ungueltigem
+//                Namen (Fehlertext zeigt der Dialog), relativeName(fqdn) -> '@' bzw. relativer Name
 //   Tabs         tabs, activeTab, setTab(id, params?, { replace }?), searchParams, setSearchParams
 //   Slots        slots = { tabs, headerActions, rowActions, formExtensions, valueRenderers }
 //   Slot-State   slotState, setSlotState(key, valueOrUpdater) bzw. Hook useZoneSlotState(key, initial)

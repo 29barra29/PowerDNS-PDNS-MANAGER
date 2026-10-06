@@ -47,8 +47,8 @@ export default function MyExtension({ type, form, setForm, record, zone, server,
 | Prop | Inhalt |
 |---|---|
 | `type` | aktueller Record-Typ |
-| `form` | `{ mode, isEdit, type, name, fqdn, ttl, fieldsList, contents, oldContent }` – `contents` = gebaute Werte je Wert-Set (unvollständige Sets `''`) |
-| `setForm(patch \| form => patch)` | ändert `type`, `name`, `ttl` oder `fieldsList` (andere Felder werden ignoriert) |
+| `form` | `{ mode, isEdit, type, name, fqdn, ttl, fieldsList, contents, oldContent, disabled }` – `fqdn` = normalisierter Name mit Punkt (`''` bei ungültigem Namen), `contents` = gebaute Werte je Wert-Set (unvollständige Sets `''`), `disabled` = Zustand der Checkbox „Deaktiviert“ (nur lesend, Kernfeld) |
+| `setForm(patch \| form => patch)` | ändert `type`, `name`, `ttl` oder `fieldsList` (andere Felder, auch `disabled`, werden ignoriert) |
 | `record` | Ausgangs-Record (`null` bei Anlegen/Vorlage) |
 | `zone`, `server` | `{ id, name, key, meta }` bzw. Servername aus der URL |
 | `isEdit`, `canEdit` | Bearbeiten-Modus; Schreibrecht (Zone + Server) |
@@ -99,6 +99,8 @@ export default function NoteExtension({ extState, setExtState, canEdit }) {
 
 - `when`, `initialState` und `collect` sind Pflicht; fehlen sie, wird die Erweiterung mit Konsolenmeldung ignoriert.
   Eine Default-Komponente ist optional (Erweiterung nur mit `collect`/`onResult`).
-- Löschen läuft nicht über den Dialog: Zusatzfelder für `DELETE` (z. B. `manage_ptr`) gibt der Aufrufer an
-  `ctx.handleDelete(record, extra)` mit (`useZoneData.js`).
+- Löschen läuft nicht über den Dialog: Zusatzfelder für `DELETE` gibt der Aufrufer an
+  `ctx.handleDelete(record, extra)` mit (`useZoneData.js`). `manage_ptr` setzt `handleDelete` bei A/AAAA selbst
+  (gemerkte Auswahl bzw. Admin-Default, `lib/ptrPreference.js`); ein `extra.manage_ptr` hat Vorrang.
+- Beispiel aus dem Bestand: `ptr.ext.jsx` (PTR-Pflege, WS-F9F11-FE).
 - Texte über i18n im eigenen Fragment (`locales/fragments/<ws>.<lang>.json`).
