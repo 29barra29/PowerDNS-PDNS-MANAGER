@@ -63,12 +63,19 @@ test.describe('Benutzerverwaltung', () => {
   test('Sicherheitsdialog: Tokens, 2FA-Reset, Zufallspasswort, Zugaenge widerrufen', async ({ page, adminApi, openAs }) => {
     const seeded = await adminApi.createUser()
     cleanup.push((api) => api.deleteUser(seeded.id))
+    // Laufende Browser-Sitzung des Benutzers (zweiter Kontext) fuer die Pruefung "Widerruf beendet Sitzungen" (L3);
+    // vor dem Einschalten von 2FA angemeldet (ein TOTP-Code darf nur einmal benutzt werden)
+    const sessionApi = await PanelApi.login(seeded.username, seeded.password)
+    const userSession = await openAs(sessionApi)
+    await sessionApi.dispose()
     // Benutzer mit 2FA, zwei API-Tokens und einem Webhook
     const userApi = await PanelApi.login(seeded.username, seeded.password)
     await userApi.enableTotp()
     for (const n of ['ui-a', 'ui-b']) await userApi.post('auth/me/panel-tokens', { name: n })
     await userApi.post('auth/me/webhooks', { name: unique('ui-hook'), url: receiver.url(unique('ui-users')), events: ['*'] })
     await userApi.dispose()
+    await userSession.goto('/zones')
+    await expect(userSession).toHaveURL(/\/zones$/)
 
     await page.goto('/users')
     const card = userCard(page, seeded.username)
@@ -97,6 +104,11 @@ test.describe('Benutzerverwaltung', () => {
     await sec.getByRole('button', { name: t('users.revokeAccessButton') }).click()
     await confirm
     await expect(sec.getByText(t('users.revokeAccessDone', { tokens: 0, dyndns: 0, webhooks: 1, deliveries: 0 }))).toBeVisible()
+    // L3: Der Widerruf beendet auch laufende Browser-Sitzungen (WS-W2-NACHARBEIT, users.sessions_revoked_at)
+    await pendingCheck('WS-W2-NACHARBEIT (L3: Widerruf beendet Browser-Sitzungen)', async () => {
+      await userSession.goto('/search')
+      await expect(userSession).toHaveURL(/\/login$/)
+    })
 
     // Zufallspasswort mit Zwangswechsel: Einmal-Anzeige, ESC schliesst nicht, Kopieren
     await sec.locator('label').filter({ hasText: t('users.mustChangeOnNextLogin') }).nth(1).locator('input').check()

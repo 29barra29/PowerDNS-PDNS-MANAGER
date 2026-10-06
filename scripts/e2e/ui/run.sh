@@ -18,7 +18,8 @@
 #
 # Umgebung: E2E_ADMIN_PASSWORD (sonst aus DIR/admin_password bzw. dem laufenden Backend-Container),
 #           E2E_UI_IMAGE (Default mcr.microsoft.com/playwright:v<Version aus package.json>-noble),
-#           E2E_UI_NPM_CACHE (Default ${XDG_CACHE_HOME:-$HOME/.cache}/pdnsmgr-e2e-ui-npm), E2E_UI_RETRIES (Default 1).
+#           E2E_UI_NPM_CACHE (Default ${XDG_CACHE_HOME:-$HOME/.cache}/pdnsmgr-e2e-ui-npm), E2E_UI_RETRIES (Default 1),
+#           E2E_UI_LOCALES_DIR (Sprachdateien fuer die Selektoren, Default frontend/src/locales dieses Checkouts).
 # Exit-Code: 0 = alle Specs gruen (Skips erlaubt), 1 = Fehler, 2 = Aufruffehler.
 set -euo pipefail
 

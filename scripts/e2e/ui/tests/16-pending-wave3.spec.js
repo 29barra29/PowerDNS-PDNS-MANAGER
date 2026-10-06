@@ -1,13 +1,14 @@
 // Welle-3-UI, die beim Schreiben dieser Specs noch nicht integriert war (Basis: integrierte Welle 2):
 //   WS-F15   LUA-Record anlegen (als Admin) mit Warnbox, Vorlage und Server-Status
 //   WS-F5-FE Secrets-Status-Karte im Reiter "Sicherheit"
-//   WS-F4-C  DS in der Elternzone (Deaktivieren-Dialog) ohne externe Abfragen
+//   WS-F4-C  Rollover-Schritt "DNSKEY pruefen" und DS in der Elternzone (Deaktivieren) ohne externe Abfragen
 // Standard: SKIP mit TODO. Nach dem Merge der Workstreams mit `scripts/e2e/ui/run.sh --pending` (bzw.
 // E2E_UI_PENDING=1) ausfuehren; Selektoren folgen den Specs (F15 §2.2/§6.5, F5 §6.2, F4 §2.9) und den i18n-Keys dort.
-// Gruen -> skipUnlessPending-Zeile entfernen (dann laufen sie immer mit).
+// Gruen -> skipUnlessPending-Zeile entfernen (dann laufen sie immer mit). Stand 06.10.2026: gegen eine lokale
+// Vorschau (Welle-2-Stand + ws/WS-F15, ws/WS-F5-FE, ws/WS-F4-C, ws/WS-W2-NACHARBEIT) alle drei gruen.
 const { test, expect } = require('../fixtures/test')
 const { uniqueZone } = require('../fixtures/api')
-const { t, exact } = require('../fixtures/i18n')
+const { t, exact, pattern } = require('../fixtures/i18n')
 const { zonePath, modal, field, dialog, rowWith } = require('../fixtures/ui')
 const { skipUnlessPending } = require('../fixtures/pending')
 
@@ -56,7 +57,7 @@ test.describe('Welle 3 (nach Integration)', () => {
     await expect(page.getByText(t('settings.secrets.statusPlaintext'))).toHaveCount(0)
   })
 
-  test('WS-F4-C: DS in der Elternzone beim Deaktivieren (externe Abfragen aus)', async ({ page, adminApi }) => {
+  test('WS-F4-C: Rollover-Schritt "DNSKEY pruefen" und Elternzone beim Deaktivieren (externe Abfragen aus)', async ({ page, adminApi }) => {
     skipUnlessPending('WS-F4-C (Parent-DS-/DNSKEY-Pruefung in DnssecDisableModal/DnssecRolloverModal)')
     const zone = uniqueZone('ui-pds')
     zones.push(zone)
@@ -65,11 +66,25 @@ test.describe('Welle 3 (nach Integration)', () => {
 
     await page.goto(zonePath(zone))
     const card = page.getByRole('region', { name: t('dnssec.cardTitle') })
+
+    // Rollover starten: DNSKEY-Pruefung ist ohne Propagations-Freigabe "nicht geprueft" -> Pflicht-Checkbox
+    await card.getByRole('button', { name: t('dnssec.btnRollover') }).click()
+    const roll = dialog(page, t('dnssec.rolloverTitle', { zone: bare(zone) }))
+    await roll.getByRole('button', { name: t('dnssec.rolloverStartButton') }).click()
+    await expect(roll.getByText(pattern('dnssec.dnskeyCheckDisabled'))).toBeVisible()
+    const switchBtn = roll.getByRole('button', { name: t('dnssec.rolloverSwitchButton') })
+    await expect(switchBtn).toBeDisabled()
+    await roll.locator('label').filter({ hasText: t('dnssec.dnskeyCheckConfirm') }).locator('input[type="checkbox"]').check()
+    await roll.locator('label').filter({ hasText: t('dnssec.rolloverConfirmDsAdded') }).locator('input[type="checkbox"]').check()
+    await expect(switchBtn).toBeEnabled()
+    await page.keyboard.press('Escape')
+    await expect(roll).toBeHidden()
+
+    // Deaktivieren: Abschnitt "DS in der Elternzone" mit manuellem Weg (Pruefung nicht freigegeben)
     await card.getByRole('button', { name: t('dnssec.btnDisable') }).click()
     const dlg = dialog(page, t('dnssec.disableTitle', { zone: bare(zone) }))
-    await expect(dlg.getByText(t('dnssec.parentDsTitle'))).toBeVisible()
-    // Propagation (externe Resolver) ist im E2E-Stand aus -> Hinweis statt Pruefung (F4 §2.9 Teil B)
-    await expect(dlg.getByText(t('dnssec.parentDsDisabled', { zone: bare(zone) }), { exact: false })).toBeVisible()
+    await expect(dlg.getByText(t('dnssec.parentDsTitle'), { exact: true })).toBeVisible()
+    await expect(dlg.getByText(t('dnssec.parentDsDisabled', { zone: bare(zone) }))).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(dlg).toBeHidden()
   })

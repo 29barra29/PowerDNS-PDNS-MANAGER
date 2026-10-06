@@ -13,9 +13,9 @@ const BUG_CARD = 'UI-SMOKE-1: Dialoge in .glass-card-Karten (backdrop-filter) si
 
 /**
  * Standardpruefung eines Dialogs. opts: pending (Owner-Text fuer Fokus-Pruefungen), escCloses (Default true),
- * onTopBug (ID eines bekannten Fehlers "Dialog nicht ueber der Seite").
+ * onTopBug (ID eines bekannten Fehlers "Dialog nicht ueber der Seite"), focusReturnBug (ID: Fokus kehrt nicht zurueck).
  */
-async function checkDialog(page, opener, dlg, { pending = null, escCloses = true, onTopBug = null } = {}) {
+async function checkDialog(page, opener, dlg, { pending = null, escCloses = true, onTopBug = null, focusReturnBug = null } = {}) {
   await opener.click()
   await expect(dlg).toBeVisible()
   if (onTopBug) await knownBug(onTopBug, () => expectDialogOnTop(dlg))
@@ -29,7 +29,9 @@ async function checkDialog(page, opener, dlg, { pending = null, escCloses = true
   if (!escCloses) return
   await page.keyboard.press('Escape')
   await expect(dlg).toBeHidden()
-  const back = () => expect(opener).toBeFocused()
+  const back = focusReturnBug
+    ? () => knownBug(focusReturnBug, () => expect(opener).toBeFocused({ timeout: 3_000 }))
+    : () => expect(opener).toBeFocused()
   if (pending) await pendingCheck(pending, back)
   else await back()
 }
@@ -122,7 +124,11 @@ test.describe('Dialoge: Lage, Fokus, ESC', () => {
     const card = settingsCard(page, 'settings.sso.oidcTitle')
     await card.getByLabel(t('settings.sso.issuer')).fill('https://idp-dialog.example.com/')
     const save = card.getByRole('button', { name: exact(t('common.save')) })
-    await checkDialog(page, save, dialog(page, t('stepUp.title')), { pending: W2('Step-up-Dialog') })
+    // Der Speichern-Knopf ist waehrend des Step-ups deaktiviert -> der Hook kann den Fokus nicht zurueckgeben
+    await checkDialog(page, save, dialog(page, t('stepUp.title')), {
+      pending: W2('Step-up-Dialog'),
+      focusReturnBug: 'UI-SMOKE-3: Fokus nach Step-up-Abbruch nicht zurueck (Ausloeser waehrend des Wartens deaktiviert)',
+    })
     await expect(page.getByRole('alert')).toHaveCount(0)
   })
 

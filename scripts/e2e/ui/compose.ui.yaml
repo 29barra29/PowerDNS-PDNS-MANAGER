@@ -25,7 +25,8 @@ services:
     entrypoint: ["bash", "/ui-src/container-run.sh"]
     volumes:
       - ./ui:/ui-src:ro
-      - ../../frontend/src/locales:/locales:ro
+      # Sprachdateien fuer die Selektoren; E2E_UI_LOCALES_DIR erlaubt einen anderen Stand (z. B. Vorschau-Merge)
+      - ${E2E_UI_LOCALES_DIR:-../../frontend/src/locales}:/locales:ro
       - ${E2E_UI_OUT:?E2E_UI_OUT fehlt - scripts/e2e/ui/run.sh benutzen}:/out
       - ${E2E_UI_NPM_CACHE:?E2E_UI_NPM_CACHE fehlt - scripts/e2e/ui/run.sh benutzen}:/npm-cache
     environment:
