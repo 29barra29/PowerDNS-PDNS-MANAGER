@@ -21,7 +21,7 @@ from app.core import auth as core_auth  # noqa: E402
 from app.core.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.models import User  # noqa: E402
-from app.services import fanout, ptr, webhook_outbox, zone_index  # noqa: E402
+from app.services import fanout, ptr, system_settings, webhook_outbox, zone_index  # noqa: E402
 from app.services.pdns_client import PowerDNSAPIError  # noqa: E402
 from fakes.pdns import FakeDB, fake_pdns, make_zone, rr  # noqa: E402,F401
 
@@ -60,6 +60,8 @@ def env(monkeypatch, fake_pdns):
         return settings.get(key, default)
 
     monkeypatch.setattr(ptr, "get_bool_setting", gbs)
+    # records/bulk (WS-F1) loesen den Admin-Default selbst ueber system_settings.get_bool_setting auf
+    monkeypatch.setattr(system_settings, "get_bool_setting", gbs)
 
     async def events(*a, **kw):
         return 1
