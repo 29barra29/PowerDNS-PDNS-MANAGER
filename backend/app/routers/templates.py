@@ -2,6 +2,9 @@
 
 Lesen: alle angemeldeten Benutzer. Anlegen/Aendern/Loeschen: nur Admins (``get_admin_user``, bei Tokens
 zusaetzlich ``allow_admin``); Commit vor der Antwort ueber ``DbWrite``.
+
+LUA-Zeilen (F15 3.7) werden beim Speichern strukturell geprueft und normalisiert (``validate_lua_content``,
+ungueltig -> 422). Die LUA-Policy greift erst beim Anwenden der Vorlage (Record-Anlage ueber ``createRecord``).
 """
 import logging
 import json
@@ -12,8 +15,10 @@ from app.core.timeutil import iso_utc
 from app.core.database import DbRead, DbWrite
 from app.core.auth import get_current_user, get_admin_user
 from app.models.models import ZoneTemplate, User
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
+
+from app.services.lua_records import validate_lua_content
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,13 @@ class TemplateRecord(BaseModel):
     content: str = Field(..., description="Record content (IP, hostname, etc.)")
     ttl: int = Field(default=3600, ge=TEMPLATE_TTL_MIN, le=TEMPLATE_TTL_MAX, description="TTL in seconds")
     prio: Optional[int] = Field(default=None, description="Priority (for MX, SRV)")
+
+    @model_validator(mode="after")
+    def _validate_lua(self):
+        # LUA-Inhalt wie bei RecordCreate pruefen und normalisieren (F15 3.7); keine Policy-Pruefung hier
+        if (self.type or "").strip().upper() == "LUA":
+            self.content = validate_lua_content(self.content)
+        return self
 
 
 class TemplateCreate(BaseModel):
