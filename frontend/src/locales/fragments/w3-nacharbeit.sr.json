@@ -4,7 +4,8 @@
     "dyndns.secretRevokedBadge": "Tajna blokirana",
     "dyndns.secretRevokedForeignHint": "Samo vlasnik može da generiše novu tajnu.",
     "dyndns.secretRevokedHint": "Tajna je blokirana iz bezbednosnih razloga (token se pojavio u URL-u ili su pristupi opozvani). Generišite novu tajnu i zatim ponovo aktivirajte token – stara tajna ostaje nevažeća.",
-    "dyndns.secretRevokedRotate": "Generiši novu tajnu"
+    "dyndns.secretRevokedRotate": "Generiši novu tajnu",
+    "lua.settings.loadError": "LUA podešavanja nije bilo moguće učitati ({{error}}). Čuvanje je moguće tek nakon uspešnog učitavanja."
   },
   "remove": []
 }

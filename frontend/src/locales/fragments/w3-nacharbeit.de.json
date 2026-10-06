@@ -4,7 +4,8 @@
     "dyndns.secretRevokedBadge": "Secret gesperrt",
     "dyndns.secretRevokedForeignHint": "Nur der Besitzer kann ein neues Secret erzeugen.",
     "dyndns.secretRevokedHint": "Das Secret wurde aus Sicherheitsgründen gesperrt (der Token stand in einer URL oder die Zugänge wurden widerrufen). Erzeuge ein neues Secret und aktiviere den Token danach wieder – das alte Secret bleibt ungültig.",
-    "dyndns.secretRevokedRotate": "Neues Secret erzeugen"
+    "dyndns.secretRevokedRotate": "Neues Secret erzeugen",
+    "lua.settings.loadError": "Die LUA-Einstellungen konnten nicht geladen werden ({{error}}). Speichern ist erst nach erfolgreichem Laden möglich."
   },
   "remove": []
 }

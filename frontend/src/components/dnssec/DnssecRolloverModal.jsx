@@ -410,6 +410,7 @@ export default function DnssecRolloverModal({ server, zoneId, zoneName, status, 
         content = (
             <div className="space-y-3">
                 <p className="text-sm text-text-secondary">{t('dnssec.rolloverDeactivateBody')}</p>
+                {dnskeyCheck('dnskey')}
                 {kind === 'sep' && (
                     <Confirm checked={checks.ds} onChange={(v) => setCheck('ds', v)} disabled={locked}>
                         {t('dnssec.rolloverConfirmDsAdded')}

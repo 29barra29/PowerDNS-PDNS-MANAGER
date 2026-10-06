@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Braces, Loader2, RefreshCw } from 'lucide-react'
 import api from '../../api'
@@ -6,6 +6,8 @@ import api from '../../api'
 // Admin-Karte "LUA-Records" im Einstellungs-Tab "DNS-Optionen" (F15 2.1 / 6.5-5): Policy (admin | manage | disabled)
 // und die PowerDNS-Konfiguration je Server (GET /lua/server-status?refresh=true, nur Whitelist-Werte).
 // Erfolg und Fehler zeigt die Karte selbst an; ein Fehler beim Status laesst die Policy bedienbar.
+// Scheitert das Laden der Policy, gibt es weder Vorauswahl noch Speichern (sonst ueberschriebe "Speichern" still die
+// gespeicherte Policy mit "admin", Review-Fund W3-L9) – nur "Erneut versuchen".
 const POLICIES = [
     { id: 'admin', titleKey: 'lua.settings.policyAdmin', descKey: 'lua.settings.policyAdminDesc' },
     { id: 'manage', titleKey: 'lua.settings.policyManage', descKey: 'lua.settings.policyManageDesc' },
@@ -30,6 +32,7 @@ export default function LuaSettingsCard() {
     const [policy, setPolicy] = useState('admin')
     const [savedPolicy, setSavedPolicy] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState('')
     const [saving, setSaving] = useState(false)
     const [status, setStatus] = useState(null)
     const [statusLoading, setStatusLoading] = useState(true)
@@ -37,21 +40,25 @@ export default function LuaSettingsCard() {
     const [msg, setMsg] = useState('')
     const [err, setErr] = useState('')
 
+    const loadSettings = useCallback((signal) => api.getLuaSettings({ signal })
+        .then((d) => {
+            const p = d?.policy || 'admin'
+            setPolicy(p)
+            setSavedPolicy(p)
+            setLoadError('')
+            setLoading(false)
+        })
+        .catch((e) => {
+            if (e?.name === 'AbortError') return
+            setSavedPolicy(null)
+            setLoadError(e.message || String(e))
+            setLoading(false)
+        }), [])
+
     // Einstellungen und Server-Status parallel laden (Zustand erst nach der Antwort setzen)
     useEffect(() => {
         const ctrl = new AbortController()
-        api.getLuaSettings({ signal: ctrl.signal })
-            .then((d) => {
-                const p = d?.policy || 'admin'
-                setPolicy(p)
-                setSavedPolicy(p)
-                setLoading(false)
-            })
-            .catch((e) => {
-                if (e?.name === 'AbortError') return
-                setErr(e.message)
-                setLoading(false)
-            })
+        loadSettings(ctrl.signal)
         api.getLuaServerStatus(true, { signal: ctrl.signal })
             .then((st) => {
                 setStatus(st || null)
@@ -63,7 +70,14 @@ export default function LuaSettingsCard() {
                 setStatusLoading(false)
             })
         return () => ctrl.abort()
-    }, [])
+    }, [loadSettings])
+
+    function retryLoad() {
+        if (loading) return
+        setLoading(true)
+        setLoadError('')
+        loadSettings()
+    }
 
     useEffect(() => {
         if (!msg) return undefined
@@ -86,7 +100,7 @@ export default function LuaSettingsCard() {
 
     async function save(e) {
         e.preventDefault()
-        if (saving || policy === savedPolicy) return
+        if (saving || savedPolicy === null || policy === savedPolicy) return
         setSaving(true)
         setErr('')
         setMsg('')
@@ -124,6 +138,13 @@ export default function LuaSettingsCard() {
                 <p className="text-sm text-text-muted flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> {t('common.loading')}
                 </p>
+            ) : loadError ? (
+                <div role="alert" className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm flex flex-wrap items-center gap-3">
+                    <span className="flex-1 min-w-[12rem] break-words">{t('lua.settings.loadError', { error: loadError })}</span>
+                    <button type="button" onClick={retryLoad} className="text-xs px-3 py-1.5 rounded-md border border-danger/40 hover:bg-danger/10">
+                        {t('common.retry')}
+                    </button>
+                </div>
             ) : (
                 <fieldset className="space-y-2">
                     <legend className="sr-only">{t('lua.settings.title')}</legend>
@@ -206,7 +227,7 @@ export default function LuaSettingsCard() {
             <div className="flex justify-end">
                 <button
                     type="submit"
-                    disabled={loading || saving || policy === savedPolicy}
+                    disabled={loading || saving || savedPolicy === null || policy === savedPolicy}
                     className="px-4 py-2 bg-gradient-to-r from-accent to-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
                 >
                     {saving && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}

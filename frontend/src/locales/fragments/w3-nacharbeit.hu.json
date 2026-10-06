@@ -4,7 +4,8 @@
     "dyndns.secretRevokedBadge": "Titok letiltva",
     "dyndns.secretRevokedForeignHint": "Új titkot csak a tulajdonos generálhat.",
     "dyndns.secretRevokedHint": "A titkot biztonsági okból letiltottuk (a token egy URL-ben szerepelt, vagy a hozzáféréseket visszavonták). Generálj új titkot, majd kapcsold be újra a tokent – a régi titok érvénytelen marad.",
-    "dyndns.secretRevokedRotate": "Új titok generálása"
+    "dyndns.secretRevokedRotate": "Új titok generálása",
+    "lua.settings.loadError": "A LUA-beállítások nem tölthetők be ({{error}}). Mentés csak sikeres betöltés után lehetséges."
   },
   "remove": []
 }
