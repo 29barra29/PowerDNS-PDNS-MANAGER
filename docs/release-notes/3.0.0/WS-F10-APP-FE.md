@@ -24,7 +24,10 @@
   bleiben erhalten.
 - **Benutzerverwaltung:** Badge „SSO“ bzw. „LDAP“ mit dem Anmeldedienst im Tooltip; im Dialog „Passwort &
   Sicherheit“ der neue Abschnitt „Externe Anmeldung“ (Anmeldedienst, Aussteller, externe ID zum Kopieren) mit
-  „In lokales Konto umwandeln“ – das Zufallspasswort erscheint einmalig.
+  „In lokales Konto umwandeln“ – das Zufallspasswort erscheint einmalig. Ist die Rollen-Zuordnung auf
+  „Synchronisieren“ gestellt, nennt der Badge-Tooltip, dass die Rolle bei jeder Anmeldung aus den Gruppen kommt.
+  Beim Loeschen eines SSO-/LDAP-Kontos warnt die Rueckfrage, dass die automatische Kontoanlage es bei der naechsten
+  Anmeldung neu anlegt – zum dauerhaften Sperren das Konto deaktivieren.
 - Alle Texte in Deutsch, Englisch, Bosnisch, Kroatisch, Ungarisch und Serbisch.
 
 **Geaendert**
