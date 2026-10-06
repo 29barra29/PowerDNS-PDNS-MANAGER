@@ -2,16 +2,24 @@
 
 Top-Level-Imports nur Standardbibliothek und ``fastapi.HTTPException`` (wird aus
 ``schemas/dns.py`` importiert -> keine Zirkularitaet). DB-/Auth-Abhaengigkeiten werden
-lazy in den Policy-Funktionen importiert. Der Server-Status (PowerDNS-Konfiguration je
-Server, F15 5.3) folgt in Welle 3.
+lazy in den Policy-Funktionen importiert.
+
+Server-Status (F15 5.3, Welle 3): ``get_server_lua_status(refresh)`` fragt ``GET /config`` aller geladenen
+PowerDNS-Server parallel ab und gibt **nur** die LUA-relevanten Werte weiter (``parse_lua_config``-Whitelist –
+die pdns.conf kann Passwoerter enthalten, z. B. ``gmysql-password``). Ergebnisse werden 60 s im Prozess
+gecacht (``_status_cache``); ``refresh`` erzwingt eine neue Abfrage (der Router laesst das nur Admins zu).
+Fehlertexte sind kurze deutsche Saetze ohne PowerDNS-Body oder URL.
 
 Die Pruefung ist bewusst eine syntaktische Grobpruefung (Anfuehrungszeichen, Klammern,
 Kommentare) – PowerDNS wertet den LUA-Code erst bei der Abfrage aus.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from fastapi import HTTPException
@@ -24,7 +32,7 @@ DEFAULT_LUA_POLICY = "admin"
 LUA_TARGET_TYPES = ("A", "AAAA", "CNAME", "TXT", "MX", "SRV", "PTR", "CAA",
                     "NAPTR", "LOC", "SPF", "HTTPS", "SVCB", "SSHFP", "TLSA")
 LUA_MAX_CONTENT_LENGTH = 4000  # gesamter Inhalt inkl. Ziel-Typ und Anfuehrungszeichen
-LUA_STATUS_CACHE_TTL = 60.0  # Sekunden (Server-Status, Welle 3)
+LUA_STATUS_CACHE_TTL = 60.0  # Sekunden (Server-Status)
 GEO_FUNCTIONS = ("pickclosest", "country", "countryCode", "continent", "continentCode",
                  "region", "regionCode", "latlon", "latlonloc", "closestMagic", "asnum")
 
@@ -48,6 +56,7 @@ MSG_UNBALANCED = "Klammern im LUA-Code sind nicht ausgeglichen ((), {}, [])."
 _TYPE_RE = re.compile(r"^([A-Za-z0-9]+)\s+(\S.*)$", re.S)
 _CHUNK = r'"[^"\\]*(?:\\.[^"\\]*)*"'
 _CHUNKS = re.compile(r"^" + _CHUNK + r"(?:\s+" + _CHUNK + r")*$", re.S)
+_CHUNK_RE = re.compile(_CHUNK, re.S)
 _CHUNK_CONTENT = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _NORMALIZE_RE = re.compile(r"^\s*([A-Za-z0-9]+)\s+(.*?)\s*$", re.S)
@@ -153,16 +162,30 @@ def validate_lua_content(content: str) -> str:
         raise ValueError(MSG_UNTERMINATED_COMMENT)
     if problem == "unbalanced":
         raise ValueError(MSG_UNBALANCED)
-    return f"{t} {rest}"
+    return f"{t} {_join_chunks(rest)}"
+
+
+def _join_chunks(rest: str) -> str:
+    """Mehrere ``"…"``-Abschnitte mit genau einem Leerzeichen verbinden.
+
+    So speichert PowerDNS den Inhalt (``xfrText`` mit mehreren Abschnitten); ``rest`` muss ``_CHUNKS`` erfuellen.
+    """
+    return " ".join(m.group(0) for m in _CHUNK_RE.finditer(rest))
 
 
 def normalize_lua_content(content: str) -> str:
-    """Tolerante Normalisierung fuer Vergleiche (wirft nie): Ziel-Typ gross, genau ein Leerzeichen."""
+    """Tolerante Normalisierung fuer Vergleiche (wirft nie): Ziel-Typ gross, genau ein Leerzeichen.
+
+    Gueltige ``"…" "…"``-Abschnittsfolgen werden wie bei PowerDNS mit genau einem Leerzeichen verbunden.
+    """
     s = content if isinstance(content, str) else str(content or "")
     m = _NORMALIZE_RE.match(s)
     if not m:
         return s.strip()
-    return f"{m.group(1).upper()} {m.group(2)}"
+    rest = m.group(2)
+    if _CHUNKS.match(rest):
+        rest = _join_chunks(rest)
+    return f"{m.group(1).upper()} {rest}"
 
 
 def uses_geo_functions(content: str) -> bool:
@@ -228,3 +251,178 @@ async def assert_lua_write_allowed(db, user) -> None:
     policy = await get_lua_policy(db)
     if not lua_policy_allows(policy, user):
         raise HTTPException(status_code=403, detail=lua_denied_message(policy))
+
+
+# --------------------------------------------------------------------------- Server-Status (F15 5.3)
+# Nur diese Werte aus ``GET /config`` verlassen das Modul (Whitelist, F15 7 "Informationsabfluss").
+STATUS_FIELDS = ("lua_records", "geoip_backend", "edns_subnet_processing", "exec_limit", "health_checks_interval")
+
+MSG_STATUS_UNREACHABLE = "Server nicht erreichbar"
+MSG_STATUS_TIMEOUT = "Zeitüberschreitung beim Abruf der Konfiguration"
+MSG_STATUS_KEY_REJECTED = "API-Key abgelehnt (HTTP {code})"
+MSG_STATUS_UNREADABLE_HTTP = "Konfiguration nicht lesbar (HTTP {code})"
+MSG_STATUS_UNREADABLE = "Konfiguration nicht lesbar"
+MSG_STATUS_NOT_FOUND = "Server nicht gefunden"
+MSG_STATUS_NOT_LOADED = "Server nicht geladen (API-Key unter Einstellungen → DNS-Server neu eintragen)"
+
+_TRUE_VALUES = ("yes", "true", "1", "on")
+_FALSE_VALUES = ("no", "false", "0", "off")
+
+# Servername -> (time.monotonic() der Abfrage, Status-Dict)
+_status_cache: dict[str, tuple[float, dict]] = {}
+
+
+def clear_status_cache() -> None:
+    """Cache leeren (Tests; nach Server-Aenderungen nicht noetig – der Cache laeuft nach 60 s ab)."""
+    _status_cache.clear()
+
+
+def _iso_now() -> str:
+    from app.core.timeutil import iso_utc  # lazy: core.timeutil ist leicht, aber App-Paket
+
+    return iso_utc(datetime.now(timezone.utc))
+
+
+def _cfg_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v in _TRUE_VALUES:
+        return True
+    if v in _FALSE_VALUES or v == "":
+        return False
+    return None
+
+
+def _cfg_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_lua_config(config: Any) -> dict:
+    """LUA-relevante Werte aus der Antwort von ``GET /config`` (Liste von ``{name, value}``).
+
+    ``lua_records``: ``"yes"`` | ``"shared"`` | ``"no"`` | ``None`` (Key fehlt = PowerDNS ohne LUA bzw. unbekannter
+    Wert); ``geoip_backend``: ``True``, wenn ``geoip`` in ``launch`` steht (``None`` ohne ``launch``);
+    ``edns_subnet_processing`` (bool), ``exec_limit``/``health_checks_interval`` (int). Andere Konfigurationswerte
+    werden nie zurueckgegeben.
+    """
+    values: dict[str, str] = {}
+    for item in config if isinstance(config, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            values[item["name"]] = str(item.get("value", "") if item.get("value") is not None else "")
+
+    lua_raw = values.get("enable-lua-records")
+    lua: Optional[str] = None
+    if lua_raw is not None:
+        v = lua_raw.strip().lower()
+        if v == "shared":
+            lua = "shared"
+        elif v in _TRUE_VALUES:
+            lua = "yes"
+        elif v in _FALSE_VALUES or v == "":
+            lua = "no"
+
+    launch = values.get("launch")
+    geoip: Optional[bool] = None
+    if launch is not None:
+        geoip = any(x.split(":")[0].strip().lower() == "geoip" for x in re.split(r"[,\s]+", launch) if x)
+
+    return {
+        "lua_records": lua,
+        "geoip_backend": geoip,
+        "edns_subnet_processing": _cfg_bool(values.get("edns-subnet-processing")),
+        "exec_limit": _cfg_int(values.get("lua-records-exec-limit")),
+        "health_checks_interval": _cfg_int(values.get("lua-health-checks-interval")),
+    }
+
+
+def _empty_status(name: str, *, reachable: bool, error: Optional[str]) -> dict:
+    out = {field: None for field in STATUS_FIELDS}
+    out.update({"name": name, "reachable": reachable, "error": error, "checked_at": _iso_now()})
+    return out
+
+
+def status_error_text(exc: BaseException) -> tuple[str, bool]:
+    """(kurzer deutscher Fehlertext, reachable) fuer einen gescheiterten Konfigurationsabruf (F15 3.3)."""
+    from app.services.pdns_client import PowerDNSAPIError
+
+    if isinstance(exc, PowerDNSAPIError):
+        code = int(getattr(exc, "status_code", 0) or 0)
+        if code == 503:
+            return MSG_STATUS_UNREACHABLE, False
+        if code == 504:
+            return MSG_STATUS_TIMEOUT, False
+        if code == 502 or getattr(exc, "transport_error", False):
+            return MSG_STATUS_UNREACHABLE, False
+        if code in (401, 403):
+            return MSG_STATUS_KEY_REJECTED.format(code=code), True
+        return MSG_STATUS_UNREADABLE_HTTP.format(code=code), True
+    return MSG_STATUS_UNREADABLE, False
+
+
+async def _probe(name: str, client) -> dict:
+    """Konfiguration eines Servers abfragen; wirft nie (Fehler -> ``error``)."""
+    from app.services.pdns_client import STATUS_PROBE_TIMEOUT, PowerDNSAPIError
+
+    try:
+        cfg = await client.get_config(timeout=STATUS_PROBE_TIMEOUT)
+    except PowerDNSAPIError as exc:
+        text, reachable = status_error_text(exc)
+        logger.info("LUA-Status: Konfiguration von %s nicht lesbar (HTTP %s)", name, exc.status_code)
+        return _empty_status(name, reachable=reachable, error=text)
+    except Exception as exc:  # noqa: BLE001 - Statusanzeige darf nie scheitern
+        logger.warning("LUA-Status: Abruf der Konfiguration von %s gescheitert (%s)", name, type(exc).__name__)
+        return _empty_status(name, reachable=False, error=MSG_STATUS_UNREADABLE)
+    out = parse_lua_config(cfg or [])
+    out.update({"name": name, "reachable": True, "error": None, "checked_at": _iso_now()})
+    return out
+
+
+async def _probe_named(name: str) -> dict:
+    from app.services.pdns_client import pdns_manager
+
+    try:
+        client = pdns_manager.get_client(name)
+    except ValueError:
+        return _empty_status(name, reachable=False, error=MSG_STATUS_NOT_FOUND)
+    return await _probe(name, client)
+
+
+async def get_server_lua_status(refresh: bool = False) -> dict:
+    """LUA-Status aller PowerDNS-Server: ``{"servers": [...], "checked_at": iso, "cached": bool}``.
+
+    Geladene Server (``pdns_manager.list_servers()``) werden parallel abgefragt, sofern kein frischer
+    Cache-Eintrag (< ``LUA_STATUS_CACHE_TTL``) existiert oder ``refresh`` gesetzt ist. Konfigurierte, aber
+    nicht geladene Server (``pdns_manager.unloaded``, z. B. API-Key unlesbar [D4]) erscheinen mit Fehlertext.
+    ``checked_at`` ist der Zeitpunkt des aeltesten verwendeten Eintrags; ``cached`` = mindestens ein Eintrag
+    kam aus dem Cache.
+    """
+    from app.services.pdns_client import pdns_manager
+
+    names = list(pdns_manager.list_servers())
+    now = time.monotonic()
+    todo = [n for n in names
+            if refresh or n not in _status_cache or now - _status_cache[n][0] > LUA_STATUS_CACHE_TTL]
+    if todo:
+        results = await asyncio.gather(*(_probe_named(n) for n in todo))
+        stamp = time.monotonic()
+        for r in results:
+            _status_cache[r["name"]] = (stamp, r)
+    for stale in set(_status_cache) - set(names):
+        _status_cache.pop(stale, None)
+
+    servers = [_status_cache[n][1] for n in names if n in _status_cache]
+    for name in sorted(getattr(pdns_manager, "unloaded", {}) or {}):
+        if name not in names:
+            servers.append(_empty_status(name, reachable=False, error=MSG_STATUS_NOT_LOADED))
+    stamps = [s["checked_at"] for s in servers if s.get("checked_at")]
+    return {
+        "servers": servers,
+        "checked_at": min(stamps) if stamps else _iso_now(),
+        "cached": len(todo) < len(names),
+    }

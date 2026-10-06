@@ -6,12 +6,18 @@
  * Record-Definitionen: immer ueber getRecordDef(typ) nachschlagen – unbekannte Typen (z. B. CERT/URI aus einem
  * Import) bekommen einen RDATA-Texteditor (F8-F04). Felder koennen `default` (Startwert, defaultFieldSet) und
  * `select` (Auswahl) haben.
+ * LUA (F15): Ziel-Typ (Auswahl, Default A) + Lua-Code; `lua: true` markiert die Definition. Vorlagen, Syntax-Hilfe,
+ * Warnbox und Zeichenzaehler liefert die Formular-Erweiterung form-extensions/lua.ext.jsx; die reine Logik liegt in
+ * lib/luaRecord.js.
  */
 import i18n from '../i18n'
 import { IPV4_RE, isValidIPv6 } from '../lib/ip.js'
 import {
     CAA_COMMON_TAGS, CAA_TAGS, buildCaa, classifyHostname, defaultFieldSet, parseCaa,
 } from '../lib/recordContent.js'
+import {
+    LUA_MAX_CONTENT_LENGTH, LUA_TARGET_TYPES, analyzeLuaCode, buildLuaContent, parseLuaContent,
+} from '../lib/luaRecord.js'
 
 export { defaultFieldSet }
 
@@ -70,6 +76,14 @@ function validateTxt(v) {
     return ''
 }
 
+/** LUA-Code (F15 6.3): erster Fehler als { error }, sonst die erste Warnung als Text, sonst ''. */
+export function luaCodeHint(rtype, code) {
+    const { errors, warnings } = analyzeLuaCode(rtype, code)
+    if (errors.length) return { error: _t(`lua.err.${errors[0]}`, { max: LUA_MAX_CONTENT_LENGTH }) }
+    if (warnings.length) return _t(`lua.warn.${warnings[0]}`)
+    return ''
+}
+
 function validateCaaTag(v) {
     if (!v) return { error: _t('zoneDetail.tagMissing') }
     if (!CAA_TAGS.includes(v)) return _t('zoneDetail.unusualCaaTag', { tag: v, common: CAA_COMMON_TAGS.join(', ') })
@@ -102,6 +116,10 @@ export const FIELD_VALIDATORS = {
         sel: (v) => validateInt(v, { min: 0, max: 1 }),
         match: (v) => validateInt(v, { min: 0, max: 2 }),
         hash: validateHex,
+    },
+    LUA: {
+        // Ziel-Typ-Fehler meldet das Code-Feld mit (analyzeLuaCode prueft beides)
+        code: (v, set) => luaCodeHint(set?.rtype || 'A', v),
     },
     SSHFP: {
         algo: (v) => validateInt(v, { min: 1, max: 6 }),
@@ -282,6 +300,15 @@ export const RECORD_TYPES = {
         parse: c => { const s = c.split(' '); return { algo: s[0], fptype: s[1], fp: s[2] } }
     },
     ALIAS: rdataRecord('ALIAS', 'zoneDetail.recordALIAS'),
+    LUA: {
+        labelKey: 'zoneDetail.recordLUA', label: 'LUA', lua: true,
+        fields: [
+            { id: 'rtype', labelKey: 'lua.fieldTargetType', label: 'Ziel-Typ', select: [...LUA_TARGET_TYPES], default: 'A' },
+            { id: 'code', labelKey: 'lua.fieldCode', label: 'Lua-Code', textarea: true, placeholderKey: 'lua.codePlaceholder' },
+        ],
+        build: (f) => buildLuaContent(f.rtype || 'A', f.code || ''),
+        parse: (c) => { const p = parseLuaContent(c); return { rtype: p.rtype, code: p.code } },
+    },
     DNAME: rdataRecord('DNAME', 'zoneDetail.recordDNAME'),
     LOC: rdataRecord('LOC', 'zoneDetail.recordLOC'),
     NAPTR: rdataRecord('NAPTR', 'zoneDetail.recordNAPTR'),
@@ -297,7 +324,8 @@ export const RECORD_TYPES = {
     OPENPGPKEY: rdataRecord('OPENPGPKEY', 'zoneDetail.recordOPENPGPKEY'),
 }
 
-export const MULTI_VALUE_OK = new Set(['A', 'AAAA', 'NS', 'TXT', 'MX', 'CAA', 'SRV'])
+// LUA (F15 12.1-12): ein LUA-RRset darf mehrere Werte mit unterschiedlichen Ziel-Typen haben (z. B. A + AAAA)
+export const MULTI_VALUE_OK = new Set(['A', 'AAAA', 'NS', 'TXT', 'MX', 'CAA', 'SRV', 'LUA'])
 
 /**
  * Editor fuer Typen ohne eigenen Eintrag in RECORD_TYPES (z. B. CERT, URI, SMIMEA aus einem Import): RDATA als Text.

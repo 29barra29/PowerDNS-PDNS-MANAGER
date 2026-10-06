@@ -1,0 +1,15 @@
+{
+  "reason": "WS-F15: Lua-Code-Beispiel (lua.codePlaceholder) und die pdns.conf-Optionsnamen enable-lua-records/edns-subnet-processing sind Code bzw. Konfigurationsschluessel und bleiben in allen Sprachen gleich; 'Geo' ist der feste Gruppen-/Kurzbegriff fuer Geo-Funktionen. 'Server' ist im Deutschen, Bosnischen und Serbischen das uebliche Wort (wie in den uebrigen Server-Texten dieser Sprachen); 'geoip backend' ist der Name des PowerDNS-Backends und wird in bs/hr/sr nicht uebersetzt (Fachbegriff wie 'API token').",
+  "global": [
+    "lua.codePlaceholder",
+    "lua.settings.colLua",
+    "lua.settings.colEcs",
+    "lua.templateGroup.geo"
+  ],
+  "perLanguage": {
+    "de": ["lua.settings.colServer"],
+    "bs": ["lua.settings.colServer", "lua.settings.colGeoip"],
+    "hr": ["lua.settings.colGeoip"],
+    "sr": ["lua.settings.colServer", "lua.settings.colGeoip"]
+  }
+}

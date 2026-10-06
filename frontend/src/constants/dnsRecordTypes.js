@@ -1,6 +1,8 @@
 /**
  * Alle Record-Typen, die das Backend (PowerDNS) erlaubt – für Dropdowns (Zone, Vorlagen).
  * Reihenfolge: häufig zuerst, dann alphabetisch / DNSSEC / Spezial.
+ * Muss zu `ALLOWED_RECORD_TYPES` in backend/app/schemas/dns.py passen (Sync-Test: tests/luaRecord.test.mjs und
+ * backend/tests/test_lua_records.py). LUA (F15) steht direkt nach ALIAS.
  */
 export const ALL_RECORD_TYPE_KEYS = [
     'SOA',
@@ -9,6 +11,7 @@ export const ALL_RECORD_TYPE_KEYS = [
     'AAAA',
     'CNAME',
     'ALIAS',
+    'LUA',
     'DNAME',
     'MX',
     'TXT',
@@ -37,6 +40,7 @@ export const TEMPLATE_CONTENT_PLACEHOLDERS = {
     AAAA: '2001:db8::1',
     CNAME: 'example.com.',
     ALIAS: 'target.example.com.',
+    LUA: 'A "ifportup(443, {\'192.0.2.1\', \'192.0.2.2\'})"',
     DNAME: 'other.example.',
     MX: 'mail.example.com.',
     TXT: 'v=spf1 include:_spf.example.com ~all',

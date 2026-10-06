@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Loader2, AlertCircle, X, Sparkles } from 'lucide-react'
 import api from '../api'
@@ -7,6 +7,7 @@ import DnsRecordTypeHint from '../components/DnsRecordTypeHint'
 import ModalErrorBanner from '../components/ModalErrorBanner'
 import TtlInput from '../components/TtlInput'
 import { normalizeRecordName } from '../lib/dnsName.js'
+import { useDialogFocus } from '../lib/useDialogFocus'
 import { NAME_ERROR_KEYS, rrsetValueCount, selectOptions } from '../lib/recordContent.js'
 import { TTL_MAX, TTL_MIN, isValidTtl, parseTtl } from '../lib/ttl.js'
 import {
@@ -22,6 +23,11 @@ import {
 // Erweiterungen (form-extensions/*.ext.jsx) laufen ueber den Vertrag aus formExtensions.js / form-extensions/README.md.
 // F8 (Welle 1): TTL-Feld mit Grenzen (F01/F02), CAA-Defaults (F03), unbekannte Typen als RDATA-Editor (F04),
 // Namensnormalisierung (F05), disabled-Flag (F07), Validatoren mit Wert-Set (F10), Wert-Index im Fehler (F11).
+// F15 (Welle 3): Typ-Option LUA nur mit LUA-Schreibrecht (ctx.luaPolicy.can_write, sonst disabled mit Zusatz
+// "(nur Admins)"/"(deaktiviert)"); Speichern bricht dann mit dem Policy-Text ab (Kosmetik, das Backend prueft).
+// Editor-Zusaetze fuer LUA liefert form-extensions/lua.ext.jsx.
+// Fokus/ESC/Tab-Falle ueber lib/useDialogFocus (Vorschlag WS-W2-NACHARBEIT 4.3): Startfokus Typ-Auswahl, beim
+// Bearbeiten das erste Wertfeld; ESC schliesst nicht waehrend des Speicherns; Strg/Cmd+Enter speichert.
 
 // Felder, die Erweiterungen ueber setForm aendern duerfen ('disabled' ist ein Kernfeld, F07)
 const FORM_PATCH_KEYS = ['type', 'name', 'ttl', 'fieldsList']
@@ -81,7 +87,7 @@ export default function RecordFormModal({ request }) {
     const ctx = useZoneDetail()
     const {
         server, zoneId, zoneName, zoneKey, zoneMeta, records, canEdit, slots,
-        closeRecordForm, reportFanout, setSuccess, loadZone, relativeName,
+        closeRecordForm, reportFanout, setSuccess, loadZone, relativeName, luaPolicy,
     } = ctx
     const exts = useMemo(() => slots?.formExtensions || [], [slots])
     const record = request?.record || null
@@ -98,6 +104,8 @@ export default function RecordFormModal({ request }) {
     const [modalError, setModalError] = useState('')
     const [saving, setSaving] = useState(false)
     const formRef = useRef(null)
+    const typeSelectRef = useRef(null)
+    const titleId = useId()
 
     const {
         type: addType, name: addName, ttl: addTTL, fieldsList: dynFieldsList, isEdit, oldContent,
@@ -138,19 +146,20 @@ export default function RecordFormModal({ request }) {
         setExtStates(initialExtStates(exts, { record: null, mode: 'template', type: tpl.type, zone: zoneInfo }))
     }
 
-    /** ESC schließt Modal, Strg/Cmd+Enter speichert */
+    /** ESC (nicht waehrend des Speicherns), Tab-Falle und Fokus-Rueckgabe macht der Hook */
+    const dialogRef = useDialogFocus({ onClose: closeModal, canClose: !saving, initialFocusRef: typeSelectRef })
+
+    /** Strg/Cmd+Enter speichert */
     useEffect(() => {
         function onKey(e) {
-            if (e.key === 'Escape') {
-                if (!saving) closeModal()
-            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault()
                 if (formRef.current && !saving) formRef.current.requestSubmit()
             }
         }
         document.addEventListener('keydown', onKey)
         return () => document.removeEventListener('keydown', onKey)
-    }, [saving, closeModal])
+    }, [saving])
 
     /* ----- Name (F8-F05) -----------------------------------------------------*/
     // Bearbeiten: der Name ist fest, gesendet wird genau der bestehende Record-Name. Sonst: getrimmt, klein,
@@ -203,6 +212,12 @@ export default function RecordFormModal({ request }) {
         disabled: !!form.disabled,
     }), [form, fqdn])
 
+    /* ----- LUA-Policy (F15) ---------------------------------------------------*/
+    const luaWriteOk = luaPolicy?.can_write === true
+    const luaDisabledPolicy = luaPolicy?.policy === 'disabled'
+    const luaDeniedText = luaPolicy?.reason || t(luaDisabledPolicy ? 'lua.notAllowedDisabled' : 'lua.notAllowedAdmin')
+    const luaOptionSuffix = t(luaDisabledPolicy ? 'lua.typeOptionDisabled' : 'lua.typeOptionAdminOnly')
+
     /* ----- Submit -----------------------------------------------------------*/
     async function handleAddRecord(e) {
         e.preventDefault()
@@ -218,6 +233,13 @@ export default function RecordFormModal({ request }) {
 
         if (apexWarning?.kind === 'error') {
             setModalError(apexWarning.text)
+            setSaving(false)
+            return
+        }
+
+        // LUA-Policy (F15 6.6): ohne Schreibrecht gar nicht erst senden (Backend antwortet sonst mit 403)
+        if (addType === 'LUA' && !luaWriteOk) {
+            setModalError(luaDeniedText)
             setSaving(false)
             return
         }
@@ -362,9 +384,16 @@ export default function RecordFormModal({ request }) {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
             onClick={() => { if (!saving) closeModal() }}
         >
-            <div className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                className="glass-card p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+                onClick={e => e.stopPropagation()}
+            >
                 <div className="flex items-start justify-between mb-4">
-                    <h2 className="text-lg font-bold text-text-primary">
+                    <h2 id={titleId} className="text-lg font-bold text-text-primary">
                         {isEdit ? t('zoneDetail.editRecord') : t('zoneDetail.addRecord')}
                     </h2>
                     <button
@@ -424,6 +453,7 @@ export default function RecordFormModal({ request }) {
                         <div className="min-w-0 flex flex-col gap-1">
                             <label className="block text-xs font-medium text-text-secondary leading-tight">{t('zoneDetail.recordType')}</label>
                             <select
+                                ref={typeSelectRef}
                                 value={addType}
                                 disabled={isEdit}
                                 onChange={e => {
@@ -434,7 +464,14 @@ export default function RecordFormModal({ request }) {
                             >
                                 {typeOptions.map((k) => {
                                     const v = getRecordDef(k)
-                                    return <option key={k} value={k}>{v.labelKey ? t(v.labelKey) : v.label}</option>
+                                    const label = v.labelKey ? t(v.labelKey) : v.label
+                                    // LUA ohne Schreibrecht: Option gesperrt (ausser beim Bearbeiten eines LUA-Records)
+                                    const luaLocked = k === 'LUA' && !luaWriteOk && !(isEdit && addType === 'LUA')
+                                    return (
+                                        <option key={k} value={k} disabled={luaLocked}>
+                                            {luaLocked ? `${label} ${luaOptionSuffix}` : label}
+                                        </option>
+                                    )
                                 })}
                             </select>
                         </div>
@@ -503,7 +540,9 @@ export default function RecordFormModal({ request }) {
                                                 ? 'grid-cols-1'
                                                 : 'grid-cols-1 sm:grid-cols-2'
                                     }`}>
-                                        {fldList.map((f) => {
+                                        {fldList.map((f, fi) => {
+                                            // Bearbeiten: Startfokus im ersten Wertfeld (die Typ-Auswahl ist gesperrt)
+                                            const autoFocusField = isEdit && idx === 0 && fi === 0 ? true : undefined
                                             const oneTextareaOnly = fldList.length === 1 && fldList[0].textarea
                                             const textareaSpan = f.textarea
                                                 ? (oneTextareaOnly && addType === 'TXT' ? 'sm:col-span-2' : oneTextareaOnly ? '' : 'sm:col-span-2 lg:col-span-4')
@@ -517,6 +556,7 @@ export default function RecordFormModal({ request }) {
                                                     <label className="block text-xs font-medium text-text-secondary mb-1">{f.labelKey ? t(f.labelKey) : f.label}</label>
                                                     {f.select ? (
                                                         <select
+                                                            data-autofocus={autoFocusField}
                                                             value={value || f.select[0]}
                                                             onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
                                                             className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-bg-primary"
@@ -525,6 +565,7 @@ export default function RecordFormModal({ request }) {
                                                         </select>
                                                     ) : f.textarea ? (
                                                         <textarea
+                                                            data-autofocus={autoFocusField}
                                                             value={value}
                                                             onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}
                                                             placeholder={f.placeholderKey ? t(f.placeholderKey, { defaultValue: '' }) : f.placeholder}
@@ -532,6 +573,7 @@ export default function RecordFormModal({ request }) {
                                                         />
                                                     ) : (
                                                         <input
+                                                            data-autofocus={autoFocusField}
                                                             type={f.type || 'text'}
                                                             value={value}
                                                             onChange={e => setDynFieldsList(list => list.map((s, i) => i === idx ? { ...s, [f.id]: e.target.value } : s))}

@@ -12,7 +12,12 @@ DNSSEC beim Anlegen (F4 5.7, Plan [F7]): ``dnssec_service.enable_dnssec_on_new_z
 auf dem die Zone tatsaechlich angelegt wurde (``created``). Weitere angelegte Server haben eine eigene Datenbank und
 bekommen ``created; dnssec-skipped`` (keine abweichenden Schluessel je Server); bei ``synced`` (409, gemeinsame
 Datenbank) passiert nichts. Scheitert DNSSEC, bleibt die Zone angelegt: ``created; dnssec-error: <text>``.
+
+LUA beim Import (F15 3.6/5.8): Die Vorschau versteht LUA-/ALIAS-Zeilen (``zone_import_diff``) und meldet
+``lua_count``/``lua_issues`` sowie ``lua_policy``/``lua_blocked``. Bei Policy ``disabled`` lehnt ``import_zone``
+Dateien mit LUA-Records vor jedem PowerDNS-Zugriff mit 403 ab (Fehler-Audit ``IMPORT`` mit ``lua_count``).
 """
+import asyncio
 import logging
 import re
 from datetime import datetime
@@ -554,6 +559,9 @@ async def export_zone(
     }
 
 
+LUA_IMPORT_BLOCKED_DETAIL = "Die Zonendatei enthält LUA-Records, LUA-Records sind in diesem Panel deaktiviert."
+
+
 @router.post("/import/preview")
 async def import_zone_preview(
     import_data: ZoneImport,
@@ -562,7 +570,8 @@ async def import_zone_preview(
 ):
     """Vergleich Zonefile vs. bestehende PDNS-Zone (erster schreibender Server) – kein Schreiben."""
     assert_token_scope(import_data.name, write=False)
-    from app.services.zone_import_diff import build_import_diff
+    from app.services.lua_records import get_lua_policy
+    from app.services.zone_import_diff import build_import_diff, count_passthrough_records
 
     col = _allow_writes_column()
     if col is not None:
@@ -587,7 +596,30 @@ async def import_zone_preview(
             raise HTTPException(status_code=e.status_code, detail=str(e.detail)[:2000])
         except ValueError:
             continue
-    return build_import_diff(import_data.name, import_data.content, existing)
+    # Parser im Thread: grosse Zonendateien blockieren den Event-Loop nicht (F15 5.7)
+    result = await asyncio.to_thread(build_import_diff, import_data.name, import_data.content, existing)
+    policy = await get_lua_policy(db)
+    result["lua_policy"] = policy
+    # gleiche (grosszuegige) Zaehlung wie das Gate in import_zone
+    result["lua_blocked"] = policy == "disabled" and (
+        result.get("lua_count", 0) > 0 or count_passthrough_records(import_data.content).get("LUA", 0) > 0
+    )
+    return result
+
+
+async def _assert_lua_import_allowed(db: AsyncSession, import_data: ZoneImport, admin: User) -> None:
+    """Policy ``disabled`` + LUA in der Datei -> 403 vor jedem PowerDNS-Zugriff (F15 3.6), mit Fehler-Audit."""
+    from app.services.lua_records import get_lua_policy
+    from app.services.zone_import_diff import count_passthrough_records
+
+    if await get_lua_policy(db) != "disabled":
+        return
+    n = count_passthrough_records(import_data.content).get("LUA", 0)
+    if n <= 0:
+        return
+    await _log_action(db, "IMPORT", import_data.name, None, {"lua_count": n}, status="error",
+                      error_message=LUA_IMPORT_BLOCKED_DETAIL, user_id=admin.id)
+    raise HTTPException(status_code=403, detail=LUA_IMPORT_BLOCKED_DETAIL)
 
 
 @router.post("/import", response_model=MessageResponse)
@@ -598,6 +630,7 @@ async def import_zone(
 ):
     """Import a zone from BIND zonefile format (Admin only). Only servers with allow_writes=True are used."""
     assert_token_scope(import_data.name, write=True)
+    await _assert_lua_import_allowed(db, import_data, admin)
     col = _allow_writes_column()
     if col is not None:
         r = await db.execute(select(ServerConfig.name).where(ServerConfig.is_active == True, col == True))  # noqa: E712
