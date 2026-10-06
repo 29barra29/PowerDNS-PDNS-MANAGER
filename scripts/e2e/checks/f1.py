@@ -5,7 +5,8 @@ Neuinstallation (gegen echte PowerDNS-Server ns1/ns2 mit getrennten Backends):
   Audit ``BULK_UPDATE`` v2 im Zonenverlauf (ruecksetzbar, Rollback stellt die TTL wieder her).
 - Kommentar-Erhalt (E-F1-3): Bulk sendet REPLACE ohne ``comments`` – PowerDNS behaelt vorhandene Kommentare.
 - Textfluss: Zeilenfehler mit Zeilennummern; ``sync_scope`` ersetzt geladene RRsets und loescht entfernte.
-- Optimistische Sperre: Aenderung zwischen Vorschau und Anwenden -> 409, mit ``force`` -> 200.
+- Optimistische Sperre: Aenderung zwischen Vorschau und Anwenden -> 409, mit ``force`` -> 200; ``expected`` deckt
+  auch RRsets ab, die die Vorschau als unveraendert zeigt (REPLACE mit gleichen Werten).
 - Peer-Drift: fehlt ein Wert nur auf ns2, wird er dort uebersprungen (``peer_drift``), kein Fehler.
 - Schutz: leere Anfrage/leere Werteliste 422, Apex-NS komplett loeschen 422, Lese-Nutzer 403 (Vorschau und Anwenden).
 Upgrade (Altdaten 2.4.1):
@@ -140,6 +141,22 @@ def check_fresh(ctx) -> None:
         ctx.eq(entry["details"].get("forced"), True, "forced im Audit")
         ctx.eq(sorted(ctx.pdns.contents("ns1", zone, mail, "MX")), sorted([f"10 mx1.{zone}", f"30 mx3.{zone}"]),
                "MX nach force")
+
+    with ctx.step("Optimistische Sperre deckt auch unveraenderte RRsets der Ops ab (REPLACE)"):
+        mx_now = sorted(ctx.pdns.contents("ns1", zone, mail, "MX"))
+        p = _preview(ctx, zone, {"ops": {"source": "api", "create": [
+            {"name": mail, "type": "MX", "ttl": 3600, "records": [{"content": c} for c in mx_now]}],
+            "set_ttl": [{"name": www, "type": "A", "ttl": 600}]}}, expect=200).json()
+        ctx.eq([(c["name"], c["type"]) for c in p["changes"]], [(www, "A")], "nur www geaendert")
+        ctx.eq(sorted((e["name"], e["type"]) for e in p["ops"]["expected"]), sorted([(mail, "MX"), (www, "A")]),
+               "expected deckt alle beruehrten RRsets ab")
+        ctx.api("POST", f"records/ns1/{_z(zone)}", expect=200, json={
+            "name": mail, "type": "MX", "ttl": 3600, "records": [{"content": f"40 mx4.{zone}"}]})
+        r = _bulk(ctx, zone, p["ops"], expect=409).json()
+        ctx.eq(r["detail"]["conflicts"], [{"name": mail, "type": "MX"}], "conflicts (unveraendertes REPLACE)")
+        ctx.eq(sorted(ctx.pdns.contents("ns1", zone, mail, "MX")), sorted(mx_now + [f"40 mx4.{zone}"]),
+               "fremder MX-Wert bleibt erhalten")
+        ctx.eq(_ttl(ctx, "ns1", zone, www, "A"), 3600, "www unveraendert nach 409")
 
     with ctx.step("Peer-Drift: Wert fehlt nur auf ns2"):
         ctx.pdns.request("ns2", "PATCH", f"/zones/{_z(zone)}", json_body={"rrsets": [{

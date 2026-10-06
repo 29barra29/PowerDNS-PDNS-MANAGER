@@ -15,7 +15,7 @@ from app.services.bulk import (
     prune_unchanged,
     static_validate,
 )
-from app.services.rrsets import snapshot_fingerprint
+from app.services.rrsets import rrset_snapshot, snapshot_fingerprint
 
 Z = "example.com."
 WWW = "www.example.com."
@@ -291,10 +291,23 @@ def test_prune_unchanged_and_expectations():
     p = plan_for(z, o)
     pruned = prune_unchanged(o, p)
     assert [c.name for c in pruned.create] == [WWW]
-    (exp,) = expectations(p, Z)
+    (exp,) = expectations(pruned, z, Z)
     assert exp.fingerprint == snapshot_fingerprint(p.changes[0].before, "A", Z) and exp.fingerprint != "absent"
-    new = plan_for(zone(), ops(merge=[{"name": "n.example.com.", "type": "A", "records": [{"content": "192.0.2.1"}]}]))
-    assert expectations(new, Z)[0].fingerprint == "absent"
+    new_ops = ops(merge=[{"name": "n.example.com.", "type": "A", "records": [{"content": "192.0.2.1"}]}])
+    assert expectations(new_ops, zone(), Z)[0].fingerprint == "absent"
+
+
+def test_expectations_cover_unchanged_touched_rrsets():
+    """Fix-Runde Welle 2: auch unveraenderte, aber beruehrte RRsets bekommen einen Fingerprint."""
+    z = zone(rr(WWW, "A", "192.0.2.1", "192.0.2.2"), rr("old.example.com.", "TXT", '"alt"'))
+    o = ops(create=[{"name": WWW, "type": "A", "ttl": 3600,
+                     "records": [{"content": "192.0.2.1"}, {"content": "192.0.2.2"}]}],
+            delete=[{"name": "old.example.com.", "type": "TXT"}])
+    p = plan_for(z, o)
+    assert [c.key for c in p.changes] == [("old.example.com.", "TXT")] and p.unchanged == 1
+    exp = {(e.name, e.type): e.fingerprint for e in expectations(o, z, Z)}
+    assert set(exp) == {(WWW, "A"), ("old.example.com.", "TXT")}
+    assert exp[(WWW, "A")] == snapshot_fingerprint(rrset_snapshot(z, WWW, "A"), "A", Z)
 
 
 def test_changes_sorted_and_summary():
