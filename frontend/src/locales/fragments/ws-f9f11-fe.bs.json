@@ -151,18 +151,7 @@
     "layout.dyndnsProxyBannerTitle": "DynDNS: prepoznat reverse proxy, TRUST_PROXY_HEADERS je isključen",
     "layout.dyndnsProxyBannerBody": "Panelu se pristupa preko privatne adrese (vjerovatno reverse proxy). DynDNS ažuriranja bez parametra myip tada vide IP adresu proxyja umjesto rutera i odbijaju se; ograničenja zahtjeva po IP adresi važe za sve rutere zajedno. Postavite TRUST_PROXY_HEADERS=true (i TRUSTED_PROXY_HOPS) ako proxy prosljeđuje IP adresu klijenta.",
     "layout.dyndnsProxyBannerLink": "Na DynDNS postavke",
-    "layout.dyndnsProxyBannerDismiss": "Sakrij napomenu za ovu sesiju",
-    "audit.actions.DYNDNS_AUTH_FAILED": "DynDNS prijava nije uspjela",
-    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS token kreiran",
-    "audit.actions.DYNDNS_TOKEN_UPDATE": "DynDNS token izmijenjen",
-    "audit.actions.DYNDNS_TOKEN_ROTATE": "DynDNS tajna obnovljena",
-    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS token obrisan",
-    "audit.actions.DYNDNS_TOKEN_REVOKED": "DynDNS token blokiran (poslan u URL-u)",
-    "audit.actions.DYNDNS_SETTINGS_UPDATE": "DynDNS postavke izmijenjene",
-    "audit.actions.PTR_SYNC": "Održavanje PTR-a",
-    "audit.actions.PTR_SETTINGS_UPDATE": "PTR postavke izmijenjene",
-    "audit.resourceTypes.dyndns": "DynDNS",
-    "audit.resourceTypes.dyndns_token": "DynDNS token"
+    "layout.dyndnsProxyBannerDismiss": "Sakrij napomenu za ovu sesiju"
   },
   "remove": []
 }

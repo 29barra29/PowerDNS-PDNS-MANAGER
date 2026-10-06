@@ -151,18 +151,7 @@
     "layout.dyndnsProxyBannerTitle": "DynDNS: reverse proxy észlelve, a TRUST_PROXY_HEADERS ki van kapcsolva",
     "layout.dyndnsProxyBannerBody": "A panel egy privát címen keresztül érhető el (valószínűleg reverse proxy). A myip paraméter nélküli DynDNS-frissítések ilyenkor a router helyett a proxy IP-címét látják, és elutasításra kerülnek; az IP-címenkénti kéréskorlát minden routerre együtt vonatkozik. Állítsd be a TRUST_PROXY_HEADERS=true (és a TRUSTED_PROXY_HOPS) értéket, ha a proxy továbbítja a kliens IP-címét.",
     "layout.dyndnsProxyBannerLink": "Ugrás a DynDNS-beállításokhoz",
-    "layout.dyndnsProxyBannerDismiss": "Megjegyzés elrejtése erre a munkamenetre",
-    "audit.actions.DYNDNS_AUTH_FAILED": "Sikertelen DynDNS-hitelesítés",
-    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS-token létrehozva",
-    "audit.actions.DYNDNS_TOKEN_UPDATE": "DynDNS-token módosítva",
-    "audit.actions.DYNDNS_TOKEN_ROTATE": "DynDNS-titok megújítva",
-    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS-token törölve",
-    "audit.actions.DYNDNS_TOKEN_REVOKED": "DynDNS-token letiltva (URL-ben küldve)",
-    "audit.actions.DYNDNS_SETTINGS_UPDATE": "DynDNS-beállítások módosítva",
-    "audit.actions.PTR_SYNC": "PTR-karbantartás",
-    "audit.actions.PTR_SETTINGS_UPDATE": "PTR-beállítások módosítva",
-    "audit.resourceTypes.dyndns": "DynDNS",
-    "audit.resourceTypes.dyndns_token": "DynDNS-token"
+    "layout.dyndnsProxyBannerDismiss": "Megjegyzés elrejtése erre a munkamenetre"
   },
   "remove": []
 }

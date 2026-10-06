@@ -151,18 +151,7 @@
     "layout.dyndnsProxyBannerTitle": "DynDNS: Reverse-Proxy erkannt, TRUST_PROXY_HEADERS ist aus",
     "layout.dyndnsProxyBannerBody": "Das Panel wird über eine private Adresse erreicht (vermutlich ein Reverse-Proxy). DynDNS-Updates ohne myip-Parameter sehen dann die IP des Proxys statt der des Routers und werden abgelehnt; die Anfrage-Limits pro IP gelten für alle Router gemeinsam. Setze TRUST_PROXY_HEADERS=true (und TRUSTED_PROXY_HOPS), wenn der Proxy die Client-IP weitergibt.",
     "layout.dyndnsProxyBannerLink": "Zu den DynDNS-Einstellungen",
-    "layout.dyndnsProxyBannerDismiss": "Hinweis für diese Sitzung ausblenden",
-    "audit.actions.DYNDNS_AUTH_FAILED": "DynDNS-Anmeldung fehlgeschlagen",
-    "audit.actions.DYNDNS_TOKEN_CREATE": "DynDNS-Token erstellt",
-    "audit.actions.DYNDNS_TOKEN_UPDATE": "DynDNS-Token geändert",
-    "audit.actions.DYNDNS_TOKEN_ROTATE": "DynDNS-Secret erneuert",
-    "audit.actions.DYNDNS_TOKEN_DELETE": "DynDNS-Token gelöscht",
-    "audit.actions.DYNDNS_TOKEN_REVOKED": "DynDNS-Token gesperrt (in URL gesendet)",
-    "audit.actions.DYNDNS_SETTINGS_UPDATE": "DynDNS-Einstellungen geändert",
-    "audit.actions.PTR_SYNC": "PTR-Pflege",
-    "audit.actions.PTR_SETTINGS_UPDATE": "PTR-Einstellungen geändert",
-    "audit.resourceTypes.dyndns": "DynDNS",
-    "audit.resourceTypes.dyndns_token": "DynDNS-Token"
+    "layout.dyndnsProxyBannerDismiss": "Hinweis für diese Sitzung ausblenden"
   },
   "remove": []
 }

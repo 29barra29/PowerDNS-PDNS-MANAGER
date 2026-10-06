@@ -113,7 +113,7 @@ test('DynDNS-/PTR-Audit-Aktionen stehen im Katalog und haben Labels', { skip: SK
     }
     assert.ok(actions.size >= 3, `keine Aktionen gefunden (${[...actions]})`)
     const base = (await import('../../src/constants/auditActions/base.actions.js')).default
-    const mine = (await import('../../src/constants/auditActions/ws-f9f11-fe.actions.js')).default
+    const mine = (await import('../../src/constants/auditActions/ws-f9f11-be.actions.js')).default
     const catalog = new Set([...base, ...mine].map((a) => a.action))
     // Konstanten wie PTR_TYPES/DYNDNS_ENABLED_KEY sind keine Aktionen: nur Namen, die wie Aktionen aussehen
     const relevant = [...actions].filter((a) => /^(DYNDNS_(UPDATE|AUTH_FAILED|TOKEN_\w+|SETTINGS_UPDATE)|PTR_(SYNC|SETTINGS_UPDATE))$/.test(a))
