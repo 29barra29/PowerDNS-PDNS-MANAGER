@@ -83,7 +83,7 @@ async def zone_propagation(
         return await prop.check_zone(
             user_id=current_user.id, is_admin=is_admin, server_name=server_name, zone_norm=zone_norm,
             record_fqdn=fqdn, rtype=rtype if fqdn else None, compare_content_flag=content, settings=cfg,
-            writable_servers=writable,
+            writable_servers=writable, db=db,
         )
     except prop.PropagationRateLimited as exc:
         prom.record_propagation("rate_limited")
