@@ -6,16 +6,22 @@
 
 ### Supported Versions
 
-Security fixes are provided for the current minor release line only. Please update to the latest version before reporting.
+Security fixes are provided for the current release line (v3.0.x). The previous line v2.4.x receives security
+fixes only, until 31 January 2027; after that it is no longer supported. Older versions receive no fixes. Please
+update to the latest version before reporting.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| v2.4.x  | :white_check_mark: |
-| v2.3.x  | :x:                |
-| v2.2.x  | :x:                |
-| v2.1.x  | :x:                |
-| v2.0.x  | :x:                |
-| < 2.0   | :x:                |
+| Version | Supported                                         |
+| ------- | ------------------------------------------------- |
+| v3.0.x  | :white_check_mark:                                |
+| v2.4.x  | :warning: security fixes only, until 2027-01-31   |
+| v2.3.x  | :x:                                               |
+| v2.2.x  | :x:                                               |
+| v2.1.x  | :x:                                               |
+| v2.0.x  | :x:                                               |
+| < 2.0   | :x:                                               |
+
+Upgrading from 2.x to 3.0 is a major upgrade (secrets are encrypted at rest, downgrade only with a prior dump or
+`prepare-downgrade`): read [INSTALL.md → Upgrade von 2.x auf 3.0](INSTALL.md#upgrade-von-2x-auf-30) (German) first.
 
 ### Reporting a Vulnerability
 
@@ -60,16 +66,23 @@ The full checklist is in [INSTALL.md](INSTALL.md#sicherheits-checkliste) (German
 
 ### Unterstützte Versionen
 
-Diese Tabelle zeigt, welche Versionen des Projekts mit Sicherheitsupdates unterstützt werden.
+Sicherheitsupdates gibt es für die aktuelle Release-Linie (v3.0.x). Die vorherige Linie v2.4.x erhält nur noch
+Sicherheitskorrekturen, und zwar bis zum 31.01.2027; danach wird sie nicht mehr unterstützt. Ältere Versionen erhalten
+keine Korrekturen. Bitte vor einer Meldung auf die neueste Version aktualisieren.
 
-| Version | Unterstützt         |
-| ------- | ------------------- |
-| v2.4.x  | :white_check_mark:  |
-| v2.3.x  | :x:                 |
-| v2.2.x  | :x:                 |
-| v2.1.x  | :x:                 |
-| v2.0.x  | :x:                 |
-| < 2.0   | :x:                 |
+| Version | Unterstützt                                         |
+| ------- | --------------------------------------------------- |
+| v3.0.x  | :white_check_mark:                                  |
+| v2.4.x  | :warning: nur Sicherheitskorrekturen, bis 31.01.2027 |
+| v2.3.x  | :x:                                                 |
+| v2.2.x  | :x:                                                 |
+| v2.1.x  | :x:                                                 |
+| v2.0.x  | :x:                                                 |
+| < 2.0   | :x:                                                 |
+
+Das Update von 2.x auf 3.0 ist ein Major-Update (Geheimnisse werden verschlüsselt, ein Downgrade geht nur mit dem
+Dump von vorher oder nach `prepare-downgrade`): vorher [INSTALL.md → Upgrade von 2.x auf 3.0](INSTALL.md#upgrade-von-2x-auf-30)
+lesen.
 
 ### Sicherheitslücke melden
 
