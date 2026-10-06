@@ -43,8 +43,9 @@ Ergebnisse (bei Fehlern bleibt der Arbeitsordner erhalten, Pfad steht am Ende de
 Test; Trace ansehen mit `npx playwright show-trace <trace.zip>` auf einem Rechner mit Browser), `ui/results.json`,
 `ui/setup-backend.log`.
 
-Typische Laufzeit auf dem Entwicklungs-Host (2 CPUs, warmer Cache): UI-Smoke allein ca. 3,5 Minuten
-(47 Tests), `run-e2e.sh --ui` gesamt ca. 6 Minuten. Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen.
+Typische Laufzeit auf dem Entwicklungs-Host (2 CPUs, warmer Build-Cache): UI-Smoke allein ca. 3 Minuten
+(51 Tests, davon 5 nur mit `--pending`), `run-e2e.sh --ui` gesamt ca. 4 Minuten (Build, Start, 17 API-Check-Module,
+UI-Smoke, Abbau). Das Playwright-Image (ca. 3,5 GB entpackt) wird einmal gezogen.
 
 ## Sicherheit und Isolation
 
