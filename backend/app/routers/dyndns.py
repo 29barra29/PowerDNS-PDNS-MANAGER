@@ -366,8 +366,10 @@ async def list_dyndns_tokens(db: DbRead, current_user: User = Depends(get_sessio
         select(DynDnsToken).where(DynDnsToken.user_id == current_user.id).order_by(DynDnsToken.id.desc())
     )).scalars().all()
     tokens = []
+    zone_names = await dyndns_service.zone_names_snapshot(db) if rows else None
+    acl_cache: dict = {}
     for t in rows:
-        status = await dyndns_service.hostname_status(db, t, current_user)
+        status = await dyndns_service.hostname_status(db, t, current_user, zone_names=zone_names, acl_cache=acl_cache)
         tokens.append(dyndns_service.serialize_token(t, hostname_status=status))
     return {"tokens": tokens, "max_tokens": dyndns_service.MAX_TOKENS_PER_USER}
 

@@ -49,6 +49,7 @@ from app.core.rate_limit import SlidingWindowLimiter
 from app.core.timeutil import iso_utc, utcnow
 from app.models.models import DynDnsToken, User
 from app.services import fanout, ptr, zone_index
+from app.services.acme import find_matching_zone
 from app.services.audit import write_audit, write_audit_detached
 from app.services.pdns_client import PowerDNSAPIError, pdns_error_text, pdns_manager
 from app.services.record_history import (
@@ -504,20 +505,33 @@ async def validate_hostnames_for_user(db: AsyncSession, user: User, raw_hostname
     return out
 
 
-async def hostname_status(db: AsyncSession, token: DynDnsToken, owner: User) -> list[dict]:
-    """Zustand je Hostname: ``ok`` | ``no_zone`` | ``forbidden``; ``zone`` nur mit Leserecht des Besitzers [S5]."""
+async def zone_names_snapshot(db: AsyncSession) -> Optional[set[str]]:
+    """Alle Zonen der schreibbaren Server (einmal je Anfrage, fuer :func:`hostname_status` vieler Tokens)."""
+    try:
+        zmap = await zone_index.writable_zone_map(db)
+    except Exception:  # noqa: BLE001 - Anzeige, darf die Liste nicht brechen
+        logger.debug("DynDNS: Zonen-Index nicht lesbar", exc_info=True)
+        return None
+    return set().union(*zmap.values()) if zmap else set()
+
+
+async def hostname_status(db: AsyncSession, token: DynDnsToken, owner: User, *,
+                          zone_names: Optional[set[str]] = None,
+                          acl_cache: Optional[dict[str, tuple[bool, bool]]] = None) -> list[dict]:
+    """Zustand je Hostname: ``ok`` | ``no_zone`` | ``forbidden``; ``zone`` nur mit Leserecht des Besitzers [S5].
+
+    ``zone_names`` (aus :func:`zone_names_snapshot`) und ``acl_cache`` vermeiden bei Listen wiederholte
+    Index- und Rechteabfragen.
+    """
+    if zone_names is None:
+        zone_names = await zone_names_snapshot(db)
+    cache = acl_cache if acl_cache is not None else {}
     out: list[dict] = []
-    cache: dict[str, tuple[bool, bool]] = {}
     for h in token_hostnames(token):
-        try:
-            match = await zone_index.find_zone(db, h)
-        except Exception:  # noqa: BLE001 - Anzeige, darf die Liste nicht brechen
-            logger.debug("DynDNS: Zone fuer %s nicht bestimmbar", h, exc_info=True)
-            match = None
-        if match is None:
+        z = find_matching_zone(h, zone_names or ())
+        if not z:
             out.append({"hostname": h, "zone": None, "status": "no_zone"})
             continue
-        z = match.zone
         if z not in cache:
             can_write = await has_zone_access(db, owner, z, write=True)
             can_read = can_write or await has_zone_access(db, owner, z, write=False)
