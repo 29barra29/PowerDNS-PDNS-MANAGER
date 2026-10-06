@@ -1,12 +1,16 @@
 // Benutzerverwaltung (F2/F3, F14): Benutzer anlegen mit Passwortzwang, Zwangsdialog beim ersten Login;
 // Dialog "Passwort & Sicherheit": Zugaenge-Zaehler, API-Tokens des Benutzers ("Alle widerrufen"), 2FA-Reset,
 // Zufallspasswort (Einmal-Anzeige, ESC schliesst nicht, Kopieren), "Alle Zugaenge widerrufen"; danach Login ohne
-// 2FA mit Zwangswechsel. Quellen: WS-F2F3 (Spec 9.3), WS-F14-APP 5 (Admin-Sicht), W1-NACHARBEIT 5.6.
+// 2FA mit Zwangswechsel; externes SSO-Konto (Badge mit Aussteller/Rollen-Hinweis, Abschnitt "Externe Anmeldung",
+// Umwandeln mit Step-up, Loeschen mit JIT-Hinweis). Quellen: WS-F2F3 (Spec 9.3), WS-F14-APP 5 (Admin-Sicht),
+// W1-NACHARBEIT 5.6, WS-F10-APP-FE 7 + fix2 (Antrag an WS-UI-SMOKE).
 const { test, expect } = require('../fixtures/test')
 const { PanelApi, receiver, unique, strongPassword } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
 const { field, modal, dialog, acceptNextConfirm, loginViaUi, expectLoggedIn, expectFocusInside } = require('../fixtures/ui')
 const { pendingCheck } = require('../fixtures/pending')
+const { db } = require('../fixtures/db')
+const { ADMIN_PASSWORD } = require('../fixtures/env')
 
 // L12/a11y-PENDING: UserSecurityModal bekommt useDialogFocus erst durch WS-W2-NACHARBEIT (Welle 3, Punkt 5)
 const FOCUS_OWNER = 'WS-W2-NACHARBEIT (UserSecurityModal mit useDialogFocus)'
@@ -121,5 +125,59 @@ test.describe('Benutzerverwaltung', () => {
     const tokens = await adminApi.get(`auth/users/${seeded.id}/panel-tokens`)
     const list = Array.isArray(tokens) ? tokens : tokens?.tokens || []
     expect(list.filter((tok) => !tok.revoked_at && tok.status !== 'revoked')).toEqual([])
+  })
+
+  test('Externes SSO-Konto: Badge, Externe Anmeldung, Umwandeln (Step-up), Loeschen mit JIT-Hinweis', async ({ page, adminApi }) => {
+    const issuer = 'https://idp.example.com/realms/e2e'
+    const conv = await adminApi.createUser()
+    const del = await adminApi.createUser()
+    cleanup.push((api) => api.deleteUser(conv.id), (api) => api.deleteUser(del.id))
+    // Zustand "per SSO angelegt" laesst sich ohne IdP nur in der Datenbank herstellen
+    for (const u of [conv, del]) {
+      await db('UPDATE users SET auth_source = ?, external_issuer = ?, external_id = ? WHERE id = ?',
+        ['oidc', issuer, `ext-${u.username}`, u.id])
+    }
+    const sso = await adminApi.get('settings/sso')
+    const restore = { role_mode: sso.oidc.role_mode, admin_groups: sso.oidc.admin_groups }
+    await adminApi.put('settings/sso', { oidc: { role_mode: 'sync', admin_groups: ['pdns-admins'] }, step_up: { current_password: ADMIN_PASSWORD } })
+    try {
+      await page.goto('/users')
+      const card = userCard(page, conv.username)
+      const badge = card.getByText(t('users.authSourceOidc'), { exact: true })
+      await expect(badge).toBeVisible()
+      await expect(badge).toHaveAttribute('title', `${t('users.authSourceTitle', { issuer })} – ${t('users.roleManagedBySso')}`)
+
+      // Sicherheitsdialog eines externen Kontos: kein Zufallspasswort, Abschnitt "Externe Anmeldung"
+      await card.getByRole('button', { name: t('users.securityTitle') }).click()
+      const sec = page.getByRole('dialog', { name: t('users.securityTitle') })
+      await expect(sec.getByText(t('users.externalManagedHint'))).toBeVisible()
+      await expect(sec.getByText(issuer)).toBeVisible()
+      await expect(sec.getByText(`ext-${conv.username}`)).toBeVisible()
+      await expect(sec.getByRole('button', { name: t('users.generateButton') })).toHaveCount(0)
+
+      // Umwandeln: Rueckfrage -> Step-up (lokaler Admin) -> Einmalpasswort
+      const confirm = acceptNextConfirm(page)
+      await sec.getByRole('button', { name: t('users.convertToLocal') }).click()
+      expect(await confirm).toContain(t('users.convertToLocalHint'))
+      const stepUp = dialog(page, t('stepUp.title'))
+      await stepUp.getByLabel(t('settings.currentPassword')).fill(ADMIN_PASSWORD)
+      await stepUp.getByRole('button', { name: exact(t('stepUp.confirm')) }).click()
+      const once = dialog(page, t('users.oneTimePasswordTitle', { name: conv.username }))
+      await expect(once).toBeVisible()
+      await once.getByRole('button', { name: t('users.oneTimeDone') }).click()
+      await expect(once).toBeHidden()
+      await expect(page.getByText(t('users.convertedToLocal', { name: conv.username }))).toBeVisible()
+      await expect(userCard(page, conv.username).getByText(t('users.authSourceOidc'), { exact: true })).toHaveCount(0)
+      const row = (await db('SELECT auth_source, external_id FROM users WHERE id = ?', [conv.id]))[0]
+      expect(row).toEqual({ auth_source: 'local', external_id: null })
+
+      // Loeschen eines externen Kontos: Rueckfrage mit JIT-Hinweis
+      const question = acceptNextConfirm(page)
+      await userCard(page, del.username).getByRole('button', { name: t('users.delete') }).click()
+      expect(await question).toBe(t('users.deleteExternalConfirm', { name: del.username }))
+      await expect(page.getByText(t('users.userDeleted', { name: del.username }))).toBeVisible()
+    } finally {
+      await adminApi.put('settings/sso', { oidc: restore, step_up: { current_password: ADMIN_PASSWORD } }).catch(() => {})
+    }
   })
 })

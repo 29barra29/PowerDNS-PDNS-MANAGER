@@ -10,7 +10,8 @@
     "list": "playwright test --list"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0"
+    "@playwright/test": "1.63.0",
+    "mysql2": "3.24.5"
   },
   "engines": {
     "node": ">=20"

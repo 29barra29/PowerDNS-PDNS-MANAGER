@@ -1,6 +1,7 @@
 // Panel-Tokens mit Scope (F14-APP): Nicht-Admin legt einen Lese-Token fuer eine ausgewaehlte Zone an
 // (Einmal-Anzeige), der Token wirkt nur dort und nur lesend; Bearbeiten ohne Aenderung sendet nichts, Namensaenderung
-// sendet nur den Namen; Pausieren/Aktivieren/Widerrufen wirken sofort. Admin: "Admin-Rechte" nur bei "alle Zonen".
+// sendet nur den Namen; Pausieren/Aktivieren/Widerrufen wirken sofort; abgelaufener Token mit neuer Laufzeit.
+// Admin: "Admin-Rechte" nur bei "alle Zonen".
 // Quelle: WS-F14-APP 5 (Pruefliste F14 9.7).
 const { request } = require('@playwright/test')
 const { test, expect } = require('../fixtures/test')
@@ -8,6 +9,7 @@ const { BASE_URL } = require('../fixtures/env')
 const { PanelApi, unique, uniqueZone, enc } = require('../fixtures/api')
 const { t, exact } = require('../fixtures/i18n')
 const { dialog, acceptNextConfirm } = require('../fixtures/ui')
+const { db } = require('../fixtures/db')
 
 const bare = (zone) => zone.replace(/\.$/, '')
 
@@ -127,5 +129,35 @@ test.describe('Panel-Tokens', () => {
     await expect(form.getByText(t('panelTokens.allowAdminNeedsAllZones'))).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(form).toBeHidden()
+  })
+
+  test('Abgelaufener Token: Status, Hinweis, neue Laufzeit macht ihn wieder gueltig', async ({ page, adminApi }) => {
+    const name = unique('ui-tok-exp')
+    const created = await adminApi.post('auth/me/panel-tokens', { name, expires_in_days: 30 })
+    const id = created.token.id
+    const token = created.plaintext_token
+    try {
+      // Ablaufdatum in die Vergangenheit (laesst sich ueber die API nicht setzen)
+      await db('UPDATE panel_tokens SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 DAY WHERE id = ?', [id])
+      expect(await withToken(token, 'GET', 'servers')).toBe(401)
+
+      await page.goto('/settings?tab=integrations')
+      const card = page.locator('.glass-card').filter({ has: page.getByRole('heading', { name: t('settings.integrations.panelTokens') }) })
+      const row = card.locator('tr').filter({ hasText: name })
+      await expect(row).toContainText(t('panelTokens.statusExpired'))
+      await expect(row).toContainText(t('panelTokens.expiredResumeHint'))
+
+      await row.getByRole('button', { name: `${t('panelTokens.edit')}: ${name}` }).click()
+      const edit = dialog(page, t('panelTokens.modalEditTitle'))
+      const expiry = edit.getByLabel(t('panelTokens.expiry'))
+      await expect(expiry.locator('option[value="unchanged"]')).toHaveCount(1)
+      await expiry.selectOption('30')
+      await edit.getByRole('button', { name: exact(t('common.save')) }).click()
+      await expect(edit).toBeHidden()
+      await expect(row).toContainText(t('panelTokens.statusActive'))
+      expect(await withToken(token, 'GET', 'servers')).toBe(200)
+    } finally {
+      await adminApi.del(`auth/me/panel-tokens/${id}`).catch(() => {})
+    }
   })
 })

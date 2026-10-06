@@ -40,6 +40,12 @@ services:
       E2E_RECEIVER_URL: http://receiver:8080
       # PowerDNS direkt (Testwerte aus compose.e2e.yaml), z. B. um einen Peer-Konflikt zu erzeugen
       E2E_PDNS: "ns1=http://pdns1:8081|${E2E_PDNS1_KEY:-e2ekey},ns2=http://pdns2:8081|${E2E_PDNS2_KEY:-e2ekey2}"
+      # Panel-Datenbank (Testwerte wie Dienst "tools" in compose.e2e.yaml) fuer Zustaende ohne API (fixtures/db.js)
+      E2E_DB_HOST: db
+      E2E_DB_PORT: "3306"
+      E2E_DB_NAME: dns_manager
+      E2E_DB_USER: root
+      E2E_DB_PASSWORD: e2e_root
       E2E_ADMIN_USER: admin
       E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-}
       E2E_UI_PENDING: ${E2E_UI_PENDING:-}

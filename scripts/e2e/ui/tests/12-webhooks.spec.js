@@ -1,12 +1,14 @@
 // Webhooks-Karte (F6-FE): Anlegen (Fokus im Formular), Secret-Einmal-Anzeige (ESC schliesst nicht, Tab bleibt im
 // Dialog), "Test senden", echte Zustellung an den E2E-Empfaenger nach einer Record-Aenderung, Zustellprotokoll
-// (Status "Zugestellt", Details), ESC schliesst das Protokoll und gibt den Fokus zurueck.
+// (Status "Zugestellt", Details), ESC schliesst das Protokoll und gibt den Fokus zurueck; unlesbare Ziel-URL
+// (Badge, Test gesperrt, Bearbeiten verlangt eine neue URL).
 // Quellen: WS-F6-FE (F6 9.3), W1-NACHARBEIT 5.6 (Tastatur-Checkliste).
 const { test, expect } = require('../fixtures/test')
 const { receiver, unique, uniqueZone } = require('../fixtures/api')
 const { t, exact, pattern } = require('../fixtures/i18n')
 const { dialog, expectFocusInside, expectFocusTrapped } = require('../fixtures/ui')
 const { pendingCheck } = require('../fixtures/pending')
+const { db } = require('../fixtures/db')
 
 test.describe('Webhooks', () => {
   const cleanup = []
@@ -75,5 +77,36 @@ test.describe('Webhooks', () => {
     await page.keyboard.press('Escape')
     await expect(drawer).toBeHidden()
     await expect(logBtn).toBeFocused()
+  })
+
+  test('Unlesbare Ziel-URL: Badge, Test gesperrt, Bearbeiten verlangt neue URL', async ({ page, adminApi }) => {
+    const name = unique('ui-hook-bad')
+    const created = await adminApi.post('auth/me/webhooks', { name, url: receiver.url(name), events: ['*'] })
+    const id = created.webhook.id
+    cleanup.push((api) => api.del(`auth/me/webhooks/${id}`))
+    // Chiffretext, der sich nicht entschluesseln laesst (wie nach einem Schluesselverlust)
+    await db('UPDATE webhooks SET url = ? WHERE id = ?', ['enc:v1:dWktc21va2U6a2FwdXR0', id])
+
+    await page.goto('/settings?tab=integrations')
+    const card = page.locator('.glass-card').filter({ has: page.getByRole('heading', { name: t('settings.integrations.webhooks') }) })
+    const item = card.locator('li').filter({ hasText: name })
+    await expect(item.getByText(t('webhooks.urlUnreadableBadge'), { exact: true })).toBeVisible()
+    await expect(item.getByText(t('webhooks.urlUnreadable'))).toBeVisible()
+    await expect(item.getByRole('button', { name: t('webhooks.test') })).toBeDisabled()
+
+    await item.getByRole('button', { name: t('webhooks.edit') }).click()
+    const form = dialog(page, t('webhooks.editTitle'))
+    await expect(form.getByText(t('webhooks.urlUnreadableEdit'))).toBeVisible()
+    const url = form.getByLabel(t('webhooks.fieldUrl'))
+    await expect(url).toHaveValue('')
+    // Ohne neue URL wird nicht gespeichert (Fehler im Dialog), mit neuer URL ist der Webhook wieder lesbar
+    await url.press('Enter')
+    await expect(form).toBeVisible()
+    await expect(form.getByRole('alert').first()).toBeVisible()
+    await url.fill(receiver.url(name))
+    await url.press('Enter') // Speichern-Knopf ggf. verdeckt (UI-SMOKE-1)
+    await expect(form).toBeHidden()
+    await expect(item.getByText(t('webhooks.urlUnreadableBadge'), { exact: true })).toHaveCount(0)
+    await expect(item.getByRole('button', { name: t('webhooks.test') })).toBeEnabled()
   })
 })
