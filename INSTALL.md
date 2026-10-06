@@ -626,23 +626,32 @@ Skripte, Reverse-Proxy und Backups. Die vollständige Liste steht im
 2. **Roter Hinweis „Geheimnisse nicht entschlüsselbar“:** die genannten Werte neu eintragen; bei PowerDNS-Servern
    danach die Zonen abgleichen.
 3. **Einstellungen → Monitoring → Systemstatus:** keine Migrationsfehler, keine nicht geladenen Server.
-4. **SMTP:** einmal „Verbindung testen“.
-5. **Webhooks:** je Webhook „Test senden“ und das Zustellprotokoll ansehen; ältere, nicht mehr bekannte
-   Ereignisfilter durch die Auswahl ersetzen.
+4. **SMTP:** einmal „Verbindung testen“; erscheint „Passwort kann nicht entschlüsselt werden“, das Passwort neu
+   eintragen.
+5. **Webhooks:** je Webhook „Test senden“ und das Zustellprotokoll ansehen; Webhooks mit „URL unlesbar“ oder „Secret
+   nicht lesbar“ neu eintragen; ältere, nicht mehr bekannte Ereignisfilter durch die Auswahl ersetzen.
 6. **API-Tokens:** alle „Weitreichend“-Tokens auf die nötigen Zonen beschränken, Leserecht setzen, wo Schreiben nicht
    nötig ist, Laufzeit vergeben; `allow_admin` nur, wo Skripte wirklich Admin-Funktionen brauchen. Admins prüfen in
-   der Benutzerliste, welche Konten aktive Tokens haben.
+   der Benutzerliste, welche Konten aktive Tokens haben, und widerrufen Unbenutztes.
 7. **Audit-Log → „Aufbewahrung“** festlegen (Standard unbegrenzt). Das Löschen alter Einträge entfernt auch deren
-   Verlauf und die Möglichkeit zum Zurücksetzen.
-8. **Skripte anpassen** (siehe Changelog „Breaking“): u. a. `/bulk` mit leerer `records`-Liste → `delete`; 404 statt
-   502 bei fehlender Zone; neue Ergebniswerte von `POST /zones`; DNSSEC-Antworten `already_enabled`, 409 mit
-   `detail.code` und 409 `parent_ds_present`; `reset-password` ohne Body erzwingt einen Passwortwechsel;
-   Server-URL-Wechsel nur mit neuem `api_key`; LUA per Token nur mit `allow_admin`; `TYPEnnn` → 422.
+   Verlauf und die Möglichkeit zum Zurücksetzen; Einträge aus Versionen vor 3.0 lassen sich nicht zurücksetzen.
+8. **Skripte anpassen** (siehe Changelog „Breaking“): u. a. `/bulk` mit leerer `records`-Liste → `delete`, bei
+   `expected` einen Fingerprint für jedes geänderte RRset; 404 statt 502 bei fehlender Zone; neue Ergebniswerte von
+   `POST /zones`; DNSSEC-Antworten `already_enabled`, 409 mit `detail.code` und 409 `parent_ds_present`;
+   `reset-password` ohne Body erzwingt einen Passwortwechsel; Server-URL-Wechsel nur mit neuem `api_key`; LUA per
+   Token nur mit `allow_admin`; `TYPEnnn` → 422; eine Änderung von `general.require_totp` über `PUT /settings/sso`
+   nur mit `step_up`.
 9. **Server mit „Speichern: Nein“:** DNSSEC-Änderungen dort sind jetzt gesperrt (403).
 10. **DNSSEC-Zonen** öffnen: Bei mehreren Servern mit getrennten Datenbanken auf „andere Schlüssel“ bzw. „nicht
-    signiert“ achten.
+    signiert“ achten. Nach Schlüsseländerungen prüfen, ob das NOTIFY gesendet wurde (`notified` in der Antwort bzw.
+    Tab „Propagation“).
 11. **Vorlagen** mit sehr kurzer oder langer TTL einmal öffnen und speichern (erlaubt sind 60–604800 Sekunden).
-12. **Sprache und Datumsformate** im Profil prüfen; wer eine eigene `CONTENT_SECURITY_POLICY` setzt, die
+12. **Bulk-Editor:** Auswahl-Checkboxen und Text-Editor erscheinen nur mit Schreibrecht auf die Zone. Einmal an einem
+    RRset mit PowerDNS-Kommentar per Mehrfachauswahl die TTL setzen und prüfen, dass der Kommentar erhalten bleibt.
+13. **Benutzerliste:** Badges für ausstehenden Passwortwechsel, 2FA und Passkeys prüfen. Für Reset-Links per E-Mail
+    müssen SMTP und die öffentliche Basis-URL (Einstellungen → Profil; ersatzweise `WEBAUTHN_ORIGIN`) gesetzt sein.
+    Fehlt beides, verschickt das Panel keine Reset-Mails und schreibt beim Start eine Warnung ins Log.
+14. **Sprache und Datumsformate** im Profil prüfen; wer eine eigene `CONTENT_SECURITY_POLICY` setzt, die
     Browser-Konsole auf CSP-Meldungen prüfen.
 
 ### Nur bei Nutzung bestimmter Funktionen
@@ -677,6 +686,13 @@ Nach dem ersten 3.0-Start kann 2.4.x die verschlüsselten Geheimnisse nicht lese
   ```
   Beim erneuten Upgrade laufen Token-Migration und Audit-Nachtrag wieder; unter 2.4.x gelöschte Tokens bleiben
   widerrufen. Neue 3.0-Spalten ignoriert 2.4.x.
+
+**Konten mit SSO-/LDAP-Anmeldung** (Weg über `prepare-downgrade`): Sie haben kein nutzbares Panel-Passwort und
+können sich unter 2.4.x nicht anmelden – 2.4.x kennt weder OIDC noch LDAP. Der Trockenlauf von `prepare-downgrade`
+nennt ihre Zahl. Noch unter 3.0 sicherstellen, dass mindestens ein lokaler Admin mit bekanntem Passwort existiert,
+und Konten, die unter 2.4.x weiterarbeiten sollen, in lokale Konten umwandeln: Benutzerverwaltung → „Passwort &
+Sicherheit“ → „Externe Anmeldung“ → „In lokales Konto umwandeln“ (mit Passwort-Bestätigung; API
+`POST /api/v1/auth/users/{id}/convert-to-local`).
 
 ---
 
@@ -816,6 +832,14 @@ Die Login-Seite zeigt den Grund (`/login?sso_error=<code>`), das Audit-Log den E
 Redirect-URI beim Anbieter, fehlende öffentliche Basis-URL, Konto nicht freigegeben (Gruppen/Domains,
 automatische Kontoanlage aus), Anbieter nicht erreichbar. Bei abgeschalteter lokaler Anmeldung kommen Admins über
 `/login?local=1` weiter lokal hinein.
+
+Ist LDAP eingeschaltet, aber nicht erreichbar oder falsch konfiguriert, antwortet jede Anmeldung mit falschem oder
+unbekanntem Passwort mit 503 („Der Anmeldedienst (LDAP) ist nicht erreichbar …“ bzw. „Die LDAP-Anmeldung ist
+fehlerhaft konfiguriert …“) – auch für lokale Konten, damit sich während einer Störung nicht ermitteln lässt, welche
+lokalen Konten es gibt. Lokale Konten mit richtigem Passwort melden sich weiter sofort an. Jeder dieser Versuche
+zählt als Fehlversuch (Login-Sperre). Die Ursache steht im Audit-Log: `LOGIN_FAILED` mit `reason`
+`ldap_unavailable` bzw. `ldap_config` (bei lokalen Konten `bad_credentials` mit `ldap_error`). „Verbindung testen“
+unter Einstellungen → Anmeldung / SSO prüft die Verbindung.
 
 ### Admin-Passwort vergessen
 

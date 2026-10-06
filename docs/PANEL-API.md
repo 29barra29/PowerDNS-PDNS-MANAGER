@@ -142,18 +142,27 @@ Antworten der Token-Prüfung (`detail`): `Ungültiger API-Token` (401), `API-Tok
   `X-Password-Change-Required: 1`. Panel-Tokens sind nicht betroffen.
 - **Sitzungs-Widerruf:** Nach „Alle Zugänge widerrufen“, einem Admin-Passwort-Reset oder einer Passwortänderung
   bekommen ältere Sitzungen 401 `Sitzung abgelaufen – bitte erneut anmelden`.
-- **Bestätigung kritischer Änderungen (Step-up):** Kritische SSO-Einstellungen (`PUT /settings/sso`) und das Umwandeln
+- **Bestätigung kritischer Änderungen (Step-up):** Kritische SSO-Einstellungen (`PUT /settings/sso`, u. a.
+  `general.local_login_enabled`, `general.require_totp`, Aktivierung, Issuer/Server, Gruppen und Rollen) und das Umwandeln
   eines Kontos (`POST /auth/users/{id}/convert-to-local`) verlangen eine erneute Bestätigung. Fehlt sie, kommt 403 mit
   `{"detail": {"message": "…", "code": "stepup_required"}}` und Header `X-Step-Up-Required`; dieselbe Anfrage mit
   `"step_up": {"current_password": "…", "totp_code": "…"}` im Body wiederholen. Falsche Angaben → `stepup_failed`,
   zu viele Fehlversuche → 429. Konten mit SSO-/LDAP-Anmeldung bekommen `reauth_required` (Anmeldung älter als
   10 Minuten; abmelden und neu anmelden).
+- **Anmeldung bei aktivem LDAP:** `POST /auth/login` prüft zuerst ein lokales Passwort, sonst das Verzeichnis. Ist LDAP
+  nicht erreichbar oder falsch konfiguriert, antwortet jeder Versuch ohne gültiges lokales Passwort mit 503
+  (`Der Anmeldedienst (LDAP) ist nicht erreichbar. …` bzw. `Die LDAP-Anmeldung ist fehlerhaft konfiguriert – …`) –
+  auch für lokale Konten mit falschem Passwort, damit sich nicht ermitteln lässt, welche lokalen Konten existieren.
+  Jeder dieser Versuche zählt als Fehlversuch. Lokale Konten mit richtigem Passwort melden sich weiter an.
+- **OIDC-Verknüpfung:** Eine Verknüpfung (`POST /auth/me/sso/oidc/link`), die vor „Alle Zugänge widerrufen“ oder einem
+  Admin-Passwort-Reset gestartet wurde, endet beim Rücksprung mit `sso_error=link_failed`. Bestehende Verknüpfungen
+  bleiben beim Widerruf erhalten.
 
 ### Drosselung
 
 | Was | Grenze | Antwort |
 |---|---|---|
-| Login, 2FA, Passkey, LDAP-Verknüpfung, Step-up | 25 Fehlversuche je IP (IPv6 je /64) **oder** 5 je Benutzername in 15 Minuten | 429 |
+| Login, 2FA, Passkey, LDAP-Verknüpfung, Step-up, LDAP-Verbindungstest mit Testpasswort (`POST /settings/sso/test`) | 25 Fehlversuche je IP (IPv6 je /64) **oder** 5 je Benutzername in 15 Minuten | 429 |
 | OIDC-Start/-Rücksprung | 20 Fehlschläge je IP in 5 Minuten | Weiterleitung mit `sso_error=rate_limited` |
 | Propagations-Check, DNSKEY- und Elternzonen-Prüfung | 10 nicht zwischengespeicherte Prüfungen je Benutzer und Minute (gemeinsam) | 429 mit `Retry-After` |
 | Webhook „Test senden“ | ein Test je Webhook in 10 Sekunden | 429 |
@@ -183,7 +192,7 @@ Weitere Formen:
 
 | Code | Bedeutung |
 |---|---|
-| 400 | Ungültige Anfrage, u. a. `secret_reentry_required`, „Nichts zum Widerrufen ausgewählt“ |
+| 400 | Ungültige Anfrage, u. a. `secret_reentry_required`, „Nichts zum Widerrufen ausgewählt“, ungültiges Zeichen in einer Zonendatei (Import) |
 | 401 | Nicht angemeldet, Token ungültig, pausiert, abgelaufen oder widerrufen, Sitzung abgelaufen |
 | 403 | Keine Berechtigung: Zonenrecht, Lese-Token, Zone außerhalb des Token-Scopes, Admin-Endpunkt ohne `allow_admin`, Session-Pflicht, Server mit „Speichern: Nein“, LUA-Policy, CSRF, Passwortwechsel ausstehend, Step-up |
 | 404 | Server, Zone, Record, Wert, Eintrag oder Token nicht gefunden (fremde Webhooks und Tokens verhalten sich wie nicht vorhandene) |
@@ -191,7 +200,7 @@ Weitere Formen:
 | 422 | Validierung (Body, Typ `TYPEnnn`, TTL, LUA-Inhalt), blockierende Bulk-Probleme, nicht rücksetzbarer Verlaufseintrag |
 | 429 | Drosselung (siehe oben) |
 | 502/504 | PowerDNS nicht erreichbar bzw. Zeitüberschreitung |
-| 503 | Datenbank oder Verschlüsselung nicht verfügbar, LDAP nicht erreichbar, Audit-Eintrag für eine Key-Anzeige nicht schreibbar |
+| 503 | Datenbank oder Verschlüsselung nicht verfügbar, LDAP nicht erreichbar oder falsch konfiguriert (Login), Audit-Eintrag für eine Key-Anzeige nicht schreibbar |
 
 ---
 
@@ -248,6 +257,7 @@ unklar) oder `failed`.
 - **`manage_ptr`** (optional, nur A/AAAA): PTR in einer vom Panel verwalteten Reverse-Zone mitpflegen; fehlt das Feld,
   gilt der Admin-Standard (ab Werk aus). Lief die PTR-Pflege, enthält `details` zusätzlich `ptr` (Liste der Ergebnisse
   je IP). Siehe [PTR-Pflege](#ptr-pflege).
+- **Löschen:** `content` höchstens 65535 Zeichen (darüber 422).
 - **Fehler:** Zone fehlt auf dem Server aus der URL → 404; Wert nicht vorhanden → 404 (`Wert '…' nicht im RRset … vorhanden`
   bzw. `Original record content not found in …`); Server „Speichern: Nein“ → 403.
 - Jede erfolgreiche Änderung schreibt einen Audit-Eintrag (`CREATE`, `UPDATE`, `DELETE`, Format v2) und das
@@ -293,7 +303,7 @@ die Zone.
 | `manage_ptr` | PTR-Pflege für A/AAAA (gilt für die ganze Anfrage) |
 | `source`, `mode` | nur für Audit und Webhook (`api`/`selection`/`text`; `merge`/`replace`/`sync_scope`) |
 
-Regeln und Grenzen: höchstens 5000 Einträge je Anfrage. Ein RRset darf entweder einmal „absolut“ (`create` bzw.
+Regeln und Grenzen: höchstens 5000 Einträge je Anfrage; `content` in `delete` und `set_disabled` höchstens 65535 Zeichen. Ein RRset darf entweder einmal „absolut“ (`create` bzw.
 `delete` ohne `content`) oder beliebig oft „relativ“ (`delete` mit `content`, `merge`, `set_ttl`, `set_disabled`)
 vorkommen, nicht beides. Leere Anfrage → 422.
 
@@ -313,6 +323,9 @@ und bei PTR-Pflege `ptr`. Hat sich nichts geändert, ist `audit_id` `null`.
 | 422 `{"message", "issues"}` | leere Anfrage, ungültige Werte (statische Prüfung), blockierende Probleme (CNAME-Konflikt, Apex-NS, SOA, …) |
 | 422 (Validierungsliste) | Body-Fehler wie `create` mit leerer `records`-Liste, doppelte oder widersprüchliche Operationen für ein RRset, mehr als 5000 Einträge |
 | 403 | LUA-Policy verbietet die LUA-Änderung |
+
+Scheitert `/bulk` am ersten Server, enthält das Fehler-Audit `BULK_UPDATE` `details.applied = false`, wenn sicher
+nichts geschrieben wurde, und `details.applied = "unknown"`, wenn der Ausgang unklar ist (`primary_outcome: "unknown"`).
 
 ```bash
 # Alle www-A-Werte ersetzen und einen TXT-Wert löschen
@@ -346,7 +359,9 @@ curl -sS -H "$H_AUTH" -H "Content-Type: application/json" \
   schreibbaren Server an (`imported`, `synced`, `error: …`). Bei LUA-Policy `disabled` und LUA-Zeilen in der Datei →
   403 `Die Zonendatei enthält LUA-Records, LUA-Records sind in diesem Panel deaktiviert. Betroffene Zeilen: 4, 9.`
   (höchstens 10 Zeilen, dann „…“). Geprüft wird so, wie PowerDNS die Datei liest (auch `IN IN LUA`, `TYPE065402`,
-  `$GENERATE`, `$INCLUDE`); im Zweifel wird gesperrt.
+  `$GENERATE`, `$INCLUDE`); im Zweifel wird gesperrt. Enthält `content` ein einzelnes UTF-16-Surrogat (z. B. `\ud800`
+  im JSON), antworten Vorschau und Import mit 400 `Die Zonendatei enthält ein ungültiges Zeichen (einzelnes
+  UTF-16-Surrogat) in Zeile N.`
 
 ---
 
@@ -368,7 +383,7 @@ Private Schlüssel werden nie ausgegeben.
 | `PUT …/nsec3` | NSEC/NSEC3 ändern |
 | `GET …/ds` | DS-Records für den Registrar |
 | `GET …/parent-ds` | DS der Elternzone bei den Resolvern, Abgleich je KSK/CSK |
-| `GET …/dnskey-check?key_tag=…` | DNSKEY je autoritativem Nameserver (`all_ok`); höchstens 12 `key_tag` |
+| `GET …/dnskey-check?key_tag=…` | DNSKEY je autoritativem Nameserver (`all_ok`, `truncated`); höchstens 12 `key_tag` und 12 Nameserver-Namen |
 
 **Body von `enable`** (leerer Body = Standardwerte):
 
@@ -398,7 +413,9 @@ Format: `{"detail": {"message": "…", "code": "…", "force_possible": true}}`.
 
 **Prüfungen per DNS** (`parent-ds`, `dnskey-check`, Schutzregel `parent_ds_present`): nur nach Freischaltung unter
 Einstellungen → Monitoring (externe DNS-Abfragen; für `dnskey-check` zusätzlich „autoritative Nameserver prüfen“).
-Ohne Freischaltung antworten die Endpunkte mit `"enabled": false`. Panel-Tokens mit Zonen-Scope dürfen prüfen.
+Ohne Freischaltung antworten die Endpunkte mit `"enabled": false`. `dnskey-check` fragt höchstens 12 Nameserver-Namen;
+weitere erscheinen mit `error: "Nicht geprüft (zu viele Nameserver)"`, dann sind `truncated: true` und
+`all_ok: false`. Panel-Tokens mit Zonen-Scope dürfen prüfen.
 PowerDNS-Fehler erscheinen als `PowerDNS (<server>): <meldung>`.
 
 ```bash
@@ -431,15 +448,17 @@ Filter der Liste: `limit` (1–200, Standard 50), `offset`, `action` (Komma-List
   `{"detail": {"message", "code": "rollback_conflict", "conflicts", "already_reverted_by"}}`; mit `force: true`
   trotzdem. RRsets, die schon dem Vorher-Stand entsprechen, zählen nicht als Konflikt.
 - **Nichts zu tun:** Entspricht alles schon dem Vorher-Stand → 200 mit `details.noop = true`.
-- **Erfolg:** `details` mit `revert_audit_id`, `rolled_back`, `skipped`, `forced`, `fanout`, `primary_outcome`;
-  Audit `RECORD_ROLLBACK` (`revert_of_id`), Ereignis `record.rollback`. Geschrieben wird auf den Server aus der URL und
+- **Erfolg:** `details` mit `revert_audit_id`, `rolled_back`, `skipped`, `forced`, `fanout`, `primary_outcome` und bei
+  PTR-Pflege `ptr`; Audit `RECORD_ROLLBACK` (`revert_of_id`, ggf. `ptr`), Ereignis `record.rollback`. Geschrieben wird auf den Server aus der URL und
   alle schreibbaren Server (Vorher-Stand des Servers aus der URL).
 - **Nicht rücksetzbar** → 422 `{"detail": {"message", "code"}}` mit `code`: `legacy_format` (Eintrag vor 3.0),
   `failed_action`, `not_record_change`, `incomplete`, `no_changes`, `only_excluded_records`, `zone_recreated`,
   `dyndns_repair`. In Vorschau und Liste zusätzlich `no_write_permission`, `server_read_only`.
 - **Nie zurückgesetzt:** SOA, DNSSEC-Records (inkl. DS) und `_acme-challenge`. LUA-Ziele unterliegen der LUA-Policy.
-- **PTRs:** Ein Rollback pflegt keine PTRs. Die zugehörigen PTR-Änderungen stehen als eigene Einträge `PTR_SYNC` im
-  Verlauf der Reverse-Zone und lassen sich dort zurücksetzen.
+- **PTRs:** Ein Rollback pflegt PTRs wie jede andere Änderung an A/AAAA-Records, wenn der Admin-Standard
+  `auto_default` (`/settings/ptr`) eingeschaltet ist (ab Werk aus); ein eigenes `manage_ptr` gibt es dafür nicht. Die
+  PTR-Änderungen stehen als eigene Einträge `PTR_SYNC` (`source.action = "ROLLBACK"`) im Verlauf der Reverse-Zone
+  und lassen sich dort zurücksetzen.
 - **Datenschutz:** Nicht-Admins sehen keine Client-IPs, Token-Kennungen und PowerDNS-Fehlertexte; Einträge aus der
   Zeit vor einer endgültigen Löschung und Neuanlage der Zone sind für sie nicht sichtbar (404).
 
@@ -624,7 +643,10 @@ erst nach `rotate` wieder aktivieren (`PUT` mit `is_active: true` → 409). Glob
   oder entfernt; Classless-Delegationen (RFC 2317) werden erkannt und ausgelassen. PTR-Probleme brechen die
   eigentliche Änderung nie ab.
 - Jede geschriebene Reverse-Zone bekommt einen eigenen Audit-Eintrag `PTR_SYNC` (rücksetzbar) und das Ereignis
-  `record.ptr_synced`. Ein Rollback der Forward-Änderung setzt PTRs nicht mit zurück.
+  `record.ptr_synced`. Beide nennen in `source` die auslösende Änderung: `action` (`CREATE`, `UPDATE`, `DELETE`,
+  `BULK_UPDATE`, `ROLLBACK`, `DYNDNS_UPDATE`), `zone` (Forward-Zone), `name` (bei genau einem Namen) und `server`.
+- Das Zurücksetzen im Zonenverlauf (`…/history/{id}/rollback`) pflegt PTRs nach dem Admin-Standard; DynDNS-Tokens
+  nach ihrer Einstellung `update_ptr`.
 - `GET /ptr/config` – Admin-Standard `auto_default` und Zahl der beschreibbaren Reverse-Zonen;
   `GET /ptr/lookup?ip=&name=&server=` – was die PTR-Pflege für eine IP täte (`status`: `ok`, `no_reverse_zone`,
   `classless`, `forbidden`, `error`; `would`: `set`, `unchanged`, `conflict`). Zonennamen und vorhandene PTRs nur mit
@@ -723,8 +745,8 @@ ebenso die bisherigen Felder in `data`. Der Body ist ASCII-JSON. Ist er größer
 | `record.updated` | `server`, `zone`, `name`, `type`, `ttl`, `old_content`, `new_content`, ggf. `ptr` |
 | `record.deleted` | `server`, `zone`, `name`, `type`, `content` (`null` = ganzes RRset), ggf. `ptr` |
 | `record.bulk` | `server`, `zone`, `created`, `deleted`, `source`, `mode`, `changes_total`, ggf. `ptr` |
-| `record.rollback` | `server`, `zone`, `reverted_audit_log_id`, `forced` |
-| `record.ptr_synced` | `server`, `zone` (Reverse-Zone), `source` (auslösende Aktion) |
+| `record.rollback` | `server`, `zone`, `reverted_audit_log_id`, `forced`, ggf. `ptr` |
+| `record.ptr_synced` | `server`, `zone` (Reverse-Zone), `source` (`action`, `zone` = Forward-Zone, `name`, `server`) |
 | `zone.created` | `zone`, `kind`, `nameservers`, `dnssec`, `results` |
 | `zone.updated` | `zone`, `server`, `changed` |
 | `zone.deleted` | `zone`, `server`, `zone_still_on_other_server` |
@@ -838,7 +860,7 @@ Alle 166 Routen des Backends (ohne `HEAD` und die Auslieferung der Oberfläche).
 |---|---|---|---|
 | GET | `/api/v1/setup/status` | öffentlich | Einrichtungsstatus |
 | POST | `/api/v1/setup/register` | öffentlich | ersten Admin anlegen (nur während der Einrichtung) |
-| POST | `/api/v1/auth/login` | öffentlich | Anmeldung (Formular: `username`, `password`, optional `totp_code`, `captcha_token`); setzt das Session-Cookie |
+| POST | `/api/v1/auth/login` | öffentlich | Anmeldung (Formular: `username`, `password`, optional `totp_code`, `captcha_token`); setzt das Session-Cookie; 503 bei gestörtem LDAP |
 | POST | `/api/v1/auth/login/2fa` | öffentlich | 2FA-Schritt (`totp_code`, `two_factor_token` optional) |
 | POST | `/api/v1/auth/logout` | öffentlich | Abmelden (Cookie löschen) |
 | POST | `/api/v1/auth/register` | öffentlich | Selbst-Registrierung (wenn freigeschaltet) |
@@ -1060,7 +1082,7 @@ Alle 166 Routen des Backends (ohne `HEAD` und die Auslieferung der Oberfläche).
 | GET | `/api/v1/settings/secrets/status` | Session, Admin | Status der Verschlüsselung (nie Werte) |
 | GET | `/api/v1/settings/sso` | Session, Admin | SSO-Einstellungen |
 | PUT | `/api/v1/settings/sso` | Session, Admin | SSO speichern (kritische Felder mit `step_up`) |
-| POST | `/api/v1/settings/sso/test` | Session, Admin | SSO-Verbindung testen |
+| POST | `/api/v1/settings/sso/test` | Session, Admin | SSO-Verbindung testen (LDAP mit `test_password` zählt im Login-Limit, gesperrt → 429) |
 | GET | `/api/v1/settings/dyndns` | Session, Admin | DynDNS global an/aus, private IPs |
 | PUT | `/api/v1/settings/dyndns` | Session, Admin | DynDNS-Einstellungen speichern |
 | GET | `/api/v1/settings/ptr` | Session, Admin | PTR-Standard (`auto_default`) |

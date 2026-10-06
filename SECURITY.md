@@ -52,6 +52,7 @@ We take security issues very seriously and will work with you to understand and 
 Run the panel behind a TLS reverse proxy with `AUTH_COOKIE_SECURE=true`, bind port 5380 to `127.0.0.1`, set
 `TRUST_PROXY_HEADERS=true` behind the proxy, restrict `/metrics` to the Prometheus server, limit API tokens to the
 required zones, read-only access and an expiry date, and keep the encryption key and the `.env` in a separate backup.
+The full checklist is in [INSTALL.md](INSTALL.md#sicherheits-checkliste) (German).
 
 ---
 

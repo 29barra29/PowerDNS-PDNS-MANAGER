@@ -97,7 +97,9 @@ Details: [scripts/e2e/README.md](scripts/e2e/README.md) und [scripts/e2e/ui/READ
   Zusammenführen (`npm run merge:locales`) passiert vor dem Release in einem eigenen Commit mit dem Betreff
   `locales: …` (`scripts/e2e/static-checks.sh` prüft das).
 * Dialoge bekommen `role="dialog"`, Fokusführung über `useDialogFocus` (`frontend/src/lib/useDialogFocus.js`) und
-  schließen mit ESC.
+  schließen mit ESC; Strg/Cmd+Enter über die Option `onSubmitShortcut`, keine eigenen globalen `keydown`-Listener.
+  Das Overlay steht in `<ModalPortal>` (`frontend/src/components/common/ModalPortal.jsx`), siehe
+  [Frontend-README](frontend/README.md).
 
 ### Dokumentation
 

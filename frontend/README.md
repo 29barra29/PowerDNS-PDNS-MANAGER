@@ -76,7 +76,7 @@ Der Metadaten-Export (`tab`, `card`, `action` …) braucht wegen `react-refresh/
 ## Regeln
 
 - **API nur über den Client:** Komponenten rufen `api.methodName(...)` auf (`import api from '../api'`), keine direkten `fetch`-Aufrufe. Der Client hängt das Cookie an, normalisiert Fehler (`err.status`, `err.message`, `err.code`, `err.payload`), leitet bei 401 zur Anmeldung, meldet einen erzwungenen Passwortwechsel (`X-Password-Change-Required`) und eine nötige Bestätigung (`stepup_required`/`reauth_required`) per Window-Event. Neue Methoden gehören in ein Modul unter `src/api/`; Methodennamen sind global eindeutig.
-- **Dialoge:** `role="dialog"`, `aria-modal="true"` und `useDialogFocus` aus `src/lib/useDialogFocus.js` (Fokus beim Öffnen, Tab bleibt im Dialog, ESC schließt, Fokus-Rückgabe; bei übereinanderliegenden Dialogen reagiert nur der oberste). Tokens und Secrets zeigt `OneTimeSecretModal` genau einmal an.
+- **Dialoge:** `role="dialog"`, `aria-modal="true"` und `useDialogFocus` aus `src/lib/useDialogFocus.js` (Fokus beim Öffnen, Tab bleibt im Dialog, ESC schließt, Fokus-Rückgabe; bei übereinanderliegenden Dialogen reagiert nur der oberste). Strg/Cmd+Enter über die Hook-Option `onSubmitShortcut` (wirkt nur im obersten Dialog), keine eigenen globalen `keydown`-Listener. Das Overlay (`fixed inset-0 …`) steht in `<ModalPortal>` aus `src/components/common/ModalPortal.jsx` und hängt damit an `document.body` – sonst begrenzt eine Karte mit `backdrop-filter`/`transform` (z. B. `.glass-card`) das Overlay auf die Karte. `tests/modal-portal.test.mjs` prüft, dass jedes `aria-modal`-Overlay im Portal liegt. Tokens und Secrets zeigt `OneTimeSecretModal` genau einmal an.
 - **Texte nur über i18n** (`t('bereich.key')`), Datum und Uhrzeit über `src/lib/datetime.js` bzw. `useDateFormat` im Format der gewählten Sprache.
 
 ## Übersetzungen
@@ -92,7 +92,7 @@ npm run check:locales -- --strict                   # wie in der CI
 
 Die Prüfung meldet fehlende Keys und Pluralformen (`Intl.PluralRules`, z. B. `_few` für Serbisch, Bosnisch, Kroatisch), abweichende Platzhalter, leere Werte, im Code verwendete, aber fehlende Keys und Werte, die unverändert aus dem Englischen stammen. Begründete Ausnahmen (Fachbegriffe, dynamisch gebildete Keys) stehen in `scripts/locale-allowlist.d/<name>.json` ([README](scripts/locale-allowlist.d/README.md)). Englisch ist `fallbackLng`: Fehlt zur Laufzeit ein Key, erscheint der englische Text.
 
-Sprachwahl: Vor der Anmeldung gilt die im Browser gespeicherte Wahl, sonst die Browsersprache, sonst Englisch; die Standardsprache des Servers (`DEFAULT_LANGUAGE`) nur, solange im Browser keine Wahl gespeichert ist. Nach der Anmeldung hat die Sprache aus dem Profil Vorrang und wird im Browser gemerkt.
+Sprachwahl vor der Anmeldung: 1. die im Browser gespeicherte Wahl; 2. sonst die Standardsprache des Servers (`DEFAULT_LANGUAGE`, über `GET /api/v1/settings/app-info`, ohne Angabe `de`) – sie wird nicht gemerkt; 3. die Browsersprache bzw. Englisch gelten nur beim Start, bis die App-Info geladen ist (oder wenn sie nicht geladen werden kann). Nach der Anmeldung hat die Sprache aus dem Profil Vorrang und wird im Browser gemerkt.
 
 ## Tests
 

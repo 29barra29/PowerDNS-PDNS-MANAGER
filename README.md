@@ -332,12 +332,12 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 
 *Oktober 2026.* Major-Release für den Einsatz im Unternehmen: Änderungen an Records sind nachvollziehbar und lassen sich zurücksetzen, gespeicherte Geheimnisse liegen verschlüsselt in der Datenbank, API-Tokens lassen sich auf Zonen, Leserecht und eine Laufzeit beschränken, und die Anmeldung über OIDC oder LDAP/Active Directory ist möglich. **Die Datenbank wird beim ersten Start automatisch migriert; ein Downgrade auf 2.4.x geht danach nur mit dem Dump von vorher oder nach `prepare-downgrade`.** Schritt für Schritt: [INSTALL.md → Upgrade von 2.x auf 3.0](INSTALL.md#upgrade-von-2x-auf-30).
 
-**Vor dem Update lesen (Breaking)**
+**Vor dem Update lesen (Breaking Changes)**
 
 *Betrieb und Daten*
 
 - **Gespeicherte Geheimnisse werden verschlüsselt** – PowerDNS-API-Keys, Webhook-Secrets **und Webhook-URLs**, 2FA-Geheimnisse, SMTP-Passwort, Captcha-Secret, SSO-Secrets und Metrik-Token. Der Schlüssel kommt aus `SECRET_ENCRYPTION_KEY` in der `.env` oder wird beim ersten Start als `/app/data/.secret_key` (Volume `backend_data`) erzeugt. Im zweiten Fall legt `./update.sh` eine Kopie in `${PDNSMGR_KEY_BACKUP_DIR:-$HOME/.pdnsmgr-keys}` ab – nie im Stack-Ordner, nie neben dem Dump. Dieses Verzeichnis bzw. die `.env` getrennt vom Datenbank-Backup sichern: Ohne Schlüssel sind die Geheimnisse aus einem Backup nicht lesbar.
-- **Downgrade-Grenze:** Nach dem ersten 3.0-Start kann 2.4.x die Geheimnisse nicht lesen. Zurück nur mit dem Dump von vor dem Update oder nach `python -m app.cli.secrets prepare-downgrade --yes`. Der Dump von vor dem Update enthält die Geheimnisse noch im Klartext.
+- **Downgrade-Grenze:** Nach dem ersten 3.0-Start kann 2.4.x die Geheimnisse nicht lesen. Zurück nur mit dem Dump von vor dem Update oder nach `python -m app.cli.secrets prepare-downgrade --yes`. Der Dump von vor dem Update enthält die Geheimnisse noch im Klartext. Konten mit SSO-/LDAP-Anmeldung können sich unter 2.4.x nicht anmelden (kein nutzbares Panel-Passwort); der Trockenlauf von `prepare-downgrade` nennt ihre Zahl. Vorher einen lokalen Admin mit bekanntem Passwort sicherstellen und Konten bei Bedarf in lokale umwandeln (`convert-to-local`) – siehe [INSTALL.md → Downgrade auf 2.4.x](INSTALL.md#downgrade-auf-24x).
 - **Start-Abbruch statt halbem Schema:** Fehlt dem Datenbank-Benutzer das `ALTER`-Recht oder fehlt bzw. passt der Schlüssel nicht, startet das Backend nicht und nennt die Ursache im Log.
 - **Eigene Datenbank:** MariaDB ab 10.6 bzw. MySQL ab 8.0 (`SKIP LOCKED`). Nur **ein** Backend-Prozess darf die Webhook-Warteschlange abarbeiten; `BACKGROUND_WORKERS_ENABLED=false` sammelt Ereignisse nur.
 - **`compose.yaml`:** Der feste DNS-Eintrag `8.8.8.8`/`8.8.4.4` entfällt – der Container nutzt die Resolver des Docker-Hosts, eigene per `compose.override.yaml`. Die Standard-Content-Security-Policy enthält keine Google-Fonts-Hosts mehr (eine selbst gesetzte `CONTENT_SECURITY_POLICY` bleibt).
@@ -351,12 +351,14 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - **Admin-Endpunkte per Token nur mit `allow_admin`.** Bestehende Tokens von Admins bekommen die Freigabe beim Update automatisch. Alle Bestandstokens gelten für alle Zonen ohne Ablauf („Weitreichend“).
 - Panel-Tokens nur noch aus dem `Authorization`-Header (nicht aus dem Cookie). Pausierte, abgelaufene und widerrufene Tokens → 401; ein Widerruf ist endgültig, in 2.x gelöschte Tokens gelten als widerrufen.
 - `GET /auth/me` enthält den neuen Block `auth`. Zonenlisten (Suche, Zonenzahl der Server) zeigen nur noch sichtbare Zonen, die Suche liefert `truncated`. Interne PowerDNS-URL und Server-Statistiken sehen nur Admins.
-- **Erzwungener Passwortwechsel:** Bis zum Wechsel erlaubt die Browser-Sitzung nur Profil, Passwortwechsel und Abmelden, sonst 403 mit Header `X-Password-Change-Required`. `PUT /auth/users/{id}/reset-password` **ohne Body erzwingt jetzt den Wechsel** (`{"must_change_password": false}` schaltet das ab).
-- **Login-Sperren je IP (IPv6 je /64) und je Benutzername:** 5 Fehlversuche für einen Namen in 15 Minuten sperren ihn von jeder Adresse. Gilt auch für 2FA, Passkey, LDAP-Verknüpfung und die Bestätigung kritischer Änderungen; ein nicht erreichbares oder falsch konfiguriertes LDAP zählt als Fehlversuch.
+- **Erzwungener Passwortwechsel:** Bis zum Wechsel erlaubt die Browser-Sitzung nur das Abrufen des eigenen Kontos (`GET /auth/me`), den Passwortwechsel und das Abmelden, sonst 403 mit Header `X-Password-Change-Required`. `PUT /auth/users/{id}/reset-password` **ohne Body erzwingt jetzt den Wechsel** (`{"must_change_password": false}` schaltet das ab).
+- **Login-Sperren je IP (IPv6 je /64) und je Benutzername:** 5 Fehlversuche für einen Namen in 15 Minuten sperren ihn von jeder Adresse. Gilt auch für 2FA, Passkey, LDAP-Verknüpfung, die Bestätigung kritischer Änderungen und den LDAP-Verbindungstest mit Testpasswort (`POST /settings/sso/test`, gesperrt → 429); ein nicht erreichbares oder falsch konfiguriertes LDAP zählt als Fehlversuch.
+- **Anmeldung bei gestörtem LDAP:** Ist LDAP eingeschaltet, aber nicht erreichbar oder falsch konfiguriert, antwortet `POST /auth/login` bei falschem Passwort mit 503 – auch für lokale Konten (vorher 401). Lokale Konten mit richtigem Passwort melden sich weiter sofort an.
 - **„Alle Zugänge widerrufen“ und der Admin-Passwort-Reset beenden bestehende Browser-Sitzungen** (danach 401 „Sitzung abgelaufen – bitte erneut anmelden“). DynDNS-Tokens werden dabei endgültig gesperrt, auch pausierte; aktivieren lassen sie sich erst nach „Neues Secret“. `revoked.dyndns_tokens` zählt die neu gesperrten Tokens.
 - Benutzerverwaltung: Das eigene Konto lässt sich nicht deaktivieren, herabstufen oder per Admin-Werkzeug zurücksetzen; der letzte **aktive** Admin ist geschützt; eine doppelte E-Mail-Adresse ergibt 409 statt 500.
 - Konten mit SSO-/LDAP-Anmeldung haben kein Panel-Passwort: kein Passwort-Login, kein „Passwort vergessen“, kein Passwortwechsel, keine Passkeys. Ist die lokale Anmeldung abgeschaltet, sind auch Registrierung und „Passwort vergessen“ für Nicht-Admins aus.
-- OIDC-Rücksprünge sind gedrosselt: nach 20 Fehlschlägen in 5 Minuten je IP `sso_error=rate_limited`. Ist OIDC aus, endet der Callback mit `disabled` ohne Audit-Eintrag.
+- **Single Sign-On ist nach dem Update aus.** Die automatische Kontoanlage ist standardmäßig aus und nur mit erlaubten Gruppen, Domains oder ausdrücklicher Bestätigung einschaltbar; LDAP-Gruppen werden nur als vollständiger DN verglichen. Änderungen an kritischen SSO-Einstellungen – auch an „2FA nach OIDC“ (`general.require_totp`) – verlangen in `PUT /settings/sso` eine Bestätigung (`step_up`, sonst 403 `stepup_required`).
+- OIDC-Rücksprünge sind gedrosselt: nach 20 Fehlschlägen in 5 Minuten je IP `sso_error=rate_limited`. Ist OIDC aus, endet der Callback mit `disabled` ohne Audit-Eintrag. Eine OIDC-Verknüpfung, die vor „Alle Zugänge widerrufen“ oder einem Admin-Passwort-Reset gestartet wurde, endet mit `sso_error=link_failed`.
 
 *Records, Zonen, DNSSEC*
 
@@ -366,7 +368,8 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - Generische Typangaben wie `TYPE65402` → 422.
 - **LUA-Records schreiben nach dem Update nur Admins** (Policy `admin`); API-Tokens brauchen dafür `allow_admin`. Bei Policy `disabled` → 403 beim Anlegen und Ändern (Löschen bleibt erlaubt) und beim Zonen-Import von Dateien mit LUA-Zeilen. Bestehende LUA-Records bleiben unverändert.
 - **Zonen-Import bei Policy `disabled`:** Die Prüfung liest die Datei wie PowerDNS (auch `IN IN LUA`, `TYPE065402`, `$GENERATE`, `$INCLUDE`; im Zweifel wird gesperrt). Der 403-Text endet mit „Betroffene Zeilen: N, M.“; das Fehler-Audit `IMPORT` zählt in `details.lua_count` die betroffenen Zeilen (bisher Records) und nennt sie in `details.lines`.
-- Die Import-Vorschau vergleicht Namen im Record-Inhalt absolut (NS-, SOA-, MX-, CNAME-Ziele ohne Schein-Unterschiede) und liefert neu `lua_count`, `lua_issues`, `lua_policy`, `lua_blocked`, `lua_blocked_lines`.
+- Die Import-Vorschau vergleicht Namen im Record-Inhalt absolut (NS-, SOA-, MX-, CNAME-Ziele ohne Schein-Unterschiede) und liefert neu `lua_count`, `lua_issues`, `lua_policy`, `lua_blocked`, `lua_blocked_lines`. Ein einzelnes UTF-16-Surrogat in der Zonendatei ergibt bei Vorschau und Import 400 mit Zeilenangabe (vorher 500).
+- `content` in `DELETE /records/{server}/{zone}/delete` sowie in Bulk `delete[]` und `set_disabled[]`: höchstens 65535 Zeichen (darüber 422).
 - **`POST /zones`:** ungültige `dnssec_options` → 422; DNSSEC nur auf dem **ersten** angelegten Server, neue Ergebniswerte `created; dnssec-skipped` und `created; dnssec-error: <Grund>`; SOA-Hostmaster `hostmaster.<zone>`; „Speichern: Nein“ gilt auch für ausdrücklich gewählte Server.
 - **DNSSEC-API:** `enable` auf einer signierten Zone → 200 mit `already_enabled` (nur inaktive Schlüssel → 409); `activate`/`deactivate`/`DELETE` → 409 bei Schutzregeln (`detail.code`) bzw. 403 auf Servern mit „Speichern: Nein“ – das gilt für alle schreibenden DNSSEC-Endpunkte; vorsignierte Zonen → 409; DNSSEC-Änderungen an Master-/Producer-Zonen erhöhen den SOA-Serial; Fehler als `PowerDNS (<server>): <meldung>`.
 - **`POST /dnssec/…/disable`:** neuer 409 `parent_ds_present` (`force_possible: true`), wenn die Prüfung freigeschaltet ist und die Elternzone noch einen DS veröffentlicht; `{"force": true}` erzwingt. Im Panel deaktiviert ein eigener Dialog mit Pflicht-Haken; das DS-Fenster hat keinen Abschalt-Knopf mehr.
@@ -396,15 +399,20 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 
 **Nach dem Update prüfen**
 
-- **Einstellungen → Sicherheit:** Verschlüsselung aktiv, Schlüssel gesichert (Fingerprint vergleichen). Bei „Schlüssel nur im Docker-Volume“ `./update.sh --backup-key-only` und das Schlüssel-Backup-Verzeichnis getrennt sichern.
-- **Roter Hinweis „Geheimnisse nicht entschlüsselbar“:** die genannten Werte neu eintragen; PowerDNS-Server mit unlesbarem Key neu eintragen und danach ihre Zonen abgleichen.
+Die vollständige Prüfliste mit allen Schritten steht in [INSTALL.md → Direkt nach dem Update](INSTALL.md#direkt-nach-dem-update).
+
+- **Einstellungen → Sicherheit:** Verschlüsselung aktiv, Schlüssel gesichert (Fingerprint vergleichen). Bei „Schlüssel nur im Docker-Volume“ `./update.sh --backup-key-only` und das Schlüssel-Backup-Verzeichnis getrennt vom DB-Dump sichern (bzw. die `.env`, wenn dort `SECRET_ENCRYPTION_KEY` steht). Den Klartext-Dump von vor dem Update sicher verwahren oder löschen.
+- **Roter Hinweis „Geheimnisse nicht entschlüsselbar“:** die genannten Werte neu eintragen; PowerDNS-Server mit unlesbarem Key neu eintragen und danach ihre Zonen mit den anderen Servern abgleichen (Tab „Propagation“ mit Inhaltsvergleich).
 - **Einstellungen → Monitoring → Systemstatus:** keine Migrationsfehler, keine nicht geladenen Server.
-- **API-Tokens:** alle „Weitreichend“-Tokens auf die nötigen Zonen beschränken, Leserecht und Laufzeit setzen, `allow_admin` nur wo nötig. Admins prüfen in der Benutzerliste, welche Konten aktive Tokens haben.
-- **Webhooks:** Empfänger bekommen jetzt wirklich Zustellungen – je Webhook „Test senden“ und das Zustellprotokoll ansehen; Webhooks mit „URL unlesbar“ oder „Secret nicht lesbar“ neu eintragen.
-- **Reverse-Proxy:** `/metrics` nur für den Prometheus-Server, `/nic/update` durchreichen, `TRUST_PROXY_HEADERS=true` für DynDNS (sonst erscheint im Admin-Bereich ein gelber Hinweis).
-- **Audit-Log → „Aufbewahrung“** festlegen (Standard unbegrenzt). Einträge aus Versionen vor 3.0 lassen sich nicht zurücksetzen.
-- SMTP einmal testen; Vorlagen mit sehr kurzer oder langer TTL einmal speichern; Sprache und Datumsformate prüfen.
-- Skripte gegen die Punkte oben prüfen.
+- **API-Tokens:** alle „Weitreichend“-Tokens auf die nötigen Zonen beschränken, Leserecht und Laufzeit setzen, `allow_admin` nur wo nötig. Admins prüfen in der Benutzerliste, welche Konten aktive Tokens haben, und widerrufen Unbenutztes.
+- **Webhooks:** Empfänger bekommen jetzt wirklich Zustellungen – je Webhook „Test senden“ und das Zustellprotokoll ansehen; Webhooks mit „URL unlesbar“ oder „Secret nicht lesbar“ neu eintragen; ältere Ereignis-Filter durch die Ereignis-Auswahl ersetzen.
+- **Reverse-Proxy:** `/metrics` nur für den Prometheus-Server, `/nic/update` durchreichen, `TRUST_PROXY_HEADERS=true` für DynDNS (sonst erscheint im Admin-Bereich ein gelber Hinweis), den `Authorization`-Header nicht loggen.
+- **Audit-Log → „Aufbewahrung“** festlegen (Standard unbegrenzt). Gelöschte Einträge nehmen Verlauf und Rollback mit; Einträge aus Versionen vor 3.0 lassen sich nicht zurücksetzen.
+- **SMTP** einmal testen; bei „Passwort kann nicht entschlüsselt werden“ neu eintragen. Für Reset-Links SMTP und die öffentliche Basis-URL einrichten. In der Benutzerliste die Badges (Passwortwechsel, 2FA, Passkeys) prüfen.
+- **Skripte anpassen:** Bulk mit `"records": []` auf `delete` umstellen und bei `expected` jedes geänderte RRset angeben, 404 statt 502 bei fehlender Zone, neue Ergebniswerte von `POST /zones`, DNSSEC `already_enabled`, 409 mit `detail.code` und `parent_ds_present` behandeln, `reset-password` ohne Body erzwingt den Passwortwechsel, Server-URL-Wechsel nur mit `api_key`, LUA per Token nur mit `allow_admin`, `TYPEnnn` → 422, `general.require_totp` nur mit `step_up`.
+- **DNSSEC-Zonen** öffnen: Bei mehreren Servern mit getrennten Datenbanken auf „andere Schlüssel“ bzw. „nicht signiert“ achten; nach Schlüsseländerungen prüfen, ob NOTIFY ankam (`notified`). Auf Servern mit „Speichern: Nein“ sind DNSSEC-Änderungen jetzt gesperrt (403).
+- **Oberfläche:** Sprache im Profil und Datumsformate prüfen; mit eigener `CONTENT_SECURITY_POLICY` die Browser-Konsole auf CSP-Meldungen prüfen; Vorlagen mit sehr kurzer oder sehr langer TTL einmal öffnen und speichern. Bulk-Editor (nur mit Schreibrecht sichtbar): einmal per Mehrfachauswahl die TTL eines RRsets mit PowerDNS-Kommentar setzen – der Kommentar bleibt erhalten.
+- **Nur bei Nutzung:** LUA-Records brauchen `enable-lua-records=yes` (oder `shared`) in jeder `pdns.conf`, die die Zone ausliefert. Externe DNS-Abfragen (Propagations-Check, DNSKEY-/Elternzonen-Prüfung) unter Einstellungen → Monitoring freischalten und ausgehend UDP/TCP 53 erlauben. Für SSO die Basis-URL setzen, die Redirect-URI `https://<host>/api/v1/auth/oidc/callback` beim Anbieter eintragen und `AUTH_COOKIE_MAX_AGE` auf 8–24 Stunden begrenzen.
 
 **Geheimnisse verschlüsselt**
 
@@ -420,12 +428,13 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - „Admin-Funktionen erlauben“ (nur für Admins, nur ohne Zonen-Beschränkung): Zonen anlegen, importieren, löschen, Vorlagen verwalten, Benutzerliste und Audit-Log lesen. Einstellungen, Benutzerverwaltung und Zugangsdaten gehen nie per Token.
 - Bearbeiten, Pausieren und Widerrufen je Token; Liste mit Zonen, Ablauf, „zuletzt benutzt“ (Zeit und IP) und Kennzeichen „Weitreichend“. Admins sehen die Tokens eines Benutzers und können sie widerrufen.
 
-**Single Sign-On (OIDC, LDAP/Active Directory)**
+**Single Sign-On (OIDC & LDAP)**
 
 - Anmeldung über OpenID Connect (Authorization Code Flow mit PKCE, strenge Prüfung des ID-Tokens) und LDAP/Active Directory (nur LDAPS oder StartTLS mit Zertifikatsprüfung, mehrere Server als Failover). Konten werden nur über eine stabile externe ID zugeordnet, nie über Benutzername oder E-Mail.
 - Automatische Kontoanlage standardmäßig aus und nur mit erlaubten Gruppen, Domains oder ausdrücklicher Bestätigung; LDAP-Gruppen als vollständiger DN. Rollen optional aus Gruppen, ohne den letzten aktiven Admin herabzustufen.
 - 2FA nach OIDC (abschaltbar), Selbst-Verknüpfung bestehender Konten, Umwandeln in ein lokales Konto, Notfallzugang `/login?local=1`. Kritische Änderungen verlangen eine erneute Bestätigung (Passwort und ggf. 2FA bzw. eine höchstens 10 Minuten alte SSO-Anmeldung); alle aktiven lokalen Admins bekommen danach eine E-Mail, sofern SMTP eingerichtet ist.
-- Einstellungen unter **Einstellungen → Anmeldung / SSO** mit Vorlagen (Keycloak, Authentik, Entra ID, Active Directory, OpenLDAP, FreeIPA) und Verbindungstest.
+- Einstellungen unter **Einstellungen → Anmeldung / SSO** mit Vorlagen (Keycloak, Authentik, Entra ID, Active Directory, OpenLDAP, FreeIPA) und Verbindungstest. Ein LDAP-Test mit Testpasswort zählt wie eine Anmeldung (nach 5 Fehlversuchen ist der Testbenutzer 15 Minuten gesperrt).
+- „Alle Zugänge widerrufen“ und ein Admin-Passwort-Reset machen noch nicht abgeschlossene OIDC-Verknüpfungen ungültig; bestehende Verknüpfungen bleiben. Admins prüfen sie in „Passwort & Sicherheit“ → „Externe Anmeldung“ und wandeln das Konto bei Bedarf in ein lokales um.
 
 **Benutzerverwaltung, Passwort-Reset & Zugangs-Widerruf**
 
@@ -436,7 +445,7 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 **Record-Historie & Audit-Log**
 
 - Jede Record-Änderung speichert den vollständigen Zustand der betroffenen RRsets vorher und nachher (Audit-Format Version 2). Tab **„Verlauf“** je Zone mit Vorher/Nachher-Ansicht, Filtern und Verlauf je Record (Uhr-Symbol in der Zeile).
-- **Zurücksetzen** mit Vorschau und Konfliktprüfung (`force` nach Bestätigung); bereits zurückgesetzte Stände zählen nicht als Konflikt. SOA, DNSSEC-Records und `_acme-challenge` werden nie zurückgesetzt; PTRs in Reverse-Zonen setzt ein Rollback nicht mit zurück (eigene `PTR_SYNC`-Einträge im Verlauf der Reverse-Zone).
+- **Zurücksetzen** mit Vorschau und Konfliktprüfung (`force` nach Bestätigung); bereits zurückgesetzte Stände zählen nicht als Konflikt. SOA, DNSSEC-Records und `_acme-challenge` werden nie zurückgesetzt. Das Zurücksetzen pflegt PTRs wie jede andere Änderung, wenn der Admin-Standard „PTR-Pflege standardmäßig aktivieren“ eingeschaltet ist (ab Werk aus); die PTR-Änderungen stehen als eigene `PTR_SYNC`-Einträge im Verlauf der Reverse-Zone.
 - Protokoll-Seite mit Filtern (Aktion, Typ, Status, Benutzer, Zone, Server, Zeitraum, Volltext), teilbarer Adresse, Detailansicht und CSV-Export der gefilterten Einträge (geschützt gegen Formel-Injection). Einträge speichern Zone, Benutzername und Client-IP zum Zeitpunkt der Aktion.
 - **Aufbewahrung** einstellbar: 0 = unbegrenzt oder 7–3650 Tage, stündliche Bereinigung. Nicht-Admins sehen im Zonenverlauf keine Client-IPs, Token-Kennungen oder PowerDNS-Fehlertexte.
 
@@ -456,20 +465,20 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 
 - Aktivieren mit Optionen: CSK oder KSK + ZSK, ECDSA P-256 (Standard) oder P-384, Ed25519, Ed448, RSA-SHA256/512 mit 2048/3072/4096 Bit, NSEC oder NSEC3 (neuer Standard `1 0 0 -` nach RFC 9276; bestehende Zonen bleiben unverändert). Auch beim Anlegen einer Zone.
 - DNSSEC-Karte mit tatsächlichem Zustand, Hinweisen und Vergleich mit anderen Servern; Schlüsseltabelle (aktivieren, veröffentlichen, löschen) mit Schutzregeln für den letzten aktiven Schlüssel; NSEC/NSEC3 nachträglich ändern; Schlüssel hinzufügen.
-- **Rollover-Assistent** für KSK/CSK und ZSK mit Wartezeiten, DS zum Kopieren und den Prüfungen „DNSKEY auf allen NS prüfen“ (fragt jeden autoritativen Nameserver ab) und „Elternzone prüfen“ (DS bei öffentlichen Resolvern) – beide nach Freischaltung unter Einstellungen → Monitoring.
+- **Rollover-Assistent** für KSK/CSK und ZSK mit Wartezeiten, DS zum Kopieren und den Prüfungen „DNSKEY auf allen NS prüfen“ (fragt jeden autoritativen Nameserver ab) und „Elternzone prüfen“ (DS bei öffentlichen Resolvern) – beide nach Freischaltung unter Einstellungen → Monitoring. Sind alter und neuer Schlüssel gleichzeitig aktiv, lässt sich der alte erst abschalten, wenn alle Nameserver den neuen DNSKEY liefern (Prüfung bzw. Bestätigung) und – bei KSK/CSK – der neue DS beim Registrar steht. Die DNSKEY-Prüfung fragt höchstens 12 Nameserver.
 - Neuer DS-Assistent (SHA-256 je aktuellem Schlüssel, Status „aktuell/neu/veraltet“). Fehlgeschlagene Schlüssel-Aktionen werden protokolliert; neue Webhook-Ereignisse `dnssec.key_created|published|unpublished`, `dnssec.nsec3_changed`.
 
 **DynDNS**
 
 - `GET /nic/update` (dyndns2-kompatibel, Textantwort) und `GET|POST /api/v1/dyndns/update` (JSON) für Router und Skripte; Antworten `good`, `nochg`, `badauth`, `nohost`, `notfqdn`, `numhost`, `badip`, `dnserr`, `911`, `abuse`.
 - Eigene DynDNS-Tokens (`dnsmgr_ddns_…`) je Benutzer, nur für die gelisteten Hostnamen (A/AAAA), mit TTL und optionaler PTR-Pflege; Anleitung für FRITZ!Box, andere Router, curl und ddclient in der Einmal-Anzeige.
-- **Der Token gehört nie in die URL:** Steht er im Query-String, wird die Anfrage abgelehnt und der Token sofort gesperrt (`DYNDNS_TOKEN_REVOKED`); aktivieren lässt er sich erst nach „Neues Secret“ (409 bis dahin). Basic-Auth-Passwort oder `Authorization: Bearer`.
+- **Der Token gehört nie in die URL:** Steht er im Query-String, wird die Anfrage abgelehnt und der Token sofort gesperrt (`DYNDNS_TOKEN_REVOKED`); aktivieren lässt er sich erst nach „Neues Secret“ (409 bis dahin; das Panel zeigt „Secret gesperrt“ und bietet „Aktivieren“ nicht an). Basic-Auth-Passwort oder `Authorization: Bearer`.
 - Missbrauchsschutz (über 30 Anfragen in 5 Minuten je Token → `911` mit `Retry-After`, ab 300 → `abuse`), Sperre der IP bei wiederholten ungültigen Tokens, Nachziehen veralteter Server, Admin-Schalter für den Endpunkt und private IP-Adressen.
 
-**Reverse-DNS (PTR) automatisch**
+**Reverse-DNS (PTR)**
 
-- Option „PTR in Reverse-Zone mitpflegen“ für A/AAAA im Record-Dialog (mit Live-Prüfung je IP), im Bulk-Editor und für DynDNS; beim Löschen wird der passende PTR mit entfernt. Fremde PTRs werden nie überschrieben, Classless-Delegationen erkannt; jede Änderung steht als `PTR_SYNC` im Verlauf der Reverse-Zone.
-- Admin-Standard unter **Einstellungen → DNS-Optionen** (ab Werk aus); API-Aufrufe ohne `manage_ptr` folgen ihm. Das Panel sendet `manage_ptr` immer ausdrücklich.
+- Option „PTR in Reverse-Zone mitpflegen“ für A/AAAA im Record-Dialog (mit Live-Prüfung je IP), im Bulk-Editor und für DynDNS; beim Löschen wird der passende PTR mit entfernt. Fremde PTRs werden nie überschrieben, Classless-Delegationen erkannt; jede Änderung steht als `PTR_SYNC` im Verlauf der Reverse-Zone, mit auslösender Aktion (Anlegen, Ändern, Löschen, Bulk, Zurücksetzen, DynDNS) und Forward-Zone.
+- Admin-Standard unter **Einstellungen → DNS-Optionen** (ab Werk aus); API-Aufrufe ohne `manage_ptr` und das Zurücksetzen im Zonenverlauf folgen ihm. Das Panel sendet `manage_ptr` immer ausdrücklich.
 
 **Propagations-Check**
 
@@ -488,7 +497,7 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - Policy unter **Einstellungen → DNS-Optionen → LUA-Records**: „Nur Administratoren“ (Standard), „Alle mit Schreibrecht“ oder „Deaktiviert“. Voraussetzung auf PowerDNS-Seite: `enable-lua-records=yes` in jeder `pdns.conf`, die die Zone ausliefert.
 - Filter in der Record-Tabelle für alle Typen; die Import-Vorschau versteht LUA- und ALIAS-Zeilen.
 
-**Zonenansicht: Export und NOTIFY**
+**Zonenansicht: Export & NOTIFY**
 
 - Knopf „Export“ (BIND-Zonendatei `<zone>.txt`, auch mit Leserecht) und „NOTIFY senden“ (mit Schreibrecht, für Master-, Producer- und Slave-Zonen); beides steht im Audit-Log (`ZONE_EXPORT`, `ZONE_NOTIFY`).
 
@@ -497,7 +506,7 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - Schnellerer Start: Seiten und Sprachen (außer Englisch) werden erst bei Bedarf geladen; offene Tabs laden nach einem Update einmal neu statt mit einem Fehler stehen zu bleiben. Einstellungen sind per `/settings?tab=<reiter>` verlinkbar.
 - Records: TTL als Zahlenfeld mit Vorgaben (60 Sekunden bis 7 Tage), deaktivierte Records gekennzeichnet, CAA mit vorbelegtem Flag und Tag, unbekannte Typen als Rohtext bearbeitbar, Löschen mit Rückfrage je Wert, bessere Prüfung von Namen.
 - Ungarisch, Serbisch, Bosnisch und Kroatisch vollständig, korrekte Pluralformen in allen sechs Sprachen, Datum und Uhrzeit im Format der gewählten Sprache. Die Schrift wird lokal ausgeliefert – keine Anfragen an Google Fonts.
-- Tastaturbedienung (Fokus im Dialog, Tab bleibt im Dialog, ESC schließt, Fokus-Rückgabe) in allen neuen und überarbeiteten Dialogen; bei übereinanderliegenden Dialogen reagiert nur der oberste.
+- Tastaturbedienung (Fokus im Dialog, Tab bleibt im Dialog, ESC schließt, Fokus-Rückgabe) in allen neuen und überarbeiteten Dialogen, auch „Neue Zone“, „Zone importieren“ und der Seitenleiste auf schmalen Bildschirmen; bei übereinanderliegenden Dialogen reagiert nur der oberste (auch auf Strg/Cmd+Enter). Dialoge in den Einstellungen (z. B. Webhook-Formular, Token-Dialoge, Einmal-Anzeigen) liegen über der ganzen Seite.
 
 **Behoben**
 
@@ -509,7 +518,7 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 - DNSSEC-Endpunkte prüften „Speichern: Nein“ nicht und protokollierten fehlgeschlagene Aktionen nicht.
 - Eine bereits vergebene E-Mail-Adresse ergab beim Anlegen/Ändern eines Benutzers einen Serverfehler (jetzt 409).
 - Der letzte Admin ließ sich deaktivieren (der Schutz galt nur beim Herabstufen und zählte deaktivierte Admins mit); das eigene Konto ließ sich deaktivieren und herabstufen.
-- Die Login-Laufzeit verriet, ob ein Benutzername existiert (behoben für die Anmeldung ohne LDAP).
+- Die Login-Laufzeit verriet, ob ein Benutzername existiert.
 - Die Login-Sperre zählte nur je IP; jetzt zusätzlich je Benutzername.
 - Verbindungsabbrüche zu PowerDNS brachen den Fan-out ab bzw. führten zu einem Serverfehler (500); nach einem Abbruch am ersten Server prüft das Panel jetzt nach, ob die Änderung angekommen ist.
 - Audit- und Webhook-Einträge konnten verloren gehen, wenn das Speichern erst nach der Antwort scheiterte; geschrieben wird jetzt vor der Antwort.
@@ -521,13 +530,13 @@ Hier die letzten Releases. Komplette Historie: [GitHub Releases](https://github.
 **API** (Details: [docs/PANEL-API.md](docs/PANEL-API.md))
 
 - Neu: Zonenverlauf und Rollback (`/zones/{server}/{zone}/history…`), Propagation (`…/propagation`), Bulk-Vorschau (`/records/{server}/{zone}/bulk/preview`), DNSSEC `status`, `keys` (POST/PUT), `nsec3`, `parent-ds`, `dnskey-check`, LUA (`/lua/policy`, `/lua/server-status`), DynDNS (`/nic/update`, `/dyndns/…`), PTR (`/ptr/config`, `/ptr/lookup`), Audit-Log `/{id}` und `/settings`, Webhook-Test und Zustellprotokoll, Token-Bearbeitung und Admin-Tokenverwaltung, Benutzer-Werkzeuge (`send-reset-link`, `reset-2fa`, Passkeys entfernen, `access-summary`, `revoke-access`, `convert-to-local`), SSO (`/auth/sso/providers`, `/auth/oidc/…`, Verknüpfung), Einstellungen für Geheimnis-Status, SSO, DynDNS, PTR, Propagation, Metriken, Monitoring und LUA, Prometheus `/metrics`.
-- Geändert: Audit-Log mit Filtern und `total`, CSV mit den Spalten `zone_name;username;revert_of_id` am Ende; Fan-out-Status `skipped (no changes needed)`, `skipped (no matching content)`, `skipped (not loaded: …)`; Record-Antworten mit `details.ptr` bei PTR-Pflege; `GET /auth/users` mit `auth_source`, `panel_token_count` und Block `sso`; `POST /auth/login/2fa` mit optionalem `two_factor_token`; `POST /setup/register` liefert das vollständige Benutzerobjekt.
+- Geändert: Audit-Log mit Filtern und `total`, CSV mit den Spalten `zone_name;username;revert_of_id` am Ende; Fan-out-Status `skipped (no changes needed)`, `skipped (no matching content)`, `skipped (not loaded: …)`; Record- und Rollback-Antworten mit `details.ptr` bei PTR-Pflege (`ptr` auch im Audit `RECORD_ROLLBACK` und in `data` des Webhooks `record.rollback`); `PTR_SYNC` (Audit und `record.ptr_synced`) mit `source.action` (`CREATE`, `UPDATE`, `DELETE`, `BULK_UPDATE`, `ROLLBACK`, `DYNDNS_UPDATE`) und `source.zone`; Fehler-Audit `BULK_UPDATE` mit `details.applied = "unknown"`, wenn der Ausgang am ersten Server unklar ist; `dnskey-check` prüft höchstens 12 Nameserver-Namen (weitere als „nicht geprüft“, `truncated: true`); `GET /auth/users` mit `auth_source`, `panel_token_count` und Block `sso`; `POST /auth/login/2fa` mit optionalem `two_factor_token`; `POST /setup/register` liefert das vollständige Benutzerobjekt.
 
-**Betrieb, Skripte & Tests**
+**Betrieb & Skripte**
 
 - `update.sh`: Dump mit Rechten 0600, Schlüsselkopie außerhalb des Stack-Ordners, Rechte von `/app/data` vor dem Start korrigiert, Warten auf das Backend (bis 120 Sekunden) mit Log-Ausgabe bei Startabbruch, Major-Box beim Sprung auf 3.x, neue Schalter `--backup-key-only` und `--no-key-backup`.
 - `setup.sh` erzeugt `SECRET_ENCRYPTION_KEY` (vorhandene Werte werden übernommen), `install.sh` setzt ihn auch ohne `setup.sh`.
-- Passwörter und Tokens in URL-Parametern werden im Access-Log als `***` maskiert.
+- Passwörter und Tokens in URL-Parametern werden im Access-Log als `***` maskiert, auch bei URL-kodierten Parameternamen; Panel- und DynDNS-Tokens (`dnsmgr_…`) unter beliebigem Parameternamen und im Pfad.
 - Neue End-to-End-Tests gegen MariaDB, zwei PowerDNS-Server und einen Webhook-Empfänger (Neuinstallation, Update einer 2.4.1-Datenbank, Downgrade-Weg) und automatische Browser-Tests der Oberfläche (`scripts/e2e/run-e2e.sh --ui`). Die Prüfungen bei jedem Pull Request umfassen die Vollständigkeit der Übersetzungen und Frontend-Tests.
 
 **Abhängigkeiten & Lizenzen**

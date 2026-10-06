@@ -55,8 +55,8 @@ Leere Eingaben leeren das Feld (ein nicht mitgeschicktes Feld bleibt unveränder
 - **Laden:** Englisch ist im Start-Bundle; die übrigen Sprachen werden erst bei Bedarf nachgeladen (`frontend/src/i18n.js`). Fehlt ein Key, zeigt die UI per `fallbackLng: 'en'` den englischen Wert. Nichts bricht ab.
 - **Code:** Komponenten holen Texte über `t('bereich.aktion')`. Direkte deutsche/englische Strings im JSX gehören nicht in den Code.
 - **Welche Sprache gilt:**
-  1. Vor der Anmeldung: die im Browser gespeicherte Wahl (`localStorage`, Schlüssel `lang`), sonst die Browsersprache, sonst Englisch.
-  2. Die Standardsprache des Servers (`DEFAULT_LANGUAGE`, über `GET /api/v1/settings/app-info`) gilt nur, solange im Browser **keine** eigene Wahl gespeichert ist; sie wird nicht gemerkt.
+  1. Vor der Anmeldung: die im Browser gespeicherte Wahl (`localStorage`, Schlüssel `lang`).
+  2. Ist im Browser **keine** Wahl gespeichert, gilt die Standardsprache des Servers (`DEFAULT_LANGUAGE`, über `GET /api/v1/settings/app-info`; ohne Angabe `de`). Sie wird nicht gemerkt. Die Browsersprache (bzw. Englisch, wenn sie nicht unterstützt wird) gilt nur beim Start, bis die App-Info geladen ist, oder wenn sie nicht geladen werden kann.
   3. Nach der Anmeldung hat die Sprache aus dem Profil (`users.preferred_language`) Vorrang und wird im Browser gemerkt.
   4. Eine Sprachwahl in den Einstellungen oder in der mobilen Kopfleiste wird im Profil gespeichert. Schlägt das Speichern fehl, bleibt die vorherige Sprache.
 
