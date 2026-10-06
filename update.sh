@@ -285,20 +285,34 @@ if [ -n "$MAJOR_BEFORE" ] && [ -n "$MAJOR_AFTER" ] \
     echo "  https://github.com/29barra29/PowerDNS-PDNS-MANAGER/releases"
     if is_major_30_jump; then
         echo "  ──────────────────────────────────────────────────"
-        echo "  3.0 verschlüsselt beim ersten Start alle gespeicherten Geheimnisse"
-        echo "  (PowerDNS-API-Keys, SMTP-Passwort, Captcha-Secret, Webhook-Secrets und"
-        echo "  -URLs, 2FA-Geheimnisse) in der Datenbank."
+        echo "  Upgrade auf 3.0 – Ablauf und Prüfliste: INSTALL.md → „Upgrade von 2.x auf 3.0“"
+        echo "  • Geheimnisse: 3.0 verschlüsselt beim ersten Start alle gespeicherten Geheimnisse"
+        echo "    (PowerDNS-API-Keys, SMTP-Passwort, Captcha-Secret, Webhook-Secrets und -URLs,"
+        echo "    2FA-Geheimnisse) in der Datenbank."
         echo "  • Schlüssel: SECRET_ENCRYPTION_KEY in der .env oder automatisch erzeugt in"
         echo "    /app/data/.secret_key (Volume backend_data). Im zweiten Fall legt dieses Skript"
-        echo "    nach dem Start eine Kopie in $KEY_BACKUP_DIR ab (nicht neben dem Dump)."
-        echo "    Ohne Schlüssel sind die Geheimnisse aus einem DB-Backup NICHT lesbar."
-        echo "  • Downgrade auf 2.4.x danach nur mit dem DB-Dump von vorher oder mit"
-        echo "    python -m app.cli.secrets prepare-downgrade --yes (im 3.0-Container)."
+        echo "    nach dem Start eine Kopie im Schlüssel-Backup-Verzeichnis ab:"
+        echo "      $KEY_BACKUP_DIR   (änderbar per PDNSMGR_KEY_BACKUP_DIR)"
+        echo "    – nie im Stack-Ordner, nie neben dem Dump. Dieses Verzeichnis bzw. die .env"
+        echo "    getrennt vom DB-Backup sichern: Ohne Schlüssel sind die Geheimnisse aus einem"
+        echo "    DB-Backup NICHT lesbar."
         echo "  • Der Dump von vor dem Update enthält die Geheimnisse noch im Klartext."
+        echo "  • Downgrade-Grenze: zurück auf 2.4.x nur mit dem DB-Dump von vorher oder nach"
+        echo "      python -m app.cli.secrets prepare-downgrade --yes"
+        echo "    (im 3.0-Backend-Container, siehe INSTALL.md → „Downgrade auf 2.4.x“)."
+        echo "    Konten mit SSO-/LDAP-Anmeldung können sich unter 2.4.x nicht anmelden."
         echo "  • Einstellungen, Token- und Webhook-Verwaltung nur noch per Browser-Anmeldung"
-        echo "    (nicht mehr per Panel-Token); /health zeigt Details nur noch lokal."
-        echo "  • Neue Variablen (optional): SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS,"
-        echo "    SECRET_ENCRYPTION_KEY_FILE, BACKGROUND_WORKERS_ENABLED, PDNSMGR_KEY_BACKUP_DIR."
+        echo "    (nicht mehr per Panel-Token); Admin-Endpunkte per Token nur mit allow_admin."
+        echo "  • Webhooks werden ab 3.0 wirklich zugestellt (2.3.7–2.4.x nie) – Empfänger prüfen."
+        echo "  • Neue Variablen (optional, die Standardwerte reichen): SECRET_ENCRYPTION_KEY,"
+        echo "    SECRET_ENCRYPTION_KEY_PREVIOUS, SECRET_ENCRYPTION_KEY_FILE, BACKGROUND_WORKERS_ENABLED,"
+        echo "    METRICS_TOKEN, SSO_ALLOW_INSECURE (nur Tests), PDNSMGR_KEY_BACKUP_DIR (dieses Skript)."
+        echo "  • /metrics ist neu und ohne Scrape-Token aus (404). Wer es nutzt: im Reverse-Proxy"
+        echo "    nur für den Prometheus-Server freigeben. /health zeigt Details nur noch lokal."
+        echo "  • DynDNS hinter einem Reverse-Proxy: TRUST_PROXY_HEADERS=true (ggf. TRUSTED_PROXY_HOPS)"
+        echo "    in der .env – sonst sehen Rate-Limits und IP-Erkennung nur die Proxy-Adresse."
+        echo "  • compose.yaml: fester DNS 8.8.8.8/8.8.4.4 entfällt (Resolver des Docker-Hosts,"
+        echo "    eigene per compose.override.yaml). Eigene DB: MariaDB ≥ 10.6 / MySQL ≥ 8.0 mit ALTER-Recht."
     fi
     echo "════════════════════════════════════════════════════"
     read -p "Trotzdem fortfahren? (j/y/n): " -n 1 -r
@@ -457,6 +471,11 @@ if is_major_30_jump; then
         echo "     sicher verwahren oder löschen, sobald 3.0 läuft."
     fi
     echo "   • Panel-Tokens prüfen und bei Bedarf einschränken; Webhook-Empfänger erhalten jetzt wirklich Zustellungen."
+    if [ -f .env ] && ! grep -qiE '^TRUST_PROXY_HEADERS=(true|1|yes|on)[[:space:]]*$' .env; then
+        echo "   • Hinter einem Reverse-Proxy: TRUST_PROXY_HEADERS=true in die .env (DynDNS, Login-Sperren, Audit-IP),"
+        echo "     danach $COMPOSE_CMD up -d."
+    fi
+    echo "   • Vollständige Prüfliste: INSTALL.md → „Direkt nach dem Update“."
 fi
 
 # ----------------------------------------------------------------------------
